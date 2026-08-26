@@ -1,0 +1,35 @@
+[project]
+name = "shlepa-agent"
+version = "0.1.0"
+description = "Shlepa - universal security agent (contest submission source)"
+requires-python = ">=3.12"
+# NOTE: pydantic-ai-slim, not the full pydantic-ai package: the full package
+# pulls in logfire -> opentelemetry-sdk, which must stay out of the base
+# environment (telemetry is an opt-in extra, see below).
+dependencies = [
+    "pydantic-ai-slim",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+# OpenTelemetry is an opt-in extra: the base environment (and the submission
+# zip) must work without it.
+telemetry = [
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
+    "openinference-instrumentation-pydantic-ai",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "flake8",
+    "aiohttp",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["shlepa_agent"]
