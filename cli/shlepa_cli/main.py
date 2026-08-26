@@ -225,8 +225,17 @@ task_app = typer.Typer(help="Task management commands.")
 
 @task_app.command()
 def new(name: str) -> None:
-    """Scaffold a new task from the template."""
-    _not_implemented(f"task new {name}")
+    """Scaffold a new task: shlepa task new <source>-<slug>."""
+    from shlepa_cli import task_new as task_new_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    try:
+        task_dir = task_new_module.scaffold(settings.repo_root / "tasks", name)
+    except (task_new_module.TaskNameError, FileExistsError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"created: {task_dir}")
 
 
 app.add_typer(task_app, name="task")
