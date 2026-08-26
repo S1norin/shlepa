@@ -1,0 +1,36 @@
+schema_version = "1.2"
+
+[task]
+name = "local/fix-sqli-search"
+description = "Find and fix a SQL injection vulnerability in a FastAPI application."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "sqli", "fastapi", "postgresql", "code-fix"]
+source = "SecureIntelligent/UniversalAgenticCompetitionPublic"
+url = "https://github.com/SecureIntelligent/UniversalAgenticCompetitionPublic/tree/main/local_task/fix-sqli-search"
+synced_at = "2026-08-26"
+
+[verifier]
+timeout_sec = 240.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
