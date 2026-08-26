@@ -26,13 +26,12 @@ def _settings(**overrides):
 
 
 class _FakeMlflowClient:
-    def __init__(self, version="3.15.1"):
-        self.version = version
+    def __init__(self):
         self.calls = 0
 
-    def get_version(self):
+    def search_experiments(self, max_results: int = 100, **kwargs):
         self.calls += 1
-        return self.version
+        return []
 
 
 def test_mlflow_ok_with_fake_client():
@@ -44,7 +43,7 @@ def test_mlflow_ok_with_fake_client():
 
     result = doctor.check_mlflow(settings, client_factory=factory)
     assert result.ok, result.detail
-    assert "3.15.1" in result.detail
+    assert "reachable" in result.detail
     assert client.calls == 1
 
 

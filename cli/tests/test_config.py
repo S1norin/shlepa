@@ -50,6 +50,10 @@ def test_load_env_loads_missing_values_only(tmp_path, monkeypatch):
     assert os.environ["OPENAI_BASE_URL"] == "http://from-env:9999/v1"
     assert os.environ["LOCAL_AGENT_MODEL"] == "model-from-dotenv"
 
+    # dotenv.load_dotenv writes to os.environ directly (bypassing
+    # monkeypatch); drop the leaked variable so later tests stay hermetic.
+    os.environ.pop("LOCAL_AGENT_MODEL", None)
+
 
 def test_load_env_missing_file_is_ok(tmp_path):
     root = _make_repo(tmp_path / "shlepa")
@@ -84,3 +88,15 @@ def test_get_settings_typed_values(tmp_path, monkeypatch):
     assert settings.otel_exporter_otlp_endpoint == "http://localhost:4318"
     assert settings.openai_base_url is None
     assert settings.ci_model is None
+
+    # dotenv.load_dotenv writes to os.environ directly (bypassing
+    # monkeypatch); drop the leaked variables so later tests stay hermetic.
+    import os
+
+    for var in (
+        "OPENAI_API_KEY",
+        "MLFLOW_TRACKING_URI",
+        "SLEPA_OTEL_ENABLED",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+    ):
+        os.environ.pop(var, None)

@@ -101,10 +101,11 @@ def check_mlflow(
         )
     try:
         client = client_factory(settings)
-        version = client.get_version()
+        # read-only request; MLflow 3's client has no get_version() method
+        client.search_experiments(max_results=1)
     except Exception as exc:  # noqa: BLE001 - report any failure as FAIL
         return CheckResult("mlflow", False, f"unreachable: {type(exc).__name__}: {exc}")
-    return CheckResult("mlflow", True, f"server version {version}")
+    return CheckResult("mlflow", True, "server reachable")
 
 
 def check_docker(settings: Settings) -> CheckResult:
