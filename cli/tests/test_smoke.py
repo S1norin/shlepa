@@ -103,7 +103,19 @@ def test_smoke_task_hard_error(tmp_path: Path):
     assert not ok
     assert "task: FAIL" in reports[1]
     assert "boom" in reports[1]
-    assert not any(r.startswith("mlflow:") for r in reports)
+    # The failed task result is still logged for CI diagnostics.
+    assert any(r.startswith("mlflow: ok") for r in reports)
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    client = get_mlflow_client(_settings(tmp_path))
+    exp = client.get_experiment_by_name("smoke")
+    runs = client.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string=f"run_name = '{SMOKE_SLUG}'",
+    )
+    assert len(runs) == 1
+    assert runs[0].info.status == "FINISHED"
+    assert runs[0].data.metrics["solved"] == 0.0
 
 
 def test_smoke_task_unsolved(tmp_path: Path):
@@ -117,6 +129,8 @@ def test_smoke_task_unsolved(tmp_path: Path):
     assert not ok
     assert reports[1].startswith("task: FAIL")
     assert "unsolved" in reports[1]
+    # The unsolved task result is still logged for CI diagnostics.
+    assert any(r.startswith("mlflow: ok") for r in reports)
 
 
 def test_smoke_mlflow_failure(tmp_path: Path):

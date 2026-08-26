@@ -9,7 +9,8 @@ Stages (fail-fast; each stage is reported on its own line):
    path when SLEPA_NO_DOCKER=1); it must finish without error AND be
    solved
 3. mlflow — the task result must be logged as a FINISHED MLflow run in
-   the 'smoke' experiment
+   the 'smoke' experiment (logged even when the task failed, so a red
+   run stays diagnosable from the MLflow record)
 """
 
 from __future__ import annotations
@@ -79,16 +80,16 @@ def run_smoke(
         return False
     if not task_result.ok:
         out(f"task: FAIL (error: {task_result.error})")
-        return False
-    if not task_result.solved:
+    elif not task_result.solved:
         out(f"task: FAIL (unsolved: {task_result.score_detail})")
-        return False
-    out(
-        f"task: ok ({SMOKE_TASK_SLUG} solved in "
-        f"{task_result.duration_sec}s, tokens={task_result.tokens_total})"
-    )
+    else:
+        out(
+            f"task: ok ({SMOKE_TASK_SLUG} solved in "
+            f"{task_result.duration_sec}s, tokens={task_result.tokens_total})"
+        )
 
-    # Stage 3: mlflow
+    # Stage 3: mlflow — the result is logged even when the task failed,
+    # so a red smoke (in particular in CI) leaves a diagnosable run record
     if mlflow_client is None:
         from shlepa_cli.mlflow_client import get_mlflow_client
 
@@ -111,7 +112,7 @@ def run_smoke(
         out(f"mlflow: FAIL ({type(exc).__name__}: {exc})")
         return False
     out(f"mlflow: ok (experiment={experiment} run={run_id})")
-    return True
+    return bool(task_result.ok and task_result.solved)
 
 
 def _run_smoke_task(settings: Settings) -> TaskResult | None:
