@@ -24,6 +24,8 @@ class Task:
     difficulty: str | None = None
     timeout_sec: int | None = None
     env: dict[str, str] = field(default_factory=dict)
+    verifier_env: dict[str, str] = field(default_factory=dict)
+    verifier_timeout_sec: float | None = None
 
     @property
     def environment_dir(self) -> Path:
@@ -58,7 +60,9 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
         metadata = data.get("metadata", {})
         agent = data.get("agent", {})
         environment = data.get("environment", {}) or {}
+        verifier = data.get("verifier", {}) or {}
         raw_env: dict[str, Any] = environment.get("env", {}) or {}
+        raw_verifier_env: dict[str, Any] = verifier.get("env", {}) or {}
         found.append(
             Task(
                 slug=entry.name,
@@ -67,6 +71,8 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
                 difficulty=metadata.get("difficulty"),
                 timeout_sec=agent.get("timeout_sec"),
                 env={str(k): str(v) for k, v in raw_env.items()},
+                verifier_env={str(k): str(v) for k, v in raw_verifier_env.items()},
+                verifier_timeout_sec=verifier.get("timeout_sec"),
             )
         )
     return found

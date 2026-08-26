@@ -44,6 +44,47 @@ timeout_sec = 300
     assert hello.path == root / "tasks" / "contest-hello-file"
 
 
+def test_discover_parses_verifier_env_and_timeout(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "contest-hello-file" / "task.toml",
+        """
+schema_version = "1.2"
+name = "Hello File"
+
+[verifier]
+timeout_sec = 90
+
+[verifier.env]
+API_TOKEN = "abc"
+
+[environment.env]
+APP_PORT = "8080"
+""",
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert len(found) == 1
+    hello = found[0]
+    assert hello.verifier_env == {"API_TOKEN": "abc"}
+    assert hello.verifier_timeout_sec == 90
+    assert hello.env == {"APP_PORT": "8080"}
+
+
+def test_discover_verifier_sections_optional(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "contest-bye-file" / "task.toml",
+        'schema_version = "1.2"\nname = "Bye File"\n',
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert found[0].verifier_env == {}
+    assert found[0].verifier_timeout_sec is None
+
+
 def test_discover_empty_dir(tmp_path):
     tasks_dir = tmp_path / "tasks"
     tasks_dir.mkdir()

@@ -322,6 +322,39 @@ def _score_container(docker, container: str, task: Task) -> tuple[bool, str]:
     return proc.returncode == 0, (proc.stdout or proc.stderr)[-2000:]
 
 
+def _score_container_faithful(
+    docker, container: str, task: Task, reward_file: Path
+) -> tuple[bool, str]:
+    """Run the contest verifier (tests/test.sh) inside the container.
+
+    The verifier writes 1/0 to /logs/verifier/reward.txt; that path is
+    host-mounted, so the reward is read straight from the host after the
+    exec finishes.
+    """
+    test_sh = task.path / "tests" / "test.sh"
+    if not test_sh.is_file():
+        return False, "no tests/test.sh in task"
+    timeout = task.verifier_timeout_sec or 300
+    proc = docker.exec(
+        container,
+        ["bash", "/tests/test.sh"],
+        dict(task.verifier_env),
+        timeout=timeout,
+    )
+    if not reward_file.is_file():
+        tail = (proc.stdout or proc.stderr)[-1000:]
+        return (
+            False,
+            f"verifier wrote no reward.txt (rc={proc.returncode}): {tail}",
+        )
+    content = reward_file.read_text().strip()
+    detail = (
+        f"reward={content or 'empty'} rc={proc.returncode} "
+        f"out={(proc.stdout or proc.stderr)[-500:]}"
+    )
+    return content == "1", detail
+
+
 def run_task(
     task: Task,
     settings: Settings,
