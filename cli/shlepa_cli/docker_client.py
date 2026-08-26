@@ -29,14 +29,29 @@ class DockerLike(Protocol):
         """Build an image from a Dockerfile context."""
         ...
 
-    def run(self, name: str, image: str, mounts: list[Mount], env: dict[str, str]) -> str:
+    def run(
+        self,
+        name: str,
+        image: str,
+        mounts: list[Mount],
+        env: dict[str, str],
+        network: str | None = None,
+    ) -> str:
         """Start a detached container; returns the container id."""
         ...
 
     def exec(
-        self, name: str, cmd: list[str], env: dict[str, str]
+        self,
+        name: str,
+        cmd: list[str],
+        env: dict[str, str],
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run a command inside the container."""
+        ...
+
+    def cp_out(self, name: str, src: str, dst: Path) -> None:
+        """Copy a path out of the container to the host."""
         ...
 
     def stop(self, name: str) -> None:
@@ -59,8 +74,17 @@ class DockerClient:
                 f"docker build failed for {image}:\n{proc.stderr[-2000:]}"
             )
 
-    def run(self, name: str, image: str, mounts: list[Mount], env: dict[str, str]) -> str:
+    def run(
+        self,
+        name: str,
+        image: str,
+        mounts: list[Mount],
+        env: dict[str, str],
+        network: str | None = None,
+    ) -> str:
         cmd = ["docker", "run", "-d", "--name", name]
+        if network:
+            cmd += ["--network", network]
         for mount in mounts:
             spec = f"{mount.host}:{mount.target}"
             if mount.readonly:
@@ -77,14 +101,31 @@ class DockerClient:
         return proc.stdout.strip()
 
     def exec(
-        self, name: str, cmd: list[str], env: dict[str, str]
+        self,
+        name: str,
+        cmd: list[str],
+        env: dict[str, str],
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
         docker_cmd = ["docker", "exec"]
         for key, value in env.items():
             docker_cmd += ["-e", f"{key}={value}"]
         return subprocess.run(
-            [*docker_cmd, name, *cmd], capture_output=True, text=True, timeout=900
+            [*docker_cmd, name, *cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout if timeout is not None else 900,
         )
+
+    def cp_out(self, name: str, src: str, dst: Path) -> None:
+        proc = subprocess.run(
+            ["docker", "cp", f"{name}:{src}", str(dst)],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"docker cp failed: {proc.stderr[-1000:]}")
 
     def stop(self, name: str) -> None:
         subprocess.run(

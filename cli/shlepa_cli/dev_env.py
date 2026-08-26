@@ -158,6 +158,48 @@ def build_dev_image(
     return dev_image
 
 
+def _has_metrics_marker(stderr: str) -> bool:
+    return any(
+        line.strip().startswith(METRICS_MARKER)
+        for line in (stderr or "").splitlines()
+    )
+
+
+def run_agent_in_container(
+    docker,
+    container: str,
+    prompt: str,
+    env: dict[str, str],
+    timeout_sec: int | None = None,
+):
+    """Run /agent/dev_run.py inside the container and parse the outcome.
+
+    ``env`` is the docker-exec environment (model, workdir, timeout,
+    telemetry). A hard exec timeout is the agent timeout plus a 120s
+    buffer; a non-zero exit without the metrics marker is a crash and
+    raises RuntimeError (the engine records it as a hard error).
+    """
+    from shlepa_cli.run_engine import AgentRun
+
+    exec_timeout = timeout_sec + 120 if timeout_sec else None
+    proc = docker.exec(
+        container,
+        ["/app/.venv/bin/python", "/agent/dev_run.py", prompt],
+        dict(env),
+        timeout=exec_timeout,
+    )
+    metrics = parse_agent_metrics(proc.stderr or "")
+    if proc.returncode != 0 and not _has_metrics_marker(proc.stderr or ""):
+        tail = (proc.stderr or proc.stdout or "")[-1000:]
+        raise RuntimeError(f"agent exited with code {proc.returncode}: {tail}")
+    return AgentRun(
+        final_output=metrics["final_output"] or (proc.stdout or "").strip(),
+        tokens_in=metrics["tokens_in"],
+        tokens_out=metrics["tokens_out"],
+        tool_calls=metrics["tool_calls"],
+    )
+
+
 def parse_agent_metrics(stderr: str) -> dict:
     """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
 

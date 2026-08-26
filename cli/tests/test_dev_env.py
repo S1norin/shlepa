@@ -1,5 +1,6 @@
 """Tests for the in-container dev agent environment (dev_env)."""
 
+import subprocess
 from pathlib import Path
 
 from shlepa_cli import dev_env
@@ -120,3 +121,80 @@ def test_dev_run_source_sanity() -> None:
     compile(dev_env.DEV_RUN_SOURCE, "dev_run.py", "exec")
     assert dev_env.METRICS_MARKER in dev_env.DEV_RUN_SOURCE
     assert '"/agent"' in dev_env.DEV_RUN_SOURCE
+
+
+class _ExecFakeDocker:
+    def __init__(self, rc=0, stdout="", stderr="") -> None:
+        self.rc = rc
+        self.stdout = stdout
+        self.stderr = stderr
+        self.execs: list[tuple[str, list[str], dict, object]] = []
+
+    def exec(self, name, cmd, env, timeout=None):
+        self.execs.append((name, cmd, dict(env), timeout))
+        return subprocess.CompletedProcess(cmd, self.rc, stdout=self.stdout, stderr=self.stderr)
+
+
+def test_run_agent_in_container_success() -> None:
+    from shlepa_cli.run_engine import AgentRun
+
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "hello.txt created", '
+        '"tokens_in": 11, "tokens_out": 3, "tool_calls": 1}\n'
+    )
+    fake = _ExecFakeDocker(rc=0, stdout="hello.txt created", stderr=marker)
+    run = dev_env.run_agent_in_container(
+        fake,
+        "container-1",
+        "Create hello.txt",
+        {"LOCAL_AGENT_WORKDIR": "/app", "LOCAL_AGENT_MODEL": "m"},
+        timeout_sec=120,
+    )
+    assert isinstance(run, AgentRun)
+    assert run.final_output == "hello.txt created"
+    assert (run.tokens_in, run.tokens_out, run.tool_calls) == (11, 3, 1)
+    name, cmd, env, timeout = fake.execs[0]
+    assert name == "container-1"
+    assert cmd == ["/app/.venv/bin/python", "/agent/dev_run.py", "Create hello.txt"]
+    assert env["LOCAL_AGENT_WORKDIR"] == "/app"
+    assert timeout == 240  # task timeout + 120s hard buffer
+
+
+def test_run_agent_in_container_timeout_none_passes_none() -> None:
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "x", "tokens_in": 1, "tokens_out": 1, '
+        '"tool_calls": 0}\n'
+    )
+    fake = _ExecFakeDocker(stderr=marker)
+    dev_env.run_agent_in_container(fake, "c", "p", {}, timeout_sec=None)
+    assert fake.execs[0][3] is None
+
+
+def test_run_agent_in_container_crash_raises() -> None:
+    fake = _ExecFakeDocker(rc=1, stdout="", stderr="Traceback: boom")
+    try:
+        dev_env.run_agent_in_container(fake, "c", "p", {})
+        raise AssertionError("expected RuntimeError")
+    except RuntimeError as exc:
+        assert "exited with code 1" in str(exc)
+        assert "boom" in str(exc)
+
+
+def test_run_agent_in_container_marker_rescues_nonzero_exit() -> None:
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "done", "tokens_in": 2, "tokens_out": 2, '
+        '"tool_calls": 0}\n'
+    )
+    fake = _ExecFakeDocker(rc=1, stderr=marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {})
+    assert run.final_output == "done"
+
+
+def test_run_agent_in_container_ok_without_marker_uses_stdout() -> None:
+    fake = _ExecFakeDocker(rc=0, stdout="answer line")
+    run = dev_env.run_agent_in_container(fake, "c", "p", {})
+    assert run.final_output == "answer line"
+    assert (run.tokens_in, run.tokens_out, run.tool_calls) == (0, 0, 0)
