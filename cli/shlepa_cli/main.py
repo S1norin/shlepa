@@ -113,8 +113,15 @@ def run(
 
 @app.command()
 def smoke() -> None:
-    """Fast end-to-end check (doctor + one trivial task + MLflow run)."""
-    _not_implemented("smoke")
+    """End-to-end check: doctor + contest-hello-file task + MLflow run."""
+    from shlepa_cli import smoke as smoke_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    typer.echo("shlepa smoke")
+    ok = smoke_module.run_smoke(settings, out=typer.echo)
+    typer.echo(f"smoke: {'PASS' if ok else 'FAIL'}")
+    raise typer.Exit(code=0 if ok else 1)
 
 
 @app.command()
