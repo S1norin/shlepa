@@ -38,9 +38,18 @@ def _not_implemented(command: str) -> None:
     raise typer.Exit(code=1)
 
 
-def _register_submission(settings, out: "object") -> None:
+def _register_submission(settings, out) -> None:
     """Register the built submission in the MLflow model registry."""
-    _not_implemented("zip --register")
+    from shlepa_cli.mlflow_client import get_mlflow_client
+    from shlepa_cli.zip_register import register_submission
+
+    try:
+        client = get_mlflow_client(settings)
+    except ValueError as exc:
+        typer.echo(f"zip: MLflow not configured: {exc}", err=True)
+        raise typer.Exit(code=1)
+    version = register_submission(client, settings, out)
+    typer.echo(f"registered: shlepa:{version}")
 
 
 @app.command()
