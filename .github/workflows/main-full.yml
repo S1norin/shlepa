@@ -1,0 +1,28 @@
+name: main-full
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tasks/**"
+      - "agent/**"
+
+jobs:
+  submit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: submit-test --ci over all local tasks
+        env:
+          CI_OPENAI_BASE_URL: ${{ secrets.CI_OPENAI_BASE_URL }}
+          CI_OPENAI_API_KEY: ${{ secrets.CI_OPENAI_API_KEY }}
+          CI_MODEL: ${{ secrets.CI_MODEL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: uv run --project cli shlepa submit-test --ci

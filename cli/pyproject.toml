@@ -22,7 +22,7 @@ shlepa-agent = { path = "../agent", editable = true }
 shlepa = "shlepa_cli.main:app"
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "flake8"]
 
 [build-system]
 requires = ["hatchling"]

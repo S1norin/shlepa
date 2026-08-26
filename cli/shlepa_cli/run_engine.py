@@ -137,6 +137,7 @@ def log_task_to_mlflow(
     preset_name: str,
     model: str | None,
     result: TaskResult,
+    endpoint_class: str = "main",
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
@@ -154,7 +155,7 @@ def log_task_to_mlflow(
         "model": model or "env",
         "agent_version": shlepa_agent.__version__,
         "git_sha": _git_sha(settings.repo_root),
-        "endpoint_class": "main",
+        "endpoint_class": endpoint_class,
     }
     if settings.shlepa_otel_enabled:
         jaeger = (settings.otel_exporter_otlp_endpoint or "http://localhost:4318").replace(

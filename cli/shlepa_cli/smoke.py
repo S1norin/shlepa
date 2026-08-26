@@ -28,6 +28,7 @@ SMOKE_EXPERIMENT = "smoke"
 def run_smoke(
     settings: Settings,
     *,
+    ci: bool = False,
     out: Callable[[str], None] = print,
     doctor_results: list[CheckResult] | None = None,
     task_result: TaskResult | None = None,
@@ -35,13 +36,35 @@ def run_smoke(
 ) -> bool:
     """Run all smoke stages; True only when every stage passes.
 
+    ``ci=True`` switches to the secondary CI endpoint (with fallbacks to
+    the main endpoint) and logs the result to the ``shlepa-ci`` experiment
+    with ``endpoint_class=ci``.
+
     ``doctor_results`` / ``task_result`` / ``mlflow_client`` are
     injectable for tests; by default the real doctor, the real
     dev-engine run and the configured MLflow are used.
     """
+    import dataclasses
+
+    from shlepa_cli import submit_test
+
+    experiment = SMOKE_EXPERIMENT
+    endpoint_class = "main"
+    effective = settings
+    if ci:
+        base_url, api_key, model, endpoint_class, experiment = (
+            submit_test.resolve_endpoint(settings, ci=True)
+        )
+        effective = dataclasses.replace(
+            settings,
+            openai_base_url=base_url,
+            openai_api_key=api_key,
+            local_agent_model=model,
+        )
+
     # Stage 1: doctor
     if doctor_results is None:
-        doctor_results = run_doctor(settings)[0]
+        doctor_results = run_doctor(effective)[0]
     failed = [c.name for c in doctor_results if not c.ok]
     if failed:
         out(f"doctor: FAIL ({', '.join(failed)})")
@@ -50,7 +73,7 @@ def run_smoke(
 
     # Stage 2: task
     if task_result is None:
-        task_result = _run_smoke_task(settings)
+        task_result = _run_smoke_task(effective)
     if task_result is None:
         out(f"task: FAIL (task {SMOKE_TASK_SLUG} not found)")
         return False
@@ -69,16 +92,17 @@ def run_smoke(
     if mlflow_client is None:
         from shlepa_cli.mlflow_client import get_mlflow_client
 
-        mlflow_client = get_mlflow_client(settings)
+        mlflow_client = get_mlflow_client(effective)
     from shlepa_cli import run_engine
 
     try:
         run_id = run_engine.log_task_to_mlflow(
             mlflow_client,
-            settings,
-            SMOKE_EXPERIMENT,
-            settings.local_agent_model,
+            effective,
+            experiment,
+            effective.local_agent_model,
             task_result,
+            endpoint_class=endpoint_class,
         )
         run = mlflow_client.get_run(run_id)
         if run.info.status != "FINISHED":
@@ -86,7 +110,7 @@ def run_smoke(
     except Exception as exc:  # noqa: BLE001 - report the stage failure
         out(f"mlflow: FAIL ({type(exc).__name__}: {exc})")
         return False
-    out(f"mlflow: ok (experiment={SMOKE_EXPERIMENT} run={run_id})")
+    out(f"mlflow: ok (experiment={experiment} run={run_id})")
     return True
 
 

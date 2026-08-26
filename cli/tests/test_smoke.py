@@ -160,6 +160,86 @@ def test_smoke_mlflow_run_is_queryable(tmp_path: Path):
     assert runs[0].info.status == "FINISHED"
 
 
+def _ci_settings(tmp_path: Path, **overrides) -> Settings:
+    import dataclasses
+
+    base = _settings(tmp_path)
+    values = {
+        "ci_openai_base_url": "http://ci-llm.test/v1",
+        "ci_openai_api_key": "sk-ci",
+        "ci_model": "ci-model",
+    }
+    values.update(overrides)
+    return dataclasses.replace(base, **values)
+
+
+def test_smoke_ci_logs_to_shlepa_ci(tmp_path: Path):
+    reports: list[str] = []
+    settings = _ci_settings(tmp_path)
+    ok = smoke_module.run_smoke(
+        settings,
+        ci=True,
+        out=reports.append,
+        doctor_results=_doctor_results(True),
+        task_result=_task_result(tmp_path),
+    )
+    assert ok
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    client = get_mlflow_client(settings)
+    exp = client.get_experiment_by_name("shlepa-ci")
+    assert exp is not None, "CI smoke must land in the shlepa-ci experiment"
+    runs = client.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string=f"run_name = '{SMOKE_SLUG}'",
+    )
+    assert len(runs) == 1
+    assert runs[0].data.tags["endpoint_class"] == "ci"
+    assert runs[0].data.tags["model"] == "ci-model"
+
+
+def test_smoke_ci_falls_back_to_main_model(tmp_path: Path):
+    reports: list[str] = []
+    settings = _ci_settings(tmp_path, ci_model=None)
+    ok = smoke_module.run_smoke(
+        settings,
+        ci=True,
+        out=reports.append,
+        doctor_results=_doctor_results(True),
+        task_result=_task_result(tmp_path),
+    )
+    assert ok
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    client = get_mlflow_client(settings)
+    exp = client.get_experiment_by_name("shlepa-ci")
+    runs = client.search_runs(
+        experiment_ids=[exp.experiment_id],
+        filter_string=f"run_name = '{SMOKE_SLUG}'",
+    )
+    assert len(runs) == 1
+    assert runs[0].data.tags["model"] == "test-model"
+
+
+def test_cli_smoke_ci_flag(tmp_path: Path):
+    from shlepa_cli import config as config_module
+
+    seen: dict = {}
+
+    def fake_run_smoke(settings, *, ci, **kwargs):
+        seen["ci"] = ci
+        return True
+
+    runner = CliRunner()
+    with (
+        patch.object(smoke_module, "run_smoke", side_effect=fake_run_smoke),
+        patch.object(config_module, "get_settings", return_value=_settings(tmp_path)),
+    ):
+        result = runner.invoke(app, ["smoke", "--ci"])
+    assert result.exit_code == 0
+    assert seen["ci"] is True
+
+
 def test_cli_smoke_exit_codes(tmp_path: Path):
     from shlepa_cli import config as config_module
 

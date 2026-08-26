@@ -112,14 +112,23 @@ def run(
 
 
 @app.command()
-def smoke() -> None:
+def smoke(
+    ci: bool = typer.Option(
+        False,
+        "--ci",
+        help=(
+            "Use the secondary CI endpoint (CI_* settings, falling back to "
+            "the main endpoint) and log to the shlepa-ci experiment."
+        ),
+    ),
+) -> None:
     """End-to-end check: doctor + contest-hello-file task + MLflow run."""
     from shlepa_cli import smoke as smoke_module
     from shlepa_cli.config import get_settings
 
     settings = get_settings()
-    typer.echo("shlepa smoke")
-    ok = smoke_module.run_smoke(settings, out=typer.echo)
+    typer.echo("shlepa smoke" + (" --ci" if ci else ""))
+    ok = smoke_module.run_smoke(settings, ci=ci, out=typer.echo)
     typer.echo(f"smoke: {'PASS' if ok else 'FAIL'}")
     raise typer.Exit(code=0 if ok else 1)
 

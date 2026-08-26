@@ -1,0 +1,47 @@
+name: pr-checks
+
+on:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build submission zip (size + run.sh check)
+        run: |
+          uv run --project cli shlepa zip
+          uv run --project cli python - <<'EOF'
+          import glob
+          import os
+          import zipfile
+
+          zips = glob.glob("dist/submission-*.zip")
+          assert len(zips) == 1, f"expected one zip in dist/, got {zips}"
+          path = zips[0]
+          size_mb = os.path.getsize(path) / (1024 * 1024)
+          print(f"zip: {path} ({size_mb:.2f} MB)")
+          assert size_mb <= 10, f"submission zip is {size_mb:.2f} MB (> 10 MB)"
+          with zipfile.ZipFile(path) as zf:
+              names = zf.namelist()
+          assert any(n.endswith("run.sh") for n in names), "run.sh missing from zip"
+          print("run.sh present")
+          EOF
+
+      - name: flake8 (agent/ + cli/, root .flake8)
+        run: uv run --project cli --group dev flake8 agent/ cli/
+
+      - name: Smoke test against CI endpoint
+        env:
+          CI_OPENAI_BASE_URL: ${{ secrets.CI_OPENAI_BASE_URL }}
+          CI_OPENAI_API_KEY: ${{ secrets.CI_OPENAI_API_KEY }}
+          CI_MODEL: ${{ secrets.CI_MODEL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: uv run --project cli shlepa smoke --ci
