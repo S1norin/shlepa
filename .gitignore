@@ -9,6 +9,10 @@ __pycache__/
 dist/
 build/
 
+# mlflow file-store metadata (tests / local tracking)
+mlflow.db
+mlruns/
+
 # tmp workspaces (keep the README)
 tmp/*
 !tmp/README.md

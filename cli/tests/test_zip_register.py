@@ -12,8 +12,11 @@ from shlepa_cli.zip_build import build_submission_zip
 
 
 @pytest.fixture(autouse=True)
-def filestore(monkeypatch):
+def filestore(tmp_path: Path, monkeypatch):
+    # MLflow 3's file:// store keeps its sqlite metadata db in the current
+    # working directory (mlflow.db); run from tmp_path to stay hermetic.
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    monkeypatch.chdir(tmp_path)
 
 
 def _make_agent_repo(base: Path) -> None:
