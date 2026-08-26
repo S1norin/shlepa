@@ -8,6 +8,7 @@ dependencies = [
     # runs the agent engine on the host and needs OTel support for `shlepa run`.
     "shlepa-agent[telemetry]",
     "typer",
+    "httpx",
     "python-dotenv",
     "mlflow",
     "harbor==0.16.1",

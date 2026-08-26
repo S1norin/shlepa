@@ -49,9 +49,34 @@ def smoke() -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    probe: bool = typer.Option(
+        False,
+        "--probe",
+        help="Additionally run one chat completion (best effort).",
+    ),
+) -> None:
     """Check LLM endpoint, MLflow, and docker availability."""
-    _not_implemented("doctor")
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.doctor import run_doctor
+
+    settings = get_settings()
+    results, probe_info = run_doctor(settings, probe=probe)
+    for result in results:
+        status = "PASS" if result.ok else "FAIL"
+        typer.echo(f"{status}  {result.name}: {result.detail}")
+    if probe_info is not None:
+        typer.echo(f"probe  chat completion: {probe_info}")
+    passed = sum(1 for r in results if r.ok)
+    typer.echo(f"doctor: {passed}/{len(results)} checks passed")
+    model_mismatch = any(
+        r.name == "llm_model" and not r.ok and r.model_actual is not None
+        for r in results
+    )
+    if model_mismatch:
+        raise typer.Exit(code=2)
+    if passed != len(results):
+        raise typer.Exit(code=1)
 
 
 @app.command()

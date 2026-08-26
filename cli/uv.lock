@@ -3255,6 +3255,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "harbor" },
+    { name = "httpx" },
     { name = "mlflow" },
     { name = "python-dotenv" },
     { name = "shlepa-agent", extra = ["telemetry"] },
@@ -3269,6 +3270,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "harbor", specifier = "==0.16.1" },
+    { name = "httpx" },
     { name = "mlflow" },
     { name = "python-dotenv" },
     { name = "shlepa-agent", extras = ["telemetry"], editable = "../agent" },
