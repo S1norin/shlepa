@@ -38,6 +38,11 @@ def _not_implemented(command: str) -> None:
     raise typer.Exit(code=1)
 
 
+def _register_submission(settings, out: "object") -> None:
+    """Register the built submission in the MLflow model registry."""
+    _not_implemented("zip --register")
+
+
 @app.command()
 def run(
     preset: str = typer.Argument("all", help="Experiment preset name"),
@@ -143,7 +148,18 @@ def submit_test(ci: bool = typer.Option(False, help="CI mode (endpoint_class=ci)
 @app.command()
 def zip(register: bool = typer.Option(False, help="Register in the MLflow model registry")) -> None:
     """Build the submission zip (telemetry stripped)."""
-    _not_implemented(f"zip--register={register}" if register else "zip")
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.zip_build import ZipBuildError, build_submission_zip
+
+    settings = get_settings()
+    try:
+        out = build_submission_zip(settings.repo_root)
+    except ZipBuildError as exc:
+        typer.echo(f"zip: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"zip: {out} ({out.stat().st_size} bytes)")
+    if register:
+        _register_submission(settings, out)
 
 
 @app.command()
