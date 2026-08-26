@@ -9,6 +9,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -22,6 +23,12 @@ class Task:
     path: Path
     difficulty: str | None = None
     timeout_sec: int | None = None
+    env: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def environment_dir(self) -> Path:
+        """Docker build context for the task environment (if any)."""
+        return self.path / "environment"
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,8 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
         data = tomllib.loads(manifest.read_text())
         metadata = data.get("metadata", {})
         agent = data.get("agent", {})
+        environment = data.get("environment", {}) or {}
+        raw_env: dict[str, Any] = environment.get("env", {}) or {}
         found.append(
             Task(
                 slug=entry.name,
@@ -57,6 +66,7 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
                 path=entry,
                 difficulty=metadata.get("difficulty"),
                 timeout_sec=agent.get("timeout_sec"),
+                env={str(k): str(v) for k, v in raw_env.items()},
             )
         )
     return found

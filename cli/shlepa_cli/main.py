@@ -1,5 +1,7 @@
 """shlepa command-line interface (entry point)."""
 
+import os
+
 import typer
 
 from shlepa_cli import __version__
@@ -63,7 +65,36 @@ def run(
         for task in resolved:
             typer.echo(f"  - {task.slug} ({task.name})")
         return
-    _not_implemented(f"run {preset}")
+
+    from shlepa_cli import run_engine
+
+    model = preset_obj.model or settings.local_agent_model
+    no_docker = os.environ.get("SLEPA_NO_DOCKER") == "1"
+    typer.echo(
+        f"preset: {preset_obj.name} | model: {model or '(env)'} | "
+        f"mode: {'no-docker' if no_docker else 'container'} | "
+        f"tasks: {len(resolved)}"
+    )
+    mlflow_client = None
+    if settings.mlflow_tracking_uri:
+        try:
+            from shlepa_cli.mlflow_client import get_mlflow_client
+
+            mlflow_client = get_mlflow_client(settings)
+        except ValueError as exc:
+            typer.echo(f"warning: MLflow not configured: {exc}", err=True)
+    results = run_engine.run_preset(
+        settings,
+        preset_obj,
+        resolved,
+        model=model,
+        no_docker=no_docker,
+        mlflow_client=mlflow_client,
+    )
+    typer.echo("")
+    typer.echo(run_engine.format_summary(results))
+    if not results:
+        raise typer.Exit(code=1)
 
 
 @app.command()
