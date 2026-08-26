@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 # pulls in logfire -> opentelemetry-sdk, which must stay out of the base
 # environment (telemetry is an opt-in extra, see below).
 dependencies = [
-    "pydantic-ai-slim",
+    "pydantic-ai-slim[openai]",
     "python-dotenv",
 ]
 
