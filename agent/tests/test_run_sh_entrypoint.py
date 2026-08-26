@@ -2,24 +2,22 @@
 
 import os
 import subprocess
-import threading
 from pathlib import Path
 
-from test_baseline_stub import FINAL_ANSWER, _StubHandler, ThreadingHTTPServer
+from stub_server import FINAL_ANSWER, start_stub_server
 
 REPO_AGENT_DIR = Path(__file__).resolve().parent.parent
 VENV_BIN = REPO_AGENT_DIR / ".venv" / "bin"
 
 
 def test_run_sh_entrypoint(tmp_path):
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _StubHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server, stub_url = start_stub_server()
     try:
         # The agent runs in an environment that already has the dependencies:
         # the uv venv in dev, the secureintelligent/acp image in the contest.
         env = {
             "PATH": f"{VENV_BIN}:{os.environ['PATH']}",
-            "OPENAI_BASE_URL": f"http://127.0.0.1:{server.server_address[1]}/v1",
+            "OPENAI_BASE_URL": stub_url,
             "OPENAI_API_KEY": "sk-test",
             "LOCAL_AGENT_MODEL": "stub-model",
             "LOCAL_AGENT_WORKDIR": str(tmp_path),

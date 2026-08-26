@@ -232,7 +232,7 @@ def _append_text(file_path: Path, content: str) -> None:
         f.write(content)
 
 
-def get_pydantic_agent() -> Agent[LocalAgentDeps, str]:
+def get_pydantic_agent(instrument: bool = False) -> Agent[LocalAgentDeps, str]:
     model_name = _resolve_model_name()
     base_url = _required_env("OPENAI_BASE_URL")
     api_key = _required_env("OPENAI_API_KEY")
@@ -252,6 +252,8 @@ def get_pydantic_agent() -> Agent[LocalAgentDeps, str]:
             "Work in concise steps and explain what you changed in the final response."
         ),
     )
+    if instrument:
+        agent.instrument = True
 
     @agent.tool
     async def bash(ctx: RunContext[LocalAgentDeps], command: str) -> str:
@@ -295,7 +297,7 @@ async def _consume_stream_events(stream: Any) -> str:
     return final_output
 
 
-async def run_prompt(prompt: str) -> str:
+async def run_prompt(prompt: str, instrument: bool = False) -> str:
     _configure_logging()
     workdir = _resolve_workdir()
     _log_event(
@@ -305,7 +307,7 @@ async def run_prompt(prompt: str) -> str:
         workdir=str(workdir),
         prompt=prompt,
     )
-    agent = get_pydantic_agent()
+    agent = get_pydantic_agent(instrument=instrument)
     return await _consume_stream_events(
         agent.run_stream_events(
             prompt,
@@ -315,14 +317,14 @@ async def run_prompt(prompt: str) -> str:
     )
 
 
-def main() -> None:
+def main(instrument: bool = False) -> None:
     parser = argparse.ArgumentParser(
         description="Run local non-interactive coding agent"
     )
     parser.add_argument("prompt", nargs="+", help="Prompt for the agent")
     args = parser.parse_args()
     prompt = " ".join(args.prompt)
-    print(asyncio.run(run_prompt(prompt)))
+    print(asyncio.run(run_prompt(prompt, instrument=instrument)))
 
 
 if __name__ == "__main__":
