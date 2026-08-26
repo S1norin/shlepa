@@ -155,10 +155,36 @@ def doctor(
         raise typer.Exit(code=1)
 
 
-@app.command()
-def submit_test(ci: bool = typer.Option(False, help="CI mode (endpoint_class=ci)")) -> None:
+@app.command("submit-test")
+def submit_test(
+    tasks: list[str] = typer.Argument(
+        None, help="Task slugs (default: all discoverable tasks)."
+    ),
+    ci: bool = typer.Option(
+        False, "--ci", help="CI mode (CI endpoint, endpoint_class=ci)."
+    ),
+) -> None:
     """Strict contest-faithful test via Harbor inside the acp container."""
-    _not_implemented(f"submit-test--ci={ci}" if ci else "submit-test")
+    from shlepa_cli import submit_test as submit_test_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    mlflow_client = None
+    if settings.mlflow_tracking_uri:
+        try:
+            from shlepa_cli.mlflow_client import get_mlflow_client
+
+            mlflow_client = get_mlflow_client(settings)
+        except ValueError as exc:
+            typer.echo(f"warning: MLflow not configured: {exc}", err=True)
+    ok = submit_test_module.run_submit_test(
+        settings,
+        tasks,
+        ci=ci,
+        out=typer.echo,
+        mlflow_client=mlflow_client,
+    )
+    raise typer.Exit(code=0 if ok else 1)
 
 
 @app.command()
