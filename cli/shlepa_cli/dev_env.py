@@ -53,6 +53,30 @@ def _workdir() -> Path:
     return Path(raw).resolve() if raw else Path.cwd().resolve()
 
 
+def _run_agent(prompt: str, timeout, otel: bool) -> int:
+    agent = core.get_pydantic_agent(instrument=otel)
+    try:
+        result = asyncio.run(
+            asyncio.wait_for(
+                agent.run(prompt, deps=core.LocalAgentDeps(workdir=_workdir())),
+                timeout=timeout,
+            )
+        )
+    except asyncio.TimeoutError:
+        print(f"agent timed out after {timeout}s", file=sys.stderr)
+        return 1
+    usage = result.usage
+    metrics = {
+        "final_output": str(result.output),
+        "tokens_in": int(usage.input_tokens or 0) if usage else 0,
+        "tokens_out": int(usage.output_tokens or 0) if usage else 0,
+        "tool_calls": int(usage.tool_calls or 0) if usage else 0,
+    }
+    print(metrics["final_output"])
+    print(METRICS_MARKER + json.dumps(metrics), file=sys.stderr)
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: dev_run.py <prompt>", file=sys.stderr)
@@ -69,29 +93,14 @@ def main() -> int:
 
         provider = configure()
     try:
-        agent = core.get_pydantic_agent(instrument=otel)
-        try:
-            result = asyncio.run(
-                asyncio.wait_for(
-                    agent.run(
-                        prompt, deps=core.LocalAgentDeps(workdir=_workdir())
-                    ),
-                    timeout=timeout,
-                )
-            )
-        except asyncio.TimeoutError:
-            print(f"agent timed out after {timeout}s", file=sys.stderr)
-            return 1
-        usage = result.usage
-        metrics = {
-            "final_output": str(result.output),
-            "tokens_in": int(usage.input_tokens or 0) if usage else 0,
-            "tokens_out": int(usage.output_tokens or 0) if usage else 0,
-            "tool_calls": int(usage.tool_calls or 0) if usage else 0,
-        }
-        print(metrics["final_output"])
-        print(METRICS_MARKER + json.dumps(metrics), file=sys.stderr)
-        return 0
+        if provider is not None:
+            # Root span for the whole run; carries the task slug so
+            # traces can be grouped per task in Jaeger.
+            from shlepa_agent.telemetry import root_span
+
+            with root_span(provider):
+                return _run_agent(prompt, timeout, otel)
+        return _run_agent(prompt, timeout, otel)
     finally:
         if provider is not None:
             provider.shutdown()

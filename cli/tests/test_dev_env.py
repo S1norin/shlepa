@@ -121,6 +121,8 @@ def test_dev_run_source_sanity() -> None:
     compile(dev_env.DEV_RUN_SOURCE, "dev_run.py", "exec")
     assert dev_env.METRICS_MARKER in dev_env.DEV_RUN_SOURCE
     assert '"/agent"' in dev_env.DEV_RUN_SOURCE
+    # Telemetry on: the run must be wrapped in the agent.run root span.
+    assert "root_span" in dev_env.DEV_RUN_SOURCE
 
 
 class _ExecFakeDocker:

@@ -45,6 +45,27 @@ A real agent run produces the same flow automatically: with
 `SLEPA_OTEL_ENABLED=1` the dev CLI's `run`/`smoke` commands emit pydantic-ai
 spans (see the agent telemetry module) to the same endpoint.
 
+## Verify a trace (check_trace.py)
+
+After a dev run with telemetry, verify the pipeline end-to-end (Jaeger
+reachable, LLM span with token usage, task attribute present):
+
+```bash
+SLEPA_OTEL_ENABLED=1 uv run --project cli --no-sync shlepa run contest-hello-file
+uv run --project cli --no-sync python otel/check_trace.py
+# OK: trace <trace-id> (2 spans, LLM span with token usage, task attribute present)
+```
+
+Exit code 0 = a valid trace is present, 1 = Jaeger unreachable, no traces,
+or the trace lacks the expected spans/attributes. Options: `--jaeger`,
+`--service` (default `shlepa-agent`), `--timeout`. The script picks the most
+recently finished trace of the service, so a fresh run is checked, not an
+older one.
+
+The `task` attribute comes from the agent's `agent.run` root span, which
+reads `SLEPA_TASK_SLUG` (set by the dev run engine); ad-hoc runs without a
+task slug get `task=dev-run`.
+
 ## What spans carry
 
 pydantic-ai instrumentation emits spans with OpenAI Inference (`gen_ai.*`)

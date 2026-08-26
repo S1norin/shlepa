@@ -12,6 +12,7 @@ requested, so the baseline stays clean of the otel SDK.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from shlepa_agent import __version__
@@ -23,6 +24,22 @@ if TYPE_CHECKING:
 def is_enabled() -> bool:
     """True when SLEPA_OTEL_ENABLED is set to '1'."""
     return os.environ.get("SLEPA_OTEL_ENABLED") == "1"
+
+
+@contextmanager
+def root_span(provider: TracerProvider, task: str | None = None):
+    """Context manager for the per-run 'agent.run' root span.
+
+    Carries the task slug (``task`` argument or the SLEPA_TASK_SLUG
+    environment variable, falling back to 'dev-run') so Jaeger traces
+    can be grouped per task. Used by both agent entrypoints (the
+    submission ``__main__`` and the in-container dev entrypoint).
+    """
+    task_name = task or os.environ.get("SLEPA_TASK_SLUG") or "dev-run"
+    tracer = provider.get_tracer("shlepa-agent")
+    with tracer.start_as_current_span("agent.run") as span:
+        span.set_attribute("task", task_name)
+        yield span
 
 
 def configure(exporter: Any | None = None) -> TracerProvider:

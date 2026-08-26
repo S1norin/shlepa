@@ -12,15 +12,13 @@ def main() -> None:
 
     # Imported only when tracing is requested, so the baseline
     # never touches the otel SDK stack.
-    from shlepa_agent.telemetry import configure
+    from shlepa_agent.telemetry import configure, root_span
 
     provider = configure()
-    tracer = provider.get_tracer("shlepa-agent")
     try:
         # Root span for the whole run; carries the task slug so traces
         # can be grouped per task in Jaeger.
-        with tracer.start_as_current_span("agent.run") as span:
-            span.set_attribute("task", os.environ.get("SLEPA_TASK_SLUG", "dev-run"))
+        with root_span(provider):
             core.main(instrument=True)
     finally:
         provider.shutdown()  # flushes pending spans
