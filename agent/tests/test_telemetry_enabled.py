@@ -43,6 +43,33 @@ def test_spans_captured_with_inmemory_exporter(monkeypatch, stub_openai, tmp_pat
     assert gen_ai, f"no gen_ai.* spans; names: {[s.name for s in spans]}"
 
 
+def test_root_span_carries_task_attribute(monkeypatch, stub_openai, tmp_path):
+    import sys
+
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    monkeypatch.setattr(telemetry, "configure", lambda: provider)
+    try:
+        monkeypatch.setenv("SLEPA_OTEL_ENABLED", "1")
+        monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
+        monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
+        monkeypatch.setenv("SLEPA_TASK_SLUG", "contest-hello-file")
+        monkeypatch.setattr(sys, "argv", ["shlepa_agent", "Create hello.txt"])
+
+        from shlepa_agent import __main__ as agent_main
+
+        agent_main.main()
+    finally:
+        provider.shutdown()
+
+    spans = exporter.get_finished_spans()
+    roots = [s for s in spans if s.name == "agent.run"]
+    assert roots, f"no agent.run root span; names: {[s.name for s in spans]}"
+    assert roots[0].attributes.get("task") == "contest-hello-file"
+
+
 def test_is_enabled(monkeypatch):
     monkeypatch.setenv("SLEPA_OTEL_ENABLED", "1")
     assert telemetry.is_enabled()
