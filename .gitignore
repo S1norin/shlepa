@@ -1,0 +1,22 @@
+# environment
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# build artifacts
+dist/
+build/
+
+# tmp workspaces (keep the README)
+tmp/*
+!tmp/README.md
+
+# pi tooling (local tool output / schedule state, not part of the repo)
+.pi/quiet-tools/
+.pi/schedule-prompts.json
+
+# editor / OS
+.DS_Store
+*.swp
