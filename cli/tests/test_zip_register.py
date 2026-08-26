@@ -31,6 +31,11 @@ def _make_agent_repo(base: Path) -> None:
     (agent / "shlepa_agent" / "core.py").write_text("X = 1\n")
     (agent / "shlepa_agent" / "telemetry" / "__init__.py").write_text("T = 1\n")
     (agent / "pyproject.toml").write_text("[project]\n")
+    # Development cruft that must NOT end up in the source tarball.
+    (agent / ".venv" / "site-packages").mkdir(parents=True)
+    (agent / ".venv" / "site-packages" / "junk.so").write_text("x")
+    (agent / "__pycache__").mkdir()
+    (agent / "__pycache__" / "core.cpython-312.pyc").write_bytes(b"x")
 
 
 def _settings(tmp_path: Path, uri: str) -> Settings:
@@ -77,7 +82,8 @@ def test_register_creates_version_with_artifacts_and_tags(
     tar_name = "submission-abc1234.agent.tar.gz"
     assert tar_name in artifact_names
 
-    # The tarball is the full agent source (telemetry included, for diffs).
+    # The tarball is the full agent source (telemetry included, for diffs),
+    # but development cruft (.venv, caches) is excluded.
     local_tar = client.download_artifacts(run_id, tar_name)
     with tarfile.open(local_tar, "r:gz") as tf:
         names = set(tf.getnames())
@@ -85,6 +91,8 @@ def test_register_creates_version_with_artifacts_and_tags(
     assert "agent/shlepa_agent/core.py" in names
     assert "agent/shlepa_agent/telemetry/__init__.py" in names
     assert "agent/pyproject.toml" in names
+    assert not any(".venv" in n for n in names)
+    assert not any("__pycache__" in n for n in names)
 
 
 def test_register_second_run_bumps_version(tmp_path: Path, monkeypatch) -> None:

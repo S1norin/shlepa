@@ -9,16 +9,39 @@ from shlepa_cli import zip_build
 from shlepa_cli.config import Settings
 
 MODEL_NAME = "shlepa"
+# Dedicated experiment for submission registrations; the remote MLflow
+# server has its Default (experiment 0) deleted, so we never rely on it.
+SUBMISSION_EXPERIMENT = "shlepa-submissions"
+
+
+def _get_or_create_experiment(client, name: str) -> str:
+    exp = client.get_experiment_by_name(name)
+    if exp is None:  # MLflow 3 returns None for a missing experiment
+        return str(client.create_experiment(name))
+    return str(exp.experiment_id)
+
+
+# Development cruft excluded from the source tarball (the venv alone is
+# ~85 MB; the server-side artifact upload would never finish with it).
+_TARBALL_EXCLUDE = {".venv", "__pycache__", ".pytest_cache"}
+
+
+def _tarball_filter(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    name = Path(member.name).name
+    if name in _TARBALL_EXCLUDE:
+        return None  # rejects the whole subtree when it is a directory
+    return member
 
 
 def make_agent_tarball(repo_root: Path, out_path: Path) -> Path:
-    """Pack repo_root/agent as-is (telemetry included) into a tar.gz.
+    """Pack repo_root/agent source into a tar.gz.
 
-    The full source is kept alongside the stripped zip so versions can be
-    code-diffed against the actual development tree.
+    The full source (telemetry included) is kept alongside the stripped
+    zip so versions can be code-diffed against the actual development
+    tree; venvs and caches are excluded (they are not source).
     """
     with tarfile.open(out_path, "w:gz") as tf:
-        tf.add(repo_root / "agent", arcname="agent")
+        tf.add(repo_root / "agent", arcname="agent", filter=_tarball_filter)
     return out_path
 
 
@@ -38,8 +61,9 @@ def register_submission(client, settings: Settings, zip_path: Path) -> str:
     tar_path = zip_path.with_name(f"{zip_path.stem}.agent.tar.gz")
     make_agent_tarball(settings.repo_root, tar_path)
 
+    experiment_id = _get_or_create_experiment(client, SUBMISSION_EXPERIMENT)
     run = client.create_run(
-        experiment_id="0", run_name=f"submission-{zip_path.stem}"
+        experiment_id=experiment_id, run_name=f"submission-{zip_path.stem}"
     )
     run_id = run.info.run_id
     try:
