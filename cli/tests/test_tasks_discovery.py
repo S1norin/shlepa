@@ -97,3 +97,34 @@ def test_discover_missing_dir_raises(tmp_path):
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+
+def test_discover_prefers_task_section_name(tmp_path):
+    """Contest schema 1.2 puts the display name in [task].name."""
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "contest-hello-file" / "task.toml",
+        """
+schema_version = "1.2"
+name = "legacy-top-level"
+
+[task]
+name = "local/hello-file"
+""",
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert found[0].name == "local/hello-file"
+
+
+def test_discover_name_falls_back_to_directory(tmp_path):
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "own-no-name" / "task.toml",
+        'schema_version = "1.2"\n',
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert found[0].name == "own-no-name"

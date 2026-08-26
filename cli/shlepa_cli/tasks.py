@@ -63,10 +63,16 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
         verifier = data.get("verifier", {}) or {}
         raw_env: dict[str, Any] = environment.get("env", {}) or {}
         raw_verifier_env: dict[str, Any] = verifier.get("env", {}) or {}
+        # Contest schema 1.2 puts the display name in [task].name;
+        # top-level 'name' is the legacy fallback, then the directory.
+        task_section = data.get("task", {}) or {}
+        display_name = (
+            task_section.get("name") or data.get("name") or entry.name
+        )
         found.append(
             Task(
                 slug=entry.name,
-                name=data.get("name", entry.name),
+                name=display_name,
                 path=entry,
                 difficulty=metadata.get("difficulty"),
                 timeout_sec=agent.get("timeout_sec"),
