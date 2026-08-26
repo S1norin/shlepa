@@ -1,0 +1,30 @@
+[project]
+name = "shlepa-cli"
+version = "0.1.0"
+description = "Shlepa development CLI (console command: shlepa)"
+requires-python = ">=3.12"
+dependencies = [
+    # Path dep on the agent project with the telemetry extra: the dev CLI
+    # runs the agent engine on the host and needs OTel support for `shlepa run`.
+    "shlepa-agent[telemetry]",
+    "typer",
+    "python-dotenv",
+    "mlflow",
+    "harbor==0.16.1",
+]
+
+[tool.uv.sources]
+shlepa-agent = { path = "../agent", editable = true }
+
+[project.scripts]
+shlepa = "shlepa_cli.main:app"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["shlepa_cli"]
