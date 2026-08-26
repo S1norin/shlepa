@@ -42,10 +42,10 @@ def configure(exporter: Any | None = None) -> TracerProvider:
             OTLPSpanExporter,
         )
 
-        endpoint = os.environ.get(
-            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"
-        )
-        exporter = OTLPSpanExporter(endpoint=endpoint)
+        # No explicit endpoint: the exporter reads OTEL_EXPORTER_OTLP_ENDPOINT
+        # (or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) itself and appends the
+        # /v1/traces path; passing endpoint= would skip the path append.
+        exporter = OTLPSpanExporter()
 
     provider = TracerProvider(
         resource=Resource.create(
