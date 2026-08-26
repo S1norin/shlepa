@@ -179,9 +179,24 @@ def zip(register: bool = typer.Option(False, help="Register in the MLflow model 
 
 
 @app.command()
-def clean() -> None:
-    """Remove tmp/ files older than 7 days."""
-    _not_implemented("clean")
+def clean(
+    days: int = typer.Option(
+        7, "--days", min=1, help="Max age in days (default 7)."
+    ),
+) -> None:
+    """Remove tmp/ workspaces older than the given number of days."""
+    from shlepa_cli import clean as clean_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    removed = clean_module.clean(
+        settings.repo_root / "tmp", max_age_days=days
+    )
+    if not removed:
+        typer.echo("clean: nothing to remove")
+        return
+    for path in removed:
+        typer.echo(f"removed: {path}")
 
 
 @app.command("help")
