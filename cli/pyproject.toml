@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv",
     "mlflow",
     "harbor==0.16.1",
+    "pyyaml",
 ]
 
 [tool.uv.sources]

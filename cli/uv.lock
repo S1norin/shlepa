@@ -3258,6 +3258,7 @@ dependencies = [
     { name = "httpx" },
     { name = "mlflow" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "shlepa-agent", extra = ["telemetry"] },
     { name = "typer" },
 ]
@@ -3273,6 +3274,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "mlflow" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "shlepa-agent", extras = ["telemetry"], editable = "../agent" },
     { name = "typer" },
 ]

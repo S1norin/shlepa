@@ -37,8 +37,32 @@ def _not_implemented(command: str) -> None:
 
 
 @app.command()
-def run(preset: str = typer.Option("all", help="Experiment preset name")) -> None:
+def run(
+    preset: str = typer.Argument("all", help="Experiment preset name"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print resolved tasks and model, do not run."
+    ),
+) -> None:
     """Run the dev experiment loop for a preset."""
+    from shlepa_cli import tasks as tasks_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    try:
+        preset_obj = tasks_module.load_preset_by_name(settings.repo_root, preset)
+        all_tasks = tasks_module.discover_tasks(settings.repo_root / "tasks")
+        resolved = tasks_module.resolve_tasks(preset_obj, all_tasks)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
+    if dry_run:
+        model = preset_obj.model or settings.local_agent_model or "(from env)"
+        typer.echo(f"preset: {preset_obj.name}")
+        typer.echo(f"model: {model}")
+        typer.echo(f"tasks ({len(resolved)}):")
+        for task in resolved:
+            typer.echo(f"  - {task.slug} ({task.name})")
+        return
     _not_implemented(f"run {preset}")
 
 
