@@ -1,0 +1,31 @@
+# Local OpenTelemetry collector + Jaeger for shlepa-agent traces.
+#
+#   docker compose -f otel/docker-compose.yml up -d
+#
+# Agent telemetry (shlepa_agent[telemetry]) ships OTLP to the collector on
+# localhost:4318 (http) / 4317 (grpc); the collector forwards traces to
+# Jaeger (UI on localhost:16686, persistent volume).
+
+services:
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.159.0
+    command: ["--config=/etc/otelcol.yaml"]
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:4317:4317"
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/jaeger:2.9.0
+    ports:
+      - "127.0.0.1:16686:16686"
+    volumes:
+      - jaeger-traces:/var/lib/jaeger
+    restart: unless-stopped
+
+volumes:
+  jaeger-traces:
