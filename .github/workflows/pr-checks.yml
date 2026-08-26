@@ -9,9 +9,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: "3.12"
+      # uv is installed via the official curl script in a run step (instead of
+      # the setup-uv JS action) so the workflow also runs under local `act`,
+      # whose JS actions execute on node:16 and cannot load setup-uv@v5.
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          uv python install 3.12
 
       - name: Build submission zip (size + run.sh check)
         run: |
