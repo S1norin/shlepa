@@ -1,10 +1,14 @@
 """Dev run engine for 'shlepa run [preset]'.
 
-Per task: a workspace under tmp/<YYYYMMDD-HHMMSS>-<slug>/, the agent runs
-on the host (imported shlepa_agent core), the verifier is the task's
-tests/ (pytest inside the task container, or on the host in
-SLEPA_NO_DOCKER mode). Results are written as JSON into the workspace
-and logged to MLflow.
+Container mode (the contest-faithful default): the agent runs INSIDE the
+task environment container (built FROM secureintelligent/acp, with a dev
+wrapper baking in the shlepa_agent package), working in /app under host
+networking; the verifier is the task's tests/test.sh writing the
+host-mounted /logs/verifier/reward.txt. SLEPA_NO_DOCKER mode keeps the
+experimental host path (agent imported on the host, pytest on the host).
+Per task: a workspace under tmp/<YYYYMMDD-HHMMSS>-<slug>/ holding the
+verifier logs, the copied-back /app, and result.json; results are also
+logged to MLflow.
 """
 
 from __future__ import annotations
@@ -297,10 +301,11 @@ def _call_agent(
 
 
 def _score_container(docker, container: str, task: Task) -> tuple[bool, str]:
-    """Run the task's tests/ inside the environment container.
+    """Fallback scoring: run the task's tests/ with pytest in the container.
 
-    The environment image is not guaranteed to ship pytest; if it is
-    missing, install it into the container first (dev machines have
+    Used only when the task has no tests/test.sh (non-contest or legacy
+    tasks). The environment image is not guaranteed to ship pytest; if it
+    is missing, install it into the container first (dev machines have
     network access).
     """
     tests_dir = task.path / "tests"
@@ -355,6 +360,27 @@ def _score_container_faithful(
     return content == "1", detail
 
 
+def _agent_env(settings: Settings, model: str | None, task: Task) -> dict[str, str]:
+    """docker-exec environment for the in-container agent."""
+    env: dict[str, str] = {
+        "LOCAL_AGENT_WORKDIR": "/app",
+        "LOCAL_AGENT_MODEL": model or settings.local_agent_model or "",
+        "SLEPA_TASK_SLUG": task.slug,
+    }
+    if settings.openai_api_key:
+        env["OPENAI_API_KEY"] = settings.openai_api_key
+    if settings.openai_base_url:
+        env["OPENAI_BASE_URL"] = settings.openai_base_url
+    if task.timeout_sec:
+        env["SLEPA_AGENT_TIMEOUT"] = str(int(task.timeout_sec))
+    if settings.shlepa_otel_enabled:
+        env["SLEPA_OTEL_ENABLED"] = "1"
+        env["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
+            settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
+        )
+    return env
+
+
 def run_task(
     task: Task,
     settings: Settings,
@@ -366,11 +392,12 @@ def run_task(
 ) -> TaskResult:
     """Run one task and return its TaskResult.
 
-    ``agent_runner(instruction, workdir, model, timeout_sec, otel_enabled)
-    -> AgentRun`` is injected for testability; the default is
-    :func:`run_agent_on_host`. In container mode the agent still runs on
-    the host against the workspace; only the verifier (pytest) runs
-    inside the task environment container.
+    Container mode (the contest-faithful default): the agent runs INSIDE
+    the task environment container (acp image + dev wrapper with the
+    shlepa_agent package baked in, host networking), working in /app;
+    the verifier is the task's tests/test.sh writing the host-mounted
+    /logs/verifier/reward.txt. ``agent_runner`` is only used by the
+    experimental SLEPA_NO_DOCKER host path (see :func:`run_agent_on_host`).
     """
     if agent_runner is None:
         agent_runner = run_agent_on_host
@@ -405,30 +432,52 @@ def run_task(
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
     else:
+        from shlepa_cli import dev_env
         from shlepa_cli.docker_client import Mount
 
-        image = f"shlepa-task-{task.slug}:dev"
+        env_image = f"shlepa-task-{task.slug}:env"
+        dev_image = f"shlepa-task-{task.slug}:dev"
+        logs_dir = workspace / "logs" / "verifier"
         try:
-            docker_client.build(image, task.environment_dir)
+            docker_client.build(env_image, task.environment_dir)
+            dev_env.build_dev_image(
+                docker_client,
+                env_image=env_image,
+                dev_image=dev_image,
+                agent_dir=settings.repo_root / "agent",
+                workdir=workspace,
+            )
+            logs_dir.mkdir(parents=True, exist_ok=True)
             container = docker_client.run(
                 name=f"shlepa-{task.slug}-{time.time_ns() % 10**8}",
-                image=image,
+                image=dev_image,
+                network="host",
                 mounts=[
-                    Mount(workspace, "/workspace"),
                     Mount(task.path / "tests", "/tests", readonly=True),
+                    Mount(logs_dir, "/logs/verifier"),
                 ],
                 env=task.env,
             )
             instruction = instruction_file.read_text()
-            agent_run = _call_agent(
-                agent_runner,
-                task,
+            agent_run = dev_env.run_agent_in_container(
+                docker_client,
+                container,
                 instruction,
-                workspace,
-                model,
-                settings,
+                _agent_env(settings, model, task),
+                timeout_sec=task.timeout_sec,
             )
-            solved, score_detail = _score_container(docker_client, container, task)
+            if (task.path / "tests" / "test.sh").is_file():
+                solved, score_detail = _score_container_faithful(
+                    docker_client, container, task, logs_dir / "reward.txt"
+                )
+            else:
+                solved, score_detail = _score_container(
+                    docker_client, container, task
+                )
+            try:
+                docker_client.cp_out(container, "/app", workspace / "app")
+            except Exception:  # noqa: BLE001 - debug aid, not fatal
+                pass
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
         finally:

@@ -1,20 +1,32 @@
-"""Run engine tests: container mode (fake docker client)."""
+"""Run engine tests: container mode, contest-faithful topology (fake docker).
+
+The agent runs INSIDE the task environment container (acp image + dev
+wrapper), the verifier is tests/test.sh writing the host-mounted
+/logs/verifier/reward.txt, and the container uses host networking so
+telemetry reaches the local OTLP collector.
+"""
 
 import subprocess
 from pathlib import Path
 
 from shlepa_cli import run_engine
 from shlepa_cli.config import Settings
-from shlepa_cli.docker_client import DockerClient, Mount
+from shlepa_cli.docker_client import Mount
 from shlepa_cli.tasks import Task
 
+MARKER = (
+    'SLEPA_AGENT_METRICS_JSON='
+    '{"final_output": "answer", "tokens_in": 4, "tokens_out": 2, '
+    '"tool_calls": 1}\n'
+)
 
-def _settings(root):
-    return Settings(
+
+def _settings(root, **overrides):
+    base = dict(
         repo_root=root,
         openai_base_url=None,
         openai_api_key=None,
-        local_agent_model=None,
+        local_agent_model="test-model",
         ci_openai_base_url=None,
         ci_openai_api_key=None,
         ci_model=None,
@@ -24,21 +36,28 @@ def _settings(root):
         shlepa_otel_enabled=False,
         otel_exporter_otlp_endpoint=None,
     )
+    base.update(overrides)
+    return Settings(**base)
 
 
-def _task(root, slug="contest-hello-file", with_env=True):
-    task_dir = root / "tasks" / slug
+def _repo(root: Path, with_test_sh=True):
+    (root / "agent" / "shlepa_agent").mkdir(parents=True)
+    (root / "agent" / "shlepa_agent" / "__init__.py").write_text(
+        "__version__ = '0.1.0'\n"
+    )
+    (root / "agent" / "shlepa_agent" / "core.py").write_text("X = 1\n")
+    task_dir = root / "tasks" / "contest-hello-file"
     (task_dir / "tests").mkdir(parents=True)
-    if with_env:
-        (task_dir / "environment").mkdir()
-        (task_dir / "environment" / "Dockerfile").write_text(
-            "FROM python:3.12-slim\n"
-        )
+    if with_test_sh:
+        (task_dir / "tests" / "test.sh").write_text("#!/bin/bash\n")
+    (task_dir / "environment").mkdir()
+    (task_dir / "environment" / "Dockerfile").write_text(
+        "FROM secureintelligent/acp:latest\nWORKDIR /app\n"
+    )
     (task_dir / "instruction.md").write_text("Create hello.txt")
-    (task_dir / "tests" / "test_check.py").write_text("def test_x():\n    pass\n")
     return Task(
-        slug=slug,
-        name=slug,
+        slug="contest-hello-file",
+        name="contest-hello-file",
         path=task_dir,
         timeout_sec=120,
         env={"APP_PORT": "8080"},
@@ -46,161 +65,198 @@ def _task(root, slug="contest-hello-file", with_env=True):
 
 
 class FakeDocker:
-    def __init__(self, exec_rc=0, exec_out="1 passed in 0.01s", build_error=None, has_pytest=True):
-        self.exec_rc = exec_rc
-        self.exec_out = exec_out
+    def __init__(
+        self,
+        reward="1",
+        agent_rc=0,
+        agent_stderr=MARKER,
+        build_error=None,
+        cp_error=None,
+    ):
+        self.reward = reward
+        self.agent_rc = agent_rc
+        self.agent_stderr = agent_stderr
         self.build_error = build_error
-        self.has_pytest = has_pytest
-        self.pip_installs = 0
+        self.cp_error = cp_error
         self.built: list[tuple[str, str]] = []
         self.runs: list[dict] = []
-        self.execs: list[tuple[str, list[str], dict]] = []
+        self.execs: list[tuple[str, list[str], dict, object]] = []
+        self.cps: list[tuple[str, str, str]] = []
         self.stopped: list[str] = []
+        self.logs_host_dir: Path | None = None
 
     def build(self, image, context):
         if self.build_error:
             raise self.build_error
         self.built.append((image, str(context)))
 
-    def run(self, name, image, mounts, env):
-        self.runs.append({"name": name, "image": image, "mounts": mounts, "env": env})
+    def run(self, name, image, mounts, env, network=None):
+        self.runs.append(
+            {
+                "name": name,
+                "image": image,
+                "mounts": list(mounts),
+                "env": env,
+                "network": network,
+            }
+        )
+        for mount in mounts:
+            if mount.target == "/logs/verifier":
+                self.logs_host_dir = Path(mount.host)
         return f"container-{name}"
 
-    def exec(self, name, cmd, env):
-        self.execs.append((name, cmd, env))
-        if "--version" in cmd:
-            if self.has_pytest:
-                return subprocess.CompletedProcess(cmd, 0, stdout="pytest 8.0", stderr="")
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="No module named pytest")
-        if "pip" in cmd and "install" in cmd:
-            self.pip_installs += 1
-            self.has_pytest = True
-            return subprocess.CompletedProcess(cmd, 0, stdout="installed", stderr="")
-        return subprocess.CompletedProcess(cmd, self.exec_rc, stdout=self.exec_out, stderr="")
+    def exec(self, name, cmd, env, timeout=None):
+        self.execs.append((name, list(cmd), dict(env), timeout))
+        if "/agent/dev_run.py" in cmd:
+            return subprocess.CompletedProcess(
+                cmd, self.agent_rc, stdout="answer", stderr=self.agent_stderr
+            )
+        if cmd[-1] == "/tests/test.sh":
+            if self.reward is not None and self.logs_host_dir is not None:
+                (self.logs_host_dir / "reward.txt").write_text(self.reward)
+            return subprocess.CompletedProcess(cmd, 0, stdout="verifier", stderr="")
+        if "pytest" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="1 passed", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def cp_out(self, name, src, dst):
+        if self.cp_error:
+            raise self.cp_error
+        self.cps.append((name, src, str(dst)))
 
     def stop(self, name):
         self.stopped.append(name)
 
 
-def test_container_mode_solved(tmp_path):
-    task = _task(tmp_path)
-    fake = FakeDocker(exec_rc=0)
+def test_container_faithful_solved(tmp_path: Path):
+    fake = FakeDocker(reward="1")
+    task = _repo(tmp_path)
     result = run_engine.run_task(
         task,
         _settings(tmp_path),
         model="m",
         no_docker=False,
-        agent_runner=lambda *a: run_engine.AgentRun("done", 4, 2, 1),
         docker_client=fake,
     )
-
     assert result.ok
     assert result.solved
-    # Image built from the task environment directory.
-    assert fake.built == [("shlepa-task-contest-hello-file:dev",
-                           str(task.environment_dir))]
-    # Workspace mounted rw at /workspace, tests mounted ro at /tests.
+    assert result.tokens_in == 4
+    assert result.tokens_out == 2
+    assert result.tool_calls == 1
+    assert result.final_output == "answer"
+
+    # Two images: the task env image and the dev wrapper on top.
+    env_image = "shlepa-task-contest-hello-file:env"
+    dev_image = "shlepa-task-contest-hello-file:dev"
+    assert fake.built[0] == (env_image, str(task.environment_dir))
+    dev_context = Path(fake.built[1][1])
+    assert fake.built[1][0] == dev_image
+    assert dev_context.joinpath("Dockerfile").read_text().startswith(
+        f"FROM {env_image}\n"
+    )
+    assert (dev_context / "dev_agent" / "shlepa_agent" / "core.py").is_file()
+
+    # Host networking; tests ro + host-mounted verifier logs; no /workspace.
     run = fake.runs[0]
+    assert run["image"] == dev_image
+    assert run["network"] == "host"
     assert run["env"] == {"APP_PORT": "8080"}
-    assert Mount(result.workspace, "/workspace") in run["mounts"]
     assert Mount(task.path / "tests", "/tests", readonly=True) in run["mounts"]
-    # Verifier ran inside the container.
-    verifier = [(n, c, e) for n, c, e in fake.execs if c[3] == "/tests"][0]
-    name, cmd, env = verifier
+    logs_mount = [m for m in run["mounts"] if m.target == "/logs/verifier"]
+    assert logs_mount and not logs_mount[0].readonly
+    assert str(result.workspace) in str(logs_mount[0].host)
+    assert not any(m.target == "/workspace" for m in run["mounts"])
+
+    # Agent exec with the contest env: workdir /app, model, timeout.
+    agent_exec = [e for e in fake.execs if "/agent/dev_run.py" in e[1]][0]
+    name, cmd, env, timeout = agent_exec
     assert name == f"container-{run['name']}"
     assert cmd == [
-        "python", "-m", "pytest", "/tests", "-q", "--tb=short",
-        "-p", "no:cacheprovider",
+        "/app/.venv/bin/python",
+        "/agent/dev_run.py",
+        "Create hello.txt",
     ]
-    assert env["SLEPA_WORKSPACE"] == "/workspace"
-    assert env["SLEPA_TASK_SLUG"] == "contest-hello-file"
-    assert fake.pip_installs == 0  # pytest already present
-    # Container cleaned up.
+    assert env["LOCAL_AGENT_WORKDIR"] == "/app"
+    assert env["LOCAL_AGENT_MODEL"] == "m"
+    assert env["SLEPA_AGENT_TIMEOUT"] == "120"
+    assert "OPENAI_API_KEY" not in env  # not in settings
+    assert timeout == 240
+
+    # Verifier exec + reward read from the host mount.
+    verifier_exec = [e for e in fake.execs if e[1][-1] == "/tests/test.sh"][0]
+    assert verifier_exec[1] == ["bash", "/tests/test.sh"]
+    assert "reward=1" in result.score_detail
+
+    # /app copied back for inspection; container stopped.
+    assert fake.cps[0][0] == f"container-{run['name']}"
+    assert fake.cps[0][1] == "/app"
     assert fake.stopped == [f"container-{run['name']}"]
 
 
-def test_container_mode_unsolved(tmp_path):
-    task = _task(tmp_path)
-    fake = FakeDocker(exec_rc=1, exec_out="1 failed")
+def test_container_faithful_unsolved(tmp_path: Path):
+    fake = FakeDocker(reward="0")
+    task = _repo(tmp_path)
     result = run_engine.run_task(
-        task,
-        _settings(tmp_path),
-        model="m",
-        no_docker=False,
-        agent_runner=lambda *a: run_engine.AgentRun("done", 0, 0, 0),
-        docker_client=fake,
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
     )
     assert result.ok
-    assert not result.solved
+    assert result.solved is False
     assert result.error is None
-    assert "1 failed" in result.score_detail
+    assert "reward=0" in result.score_detail
 
 
-def test_container_mode_installs_pytest_when_missing(tmp_path):
-    task = _task(tmp_path)
-    fake = FakeDocker(exec_rc=0, has_pytest=False)
+def test_container_faithful_agent_crash(tmp_path: Path):
+    fake = FakeDocker(agent_rc=1, agent_stderr="Traceback: boom")
+    task = _repo(tmp_path)
     result = run_engine.run_task(
-        task,
-        _settings(tmp_path),
-        model="m",
-        no_docker=False,
-        agent_runner=lambda *a: run_engine.AgentRun("done", 0, 0, 0),
-        docker_client=fake,
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert result.ok is False
+    assert "exited with code 1" in (result.error or "")
+    assert "boom" in (result.error or "")
+    # Verifier never runs after an agent crash.
+    assert not any(e[1][-1] == "/tests/test.sh" for e in fake.execs)
+
+
+def test_container_faithful_build_error(tmp_path: Path):
+    fake = FakeDocker(build_error=RuntimeError("no docker daemon"))
+    task = _repo(tmp_path)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert result.ok is False
+    assert "no docker daemon" in (result.error or "")
+    assert fake.stopped == []
+
+
+def test_container_faithful_no_test_sh_falls_back_to_pytest(tmp_path: Path):
+    fake = FakeDocker()
+    task = _repo(tmp_path, with_test_sh=False)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
     )
     assert result.ok
-    assert result.solved
-    assert fake.pip_installs == 1
+    assert result.solved  # fake pytest answers rc=0
+    assert not any(e[1][-1] == "/tests/test.sh" for e in fake.execs)
 
 
-def test_container_mode_build_error_stops_container(tmp_path):
-    task = _task(tmp_path)
-    fake = FakeDocker(build_error=RuntimeError("no docker daemon"))
-    result = run_engine.run_task(
-        task,
-        _settings(tmp_path),
-        model="m",
-        no_docker=False,
-        agent_runner=lambda *a: run_engine.AgentRun("done", 0, 0, 0),
-        docker_client=fake,
+def test_container_faithful_agent_env_from_settings(tmp_path: Path):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    settings = _settings(
+        tmp_path,
+        openai_base_url="http://llm.example/v1",
+        openai_api_key="sk-test",
+        shlepa_otel_enabled=True,
+        otel_exporter_otlp_endpoint="http://localhost:4318",
     )
-    assert not result.ok
-    assert "no docker daemon" in (result.error or "")
-    assert fake.stopped == []  # container never started
-
-
-def test_docker_client_builds_expected_commands(monkeypatch):
-    calls: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd[1] == "run":
-            return subprocess.CompletedProcess(cmd, 0, stdout="abc123\n", stderr="")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    client = DockerClient()
-    ws = Path("/tmp/ws")
-    image = "shlepa-task-x:dev"
-    client.build(image, "/tmp/task/environment")
-    assert calls[0] == ["docker", "build", "-t", image, "/tmp/task/environment"]
-    cid = client.run(
-        "shlepa-x-1",
-        image,
-        [Mount(ws, "/workspace"), Mount("/tmp/task/tests", "/tests", readonly=True)],
-        {"K": "V"},
+    run_engine.run_task(
+        task, settings, model=None, no_docker=False, docker_client=fake
     )
-    assert cid == "abc123"
-    assert calls[1] == [
-        "docker", "run", "-d", "--name", "shlepa-x-1",
-        "-v", "/tmp/ws:/workspace",
-        "-v", "/tmp/task/tests:/tests:ro",
-        "-e", "K=V",
-        image, "sleep", "infinity",
-    ]
-    client.exec("shlepa-x-1", ["python", "-m", "pytest", "/tests"], {"A": "B"})
-    assert calls[2] == [
-        "docker", "exec", "-e", "A=B", "shlepa-x-1",
-        "python", "-m", "pytest", "/tests",
-    ]
-    client.stop("shlepa-x-1")
-    assert calls[3] == ["docker", "stop", "-t", "10", "shlepa-x-1"]
+    agent_exec = [e for e in fake.execs if "/agent/dev_run.py" in e[1]][0]
+    env = agent_exec[2]
+    assert env["OPENAI_API_KEY"] == "sk-test"
+    assert env["OPENAI_BASE_URL"] == "http://llm.example/v1"
+    assert env["LOCAL_AGENT_MODEL"] == "test-model"
+    assert env["SLEPA_OTEL_ENABLED"] == "1"
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://localhost:4318"
