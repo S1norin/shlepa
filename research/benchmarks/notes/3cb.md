@@ -1,9 +1,11 @@
 # 3CB — Catastrophic Cyber Capabilities Benchmark
 
 - **Category:** offensive-capability (capability/risk assessment)
-- **Source:** arXiv 2410.09114, 2024 (Meta AI)
-- **Paper:** https://arxiv.org/abs/2410.09114 (PDF: `papers/3cb.pdf`)
-- **Code:** https://github.com/facebookresearch/3cb
+- **Source:** arXiv 2410.09114, 2024
+- **Paper:** https://arxiv.org/abs/2410.09114 (PDF: `papers/3cb.pdf` — 2-page
+  announcement; full details in the repo)
+- **Code:** https://github.com/apartresearch/3cb · packaged in UK AISI
+  Inspect evals: https://ukgovernmentbeis.github.io/inspect_evals/evals/threecb/index.html
 - **Reviewed:** 2026-08-27
 
 ## What it tests
@@ -17,12 +19,13 @@ offensive capability.
 ## Environment
 Curated **sandboxed/contained attack environments** per task (Docker-based
 targets); offline-runnable; designed for model-provider and government use
-in capability evaluations.
+in capability evaluations. 15 challenges **aligned to MITRE ATT&CK** with
+80 elicitation configurations to find the best-performing setup per model
+(robust evaluation against prompt sensitivity).
 
 ## Tasks
 Offense pipeline tasks: reconnaissance, exploitation against contained
-targets; spans binary and web domains. Exact per-task inventory lives in
-the repo (2-page arXiv announcement; see repo for task list).
+targets; spans binary and web domains.
 
 ## Scoring
 Deterministic per-task success (target state checks); aggregates into an
