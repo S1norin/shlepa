@@ -1,5 +1,7 @@
 """Run engine tests: MLflow run logging (file:// store)."""
 
+from pathlib import Path
+
 import pytest
 
 from mlflow import MlflowClient
@@ -107,3 +109,230 @@ def test_log_task_logs_error_param(tmp_path):
     run = client.get_run(run_id)
     assert run.data.params["error"] == "boom"
     assert run.data.metrics["solved"] == 0.0
+
+
+def test_log_task_batch_id_tag(tmp_path):
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        settings,
+        "all",
+        "m",
+        _result(tmp_path),
+        batch_id="20260827-233000-abcdef",
+    )
+
+    run = client.get_run(run_id)
+    assert run.data.tags["batch_id"] == "20260827-233000-abcdef"
+
+
+def test_log_task_without_batch_id_has_no_batch_tag(tmp_path):
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "all", "m", _result(tmp_path)
+    )
+
+    run = client.get_run(run_id)
+    assert "batch_id" not in run.data.tags
+    assert "mlflow_trace_id" not in run.data.tags
+
+
+# --- Trace lookup (batch -> mlflow_trace_id tag) ---------------------------
+
+
+class _FakeSpan:
+    def __init__(self, name, attributes):
+        self.name = name
+        self.attributes = attributes
+
+
+class _FakeTraceData:
+    def __init__(self, spans):
+        self.spans = spans
+
+
+class _FakeTraceInfo:
+    def __init__(self, trace_id, tags, request_time_ms):
+        self.trace_id = trace_id
+        self.tags = tags
+        self.request_time = request_time_ms
+
+
+class _FakeTrace:
+    def __init__(self, trace_id, tags, request_time_ms, spans):
+        self.info = _FakeTraceInfo(trace_id, tags, request_time_ms)
+        self.data = _FakeTraceData(spans)
+
+
+class _FakePagedList:
+    def __init__(self, items):
+        self.items = items
+
+
+AGENT_TAG = {"service.name": "shlepa-agent"}
+
+
+def _agent_trace(trace_id, batch_id, task, request_time_ms=2000):
+    return _FakeTrace(
+        trace_id,
+        dict(AGENT_TAG),
+        request_time_ms,
+        [
+            _FakeSpan("agent.run", {"task": task, "shlepa.batch_id": batch_id}),
+            _FakeSpan("chat", {"openinference.span.kind": "LLM"}),
+        ],
+    )
+
+
+class _FakeTraceClient:
+    def __init__(self, traces):
+        self.traces = traces
+        self.tags = {}
+        self.errors = []
+
+    def get_experiment_by_name(self, name):
+        if name == "shlepa-traces":
+            return type("Exp", (), {"experiment_id": "42"})()
+        return None
+
+    def search_traces(self, experiment_ids=None, max_results=None, **kwargs):
+        return _FakePagedList(self.traces)
+
+    def get_trace(self, trace_id, display=True, flush=False):
+        return next(t for t in self.traces if t.info.trace_id == trace_id)
+
+    def set_tag(self, run_id, key, value, synchronous=None):
+        self.tags[(run_id, key)] = value
+
+
+def _otel_settings(tmp_path, experiment="21"):
+    base = _settings(tmp_path)
+    return Settings(
+        **{
+            **base.__dict__,
+            "shlepa_otel_enabled": True,
+            "mlflow_telemetry_experiment_id": experiment,
+        }
+    )
+
+
+def test_find_batch_trace_matches_span_attribute():
+    client = _FakeTraceClient(
+        [
+            _agent_trace("tr-other", "batch-1", "other-task"),
+            _agent_trace("tr-match", "batch-2", "contest-hello-file"),
+        ]
+    )
+    trace_id = run_engine.find_batch_trace(
+        client, _otel_settings(Path(".")), "batch-2", "contest-hello-file"
+    )
+    assert trace_id == "tr-match"
+
+
+def test_find_batch_trace_requires_task_match():
+    client = _FakeTraceClient(
+        [_agent_trace("tr-x", "batch-2", "other-task")]
+    )
+    assert run_engine.find_batch_trace(
+        client, _otel_settings(Path(".")), "batch-2", "contest-hello-file"
+    ) is None
+
+
+def test_find_batch_trace_tag_level_match_skips_fetch():
+    trace = _FakeTrace(
+        "tr-tagged",
+        {
+            "service.name": "shlepa-agent",
+            "shlepa.batch_id": "batch-3",
+        },
+        2000,
+        [],  # spans never inspected on the tag path
+    )
+    client = _FakeTraceClient([trace])
+
+    def boom(trace_id, display=True, flush=False):
+        raise AssertionError("get_trace should not be called")
+
+    client.get_trace = boom
+    assert run_engine.find_batch_trace(
+        client, _otel_settings(Path(".")), "batch-3", "any-task"
+    ) == "tr-tagged"
+
+
+def test_find_batch_trace_ignores_other_services_and_old_traces():
+    traces = [
+        _FakeTrace("tr-old", dict(AGENT_TAG), 1000,
+                   [_FakeSpan("agent.run", {"task": "t", "shlepa.batch_id": "b"})]),
+        _FakeTrace("tr-other-svc",
+                   {"service.name": "shlepa-doctor"}, 2000,
+                   [_FakeSpan("agent.run", {"task": "t", "shlepa.batch_id": "b"})]),
+    ]
+    client = _FakeTraceClient(traces)
+    assert run_engine.find_batch_trace(
+        client, _otel_settings(Path(".")), "b", "t", since_ms=1500
+    ) is None
+
+
+class _Run:
+    class info:
+        run_id = "run-1"
+
+
+def _install_run_logging(client):
+    """Give the fake client the run-logging surface of log_task_to_mlflow."""
+    client.create_experiment = lambda name: "42"
+    client.create_run = lambda experiment_id, run_name, tags: _Run()
+    client.log_metric = lambda *a, **k: None
+    client.log_param = lambda *a, **k: None
+    client.log_artifact = lambda *a, **k: None
+    client.set_terminated = lambda *a, **k: None
+
+
+def test_log_task_records_trace_tag(tmp_path):
+    client = _FakeTraceClient(
+        [_agent_trace("tr-match", "batch-2", "contest-hello-file")]
+    )
+    _install_run_logging(client)
+    created_tags = {}
+
+    def create_run(experiment_id, run_name, tags):
+        created_tags.update(tags)
+        return _Run()
+
+    client.create_run = create_run
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        _otel_settings(tmp_path),
+        "all",
+        "m",
+        _result(tmp_path),
+        batch_id="batch-2",
+    )
+    assert client.tags.get((run_id, "mlflow_trace_id")) == "tr-match"
+    assert created_tags.get("batch_id") == "batch-2"
+
+
+def test_log_task_missing_trace_warns_and_still_logs(tmp_path, capsys):
+    client = _FakeTraceClient([])
+    _install_run_logging(client)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        _otel_settings(tmp_path),
+        "all",
+        "m",
+        _result(tmp_path),
+        batch_id="batch-2",
+        trace_wait_sec=0,
+    )
+    assert run_id == "run-1"
+    assert "mlflow_trace_id" not in [k for (_r, k) in client.tags]
+    out = capsys.readouterr().out
+    assert "trace" in out.lower()

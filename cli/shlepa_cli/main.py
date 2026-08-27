@@ -84,10 +84,11 @@ def run(
 
     model = preset_obj.model or settings.local_agent_model
     no_docker = os.environ.get("SLEPA_NO_DOCKER") == "1"
+    batch_id = run_engine.make_batch_id()
     typer.echo(
         f"preset: {preset_obj.name} | model: {model or '(env)'} | "
         f"mode: {'no-docker' if no_docker else 'container'} | "
-        f"tasks: {len(resolved)}"
+        f"batch: {batch_id} | tasks: {len(resolved)}"
     )
     mlflow_client = None
     if settings.mlflow_tracking_uri:
@@ -104,6 +105,7 @@ def run(
         model=model,
         no_docker=no_docker,
         mlflow_client=mlflow_client,
+        batch_id=batch_id,
     )
     typer.echo("")
     typer.echo(run_engine.format_summary(results))

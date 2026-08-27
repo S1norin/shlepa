@@ -6,13 +6,35 @@ wrapper), the verifier is tests/test.sh writing the host-mounted
 telemetry reaches the local OTLP collector.
 """
 
+import re
 import subprocess
 from pathlib import Path
+
+import shlepa_agent
 
 from shlepa_cli import run_engine
 from shlepa_cli.config import Settings
 from shlepa_cli.docker_client import Mount
-from shlepa_cli.tasks import Task
+from shlepa_cli.tasks import Preset, Task
+
+BATCH_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{6}$")
+
+
+BATCH_ENV_KEYS = (
+    "SLEPA_BATCH_ID",
+    "SLEPA_PRESET",
+    "SLEPA_GIT_SHA",
+    "SLEPA_AGENT_VERSION",
+)
+
+
+def _agent_exec_env(fake):
+    """Env dict of the in-container agent exec (dev_run.py)."""
+    for _name, cmd, env, _timeout in fake.execs:
+        if "/agent/dev_run.py" in cmd:
+            return env
+    raise AssertionError("agent exec not captured")
+
 
 MARKER = (
     'SLEPA_AGENT_METRICS_JSON='
@@ -41,16 +63,16 @@ def _settings(root, **overrides):
 
 
 def _repo(root: Path, with_test_sh=True):
-    (root / "agent" / "shlepa_agent").mkdir(parents=True)
+    (root / "agent" / "shlepa_agent").mkdir(parents=True, exist_ok=True)
     (root / "agent" / "shlepa_agent" / "__init__.py").write_text(
         "__version__ = '0.1.0'\n"
     )
     (root / "agent" / "shlepa_agent" / "core.py").write_text("X = 1\n")
     task_dir = root / "tasks" / "contest-hello-file"
-    (task_dir / "tests").mkdir(parents=True)
+    (task_dir / "tests").mkdir(parents=True, exist_ok=True)
     if with_test_sh:
         (task_dir / "tests" / "test.sh").write_text("#!/bin/bash\n")
-    (task_dir / "environment").mkdir()
+    (task_dir / "environment").mkdir(parents=True, exist_ok=True)
     (task_dir / "environment" / "Dockerfile").write_text(
         "FROM secureintelligent/acp:latest\nWORKDIR /app\n"
     )
@@ -238,6 +260,68 @@ def test_container_faithful_no_test_sh_falls_back_to_pytest(tmp_path: Path):
     assert result.ok
     assert result.solved  # fake pytest answers rc=0
     assert not any(e[1][-1] == "/tests/test.sh" for e in fake.execs)
+
+
+def test_run_preset_batch_env_when_otel_enabled(tmp_path: Path):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    settings = _settings(
+        tmp_path,
+        shlepa_otel_enabled=True,
+        otel_exporter_otlp_endpoint="http://localhost:4318",
+    )
+    run_engine.run_preset(
+        settings,
+        Preset(name="all", tasks="all"),
+        [task],
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+        batch_id="20260827-233000-abcdef",
+    )
+    env = _agent_exec_env(fake)
+    assert env["SLEPA_BATCH_ID"] == "20260827-233000-abcdef"
+    assert env["SLEPA_PRESET"] == "all"
+    assert env["SLEPA_AGENT_VERSION"] == shlepa_agent.__version__
+    # The tmp repo is not a git checkout; the engine reports 'unknown'.
+    assert env["SLEPA_GIT_SHA"] == "unknown"
+
+
+def test_run_preset_no_batch_env_when_otel_disabled(tmp_path: Path):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    run_engine.run_preset(
+        _settings(tmp_path),
+        Preset(name="all", tasks="all"),
+        [task],
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+    )
+    env = _agent_exec_env(fake)
+    for key in BATCH_ENV_KEYS:
+        assert key not in env
+
+
+def test_run_preset_generates_batch_id_per_invocation(tmp_path: Path):
+    settings = _settings(tmp_path, shlepa_otel_enabled=True)
+    preset = Preset(name="all", tasks="all")
+    ids = []
+    for _ in range(2):
+        fake = FakeDocker()
+        task = _repo(tmp_path)
+        run_engine.run_preset(
+            settings,
+            preset,
+            [task],
+            model="m",
+            no_docker=False,
+            docker_client=fake,
+        )
+        ids.append(_agent_exec_env(fake)["SLEPA_BATCH_ID"])
+    assert len(set(ids)) == 2
+    for batch_id in ids:
+        assert BATCH_ID_RE.match(batch_id)
 
 
 def test_container_faithful_agent_env_from_settings(tmp_path: Path):
