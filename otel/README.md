@@ -1,10 +1,17 @@
-# otel/ — local telemetry stack (collector + Jaeger)
+# otel/ — local telemetry stack (collector + Jaeger + MLflow)
 
-Local OpenTelemetry pipeline for `shlepa-agent` traces:
+Local OpenTelemetry pipeline for `shlepa-agent` traces. The collector
+**dual-exports** every trace:
 
 ```
-agent (OTLP) --> otelcol (localhost:4318 http / 4317 grpc) --> Jaeger (UI :16686)
+agent (OTLP) --> otelcol (localhost:4318 http / 4317 grpc)
+                   |---> Jaeger (UI :16686, local debugging, volume-backed)
+                   +----> remote MLflow server (durable backend, OTLP/HTTP)
 ```
+
+The MLflow exporter is stateless transport only — credentials and the
+destination experiment live in `otel/.env` (gitignored; see
+`otel/.env.example`), never in the agent.
 
 ## Usage
 
@@ -24,6 +31,24 @@ docker logs -f otelcol                               # watch received spans
 All ports are bound to localhost only. Jaeger stores traces in the
 `jaeger-traces` Docker volume, so they survive restarts.
 
+## MLflow export configuration (`otel/.env`)
+
+```bash
+cp otel/.env.example otel/.env   # then fill in real values
+```
+
+- `MLFLOW_BASIC_B64` — base64 of `<user>:<password>`
+  (`printf '%s:%s' "$USER" "$PASS" | base64 -w0`); sent as
+  `Authorization: Basic ...` on every export.
+- `MLFLOW_TELEMETRY_EXPERIMENT_ID` — numeric id of the trace experiment
+  (the collector can only reference it by id; the agent's traces land in
+  the `shlepa-traces` experiment on the remote server).
+
+The exporter targets `https://mlflow.sinorin.ru` and appends the OTLP
+signal path `/v1/traces` itself (MLflow 3.6+ OTLP ingestion; the server
+runs 3.15.x). Compression: gzip. After changing `otel/.env`, restart the
+collector (`docker compose -f otel/docker-compose.yml restart otelcol`).
+
 ## Send a test span
 
 One-liner from the repo root (uses the agent's own telemetry module, so it
@@ -35,10 +60,11 @@ SLEPA_OTEL_ENABLED=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 ```
 
 Then open <http://localhost:16686> → select service `shlepa-agent`, span
-`shlepa.smoke.test`; or query the API:
+`shlepa.smoke.test`; or query the API (Jaeger 2.x needs a time window —
+a bare query may return an empty result for fresh traces):
 
 ```bash
-curl -s 'http://localhost:16686/api/traces?service=shlepa-agent&limit=1' | head -c 400
+curl -s 'http://localhost:16686/api/traces?service=shlepa-agent&limit=1&lookback=24h' | head -c 400
 ```
 
 A real agent run produces the same flow automatically: with
@@ -75,15 +101,20 @@ attributes: model name, token usage, prompt/completion content, tool calls
 created by `shlepa run` get a `trace_ref` tag pointing at this Jaeger when
 `SLEPA_OTEL_ENABLED=1`.
 
-## Remote MLflow cutover (future)
+## Remote MLflow backend (live)
 
-The remote MLflow server (3.15.1) currently has **no OTLP endpoint**
-(verified). When/where it gains one, the cutover is a single `.env` line:
+The remote MLflow server (3.15.x) accepts OTLP/HTTP ingestion at
+`POST /v1/traces` (basic auth + `x-mlflow-experiment-id` header). The local
+collector forwards every trace there, so the remote server is the durable
+backend: MLflow runs (from `shlepa run`) live next to the agent traces in
+the same server, correlated by the `batch_id` run tag and the
+`shlepa.batch_id` trace tag (see the run engine).
 
-```
-OTEL_EXPORTER_OTLP_ENDPOINT=https://mlflow.sinorin.ru/<otlp-path>
-```
+Verified facts (2026-08):
+- `GET https://mlflow.sinorin.ru/version` → 3.15.1
+- `POST /v1/traces` without auth → 401; with basic auth +
+  `x-mlflow-experiment-id` → 200, trace visible via `mlflow.search_traces`
+- the OTLP/gRPC path is **not** served (404); use OTLP/HTTP
 
-No code changes: the agent telemetry module already reads
-`OTEL_EXPORTER_OTLP_ENDPOINT`. The mapping of OTel spans onto MLflow trace
-entities (MLflow 3 "GenAI tracing" model) is to be designed at cutover time.
+Retention: no archival policy is configured; archived span payloads keep
+tag filtering but lose full-text search.
