@@ -13,6 +13,9 @@ Local dev runs of vendored contest tasks via `shlepa run`.
 | contest-fix-sqli-search | SecureIntelligent/UniversalAgenticCompetitionPublic | 2026-08-26 | medium | Find and fix a SQL injection vulnerability in a FastAPI application. |
 | contest-incident-log-forensics | SecureIntelligent/UniversalAgenticCompetitionPublic | 2026-08-26 | medium | Correlate proxy, application, and auth logs to attribute an exfiltration incident. |
 | contest-insecure-api-app | SecureIntelligent/UniversalAgenticCompetitionPublic | 2026-08-26 | n/a | FastAPI app source with variant patches (no `task.toml` upstream — not discoverable/runnable). |
+| bench-seccodebench-cwe89 | alibaba/sec-code-bench (v2.2.0) | 2026-08-27 | medium | Fix the SQL injection (CWE-89) in the user_activity_logger module (psycopg2, mocked DB). |
+| bench-seccodebench-cwe78 | alibaba/sec-code-bench (v2.2.0) | 2026-08-27 | medium | Fix the OS command injection (CWE-78) in the ssh_login_history module (subprocess, shell=True). |
+| bench-seccodebench-cwe1336 | alibaba/sec-code-bench (v2.2.0) | 2026-08-27 | medium | Fix the server-side template injection (CWE-1336) in the profile_renderer module (Jinja2). |
 
 Descriptions are taken from the `[task] description` field of each upstream `task.toml`.
 
