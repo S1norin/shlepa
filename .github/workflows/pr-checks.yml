@@ -9,6 +9,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Informational: makes red runs self-diagnosing (secret presence,
+      # endpoint reachability) without exposing secret values.
+      - name: CI config diagnostics
+        continue-on-error: true
+        env:
+          CI_OPENAI_BASE_URL: ${{ secrets.CI_OPENAI_BASE_URL }}
+          CI_OPENAI_API_KEY: ${{ secrets.CI_OPENAI_API_KEY }}
+          CI_MODEL: ${{ secrets.CI_MODEL }}
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: |
+          for name in CI_OPENAI_BASE_URL CI_OPENAI_API_KEY CI_MODEL \
+                      MLFLOW_TRACKING_URI MLFLOW_TRACKING_USERNAME \
+                      MLFLOW_TRACKING_PASSWORD; do
+            if [ -n "${!name:-}" ]; then
+              echo "$name: set"
+            else
+              echo "$name: EMPTY"
+            fi
+          done
+          echo "CI_MODEL: ${CI_MODEL:-<unset>}"
+          if [ -n "${CI_OPENAI_BASE_URL:-}" ]; then
+            echo "GET ${CI_OPENAI_BASE_URL}/models"
+            curl -sS -m 15 -o /tmp/ci_models.json \
+              -w "  -> HTTP %{http_code} (time %{time_total}s)\n" \
+              -H "Authorization: Bearer ${CI_OPENAI_API_KEY:-}" \
+              "${CI_OPENAI_BASE_URL}/models" || echo "  -> curl failed (unreachable?)"
+            head -c 400 /tmp/ci_models.json 2>/dev/null; echo
+          fi
+
       # uv is installed via the official curl script in a run step (instead of
       # the setup-uv JS action) so the workflow also runs under local `act`,
       # whose JS actions execute on node:16 and cannot load setup-uv@v5.
