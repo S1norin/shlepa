@@ -1,5 +1,6 @@
 """Tests for the submission zip builder (shlepa zip)."""
 
+import ast
 import os
 import stat
 import zipfile
@@ -90,3 +91,82 @@ def test_git_checkout_name_uses_short_sha(
     monkeypatch.setattr(zip_build, "_git_short_sha", lambda root: "abc1234")
     out = build_submission_zip(tmp_path)
     assert out.name == "submission-abc1234.zip"
+
+
+# --- Telemetry backstop (danger zone: the submission must stay telemetry-free)
+
+
+FORBIDDEN_IMPORT_ROOTS = {"opentelemetry", "openinference", "mlflow"}
+
+
+def _forbidden_imports(source: str) -> list[str]:
+    """AST-scan a .py source for top-level import roots in FORBIDDEN_IMPORT_ROOTS.
+
+    Catches plain, aliased, dotted, relative-guarded and nested imports —
+    everything an import statement can hide. Relative imports (module is
+    None) are never forbidden roots.
+    """
+    tree = ast.parse(source)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 0 or node.module is None:
+                continue  # relative import within the package
+            roots = [node.module.split(".")[0]]
+        else:
+            continue
+        found.extend(root for root in roots if root in FORBIDDEN_IMPORT_ROOTS)
+    return found
+
+
+def test_scan_catches_plain_and_aliased_imports() -> None:
+    assert _forbidden_imports(
+        "import opentelemetry.trace\n" + "from openinference.semconv import X\n"
+    )
+    assert _forbidden_imports("import mlflow as m\n")
+    assert _forbidden_imports("if True:\n    from mlflow import log_param\n")
+    assert not _forbidden_imports("import pydantic_ai\nX = 1\n")
+    assert not _forbidden_imports("from . import core\n")
+
+
+def test_zip_has_no_telemetry_paths_and_no_forbidden_imports(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    _make_agent_tree(agent_dir)
+    out = build_submission_zip(tmp_path)
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        assert not any("telemetry" in name for name in names)
+        for name in names:
+            if name.endswith(".py"):
+                source = zf.read(name).decode("utf-8")
+                assert not _forbidden_imports(source), name
+
+
+def test_zip_backstop_fails_on_telemetry_import_in_shipped_file(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    _make_agent_tree(agent_dir)
+    (agent_dir / "shlepa_agent" / "core.py").write_text(
+        "import opentelemetry.trace  # sneaky\n"
+    )
+    out = build_submission_zip(tmp_path)
+    with zipfile.ZipFile(out) as zf:
+        source = zf.read("shlepa_agent/core.py").decode("utf-8")
+    assert _forbidden_imports(source)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_real_agent_submission_is_telemetry_free() -> None:
+    """Build the zip from the real agent/ tree (the actual submission)."""
+    out = build_submission_zip(REPO_ROOT)
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        assert names  # sanity: the builder produced something
+        assert not any("telemetry" in name for name in names)
+        for name in names:
+            if name.endswith(".py"):
+                source = zf.read(name).decode("utf-8")
+                assert not _forbidden_imports(source), name
