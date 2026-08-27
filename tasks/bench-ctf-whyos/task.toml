@@ -1,0 +1,37 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/ctf-whyos"
+description = "Recover a hex flag planted in a 23 MB iOS console log (CSAW 2018 Quals forensics)."
+authors = []
+keywords = ["ctf", "forensics", "log-analysis"]
+
+[metadata]
+difficulty = "hard"
+category = "forensics"
+tags = ["bench", "ctf", "forensics", "log-analysis", "offline"]
+source = "NYU-LLM-CTF/CTFTiny"
+url = "https://github.com/NYU-LLM-CTF/CTFTiny/tree/main/ctftiny/for/whyOS"
+reference = "https://github.com/osirislab/CSAW-CTF-2018-Quals/tree/master/forensics/whyOS"
+synced_at = "2026-08-28"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
