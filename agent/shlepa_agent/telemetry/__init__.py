@@ -26,19 +26,36 @@ def is_enabled() -> bool:
     return os.environ.get("SLEPA_OTEL_ENABLED") == "1"
 
 
+# Root-span attributes stamped from environment, in (env var, attribute
+# name) pairs. The dev run engine sets these so traces can be grouped per
+# batch/preset and correlated with MLflow runs. Unset variables are simply
+# omitted (no empty attributes).
+_ENV_ATTRIBUTES: tuple[tuple[str, str], ...] = (
+    ("SLEPA_BATCH_ID", "shlepa.batch_id"),
+    ("SLEPA_PRESET", "shlepa.preset"),
+    ("SLEPA_GIT_SHA", "git.commit"),
+    ("SLEPA_AGENT_VERSION", "shlepa.agent_version"),
+)
+
+
 @contextmanager
 def root_span(provider: TracerProvider, task: str | None = None):
     """Context manager for the per-run 'agent.run' root span.
 
     Carries the task slug (``task`` argument or the SLEPA_TASK_SLUG
-    environment variable, falling back to 'dev-run') so Jaeger traces
-    can be grouped per task. Used by both agent entrypoints (the
-    submission ``__main__`` and the in-container dev entrypoint).
+    environment variable, falling back to 'dev-run') so traces can be
+    grouped per task, plus shlepa.* identity attributes from the
+    environment (see _ENV_ATTRIBUTES). Used by both agent entrypoints
+    (the submission ``__main__`` and the in-container dev entrypoint).
     """
     task_name = task or os.environ.get("SLEPA_TASK_SLUG") or "dev-run"
     tracer = provider.get_tracer("shlepa-agent")
     with tracer.start_as_current_span("agent.run") as span:
         span.set_attribute("task", task_name)
+        for env_var, attr in _ENV_ATTRIBUTES:
+            value = os.environ.get(env_var)
+            if value:
+                span.set_attribute(attr, value)
         yield span
 
 

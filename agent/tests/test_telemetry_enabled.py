@@ -70,6 +70,49 @@ def test_root_span_carries_task_attribute(monkeypatch, stub_openai, tmp_path):
     assert roots[0].attributes.get("task") == "contest-hello-file"
 
 
+def test_root_span_carries_shlepa_env_attributes(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        monkeypatch.setenv("SLEPA_BATCH_ID", "20260827T220000Z-abc123")
+        monkeypatch.setenv("SLEPA_PRESET", "all")
+        monkeypatch.setenv("SLEPA_GIT_SHA", "c75e065")
+        monkeypatch.setenv("SLEPA_AGENT_VERSION", "0.3.0")
+        with telemetry.root_span(provider, task="contest-hello-file"):
+            pass
+    finally:
+        provider.shutdown()
+
+    roots = [s for s in exporter.get_finished_spans() if s.name == "agent.run"]
+    assert roots, "no agent.run root span"
+    attrs = roots[0].attributes
+    assert attrs.get("task") == "contest-hello-file"
+    assert attrs.get("shlepa.batch_id") == "20260827T220000Z-abc123"
+    assert attrs.get("shlepa.preset") == "all"
+    assert attrs.get("git.commit") == "c75e065"
+    assert attrs.get("shlepa.agent_version") == "0.3.0"
+
+
+def test_root_span_omits_unset_env_attributes(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        for var in ("SLEPA_BATCH_ID", "SLEPA_PRESET", "SLEPA_GIT_SHA", "SLEPA_AGENT_VERSION"):
+            monkeypatch.delenv(var, raising=False)
+        with telemetry.root_span(provider, task="contest-hello-file"):
+            pass
+    finally:
+        provider.shutdown()
+
+    roots = [s for s in exporter.get_finished_spans() if s.name == "agent.run"]
+    assert roots, "no agent.run root span"
+    attrs = roots[0].attributes
+    assert "shlepa.batch_id" not in attrs
+    assert "shlepa.preset" not in attrs
+    assert "git.commit" not in attrs
+    assert "shlepa.agent_version" not in attrs
+
+
 def test_is_enabled(monkeypatch):
     monkeypatch.setenv("SLEPA_OTEL_ENABLED", "1")
     assert telemetry.is_enabled()
