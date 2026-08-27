@@ -2,7 +2,7 @@
 
 - **Category:** ctf (professional-level, capability + risk)
 - **Source:** NVIDIA Research (ai-ix), arXiv 2408.08926, 2024
-- **Paper:** https://arxiv.org/abs/2408.08926
+- **Paper:** https://arxiv.org/abs/2408.08926 (PDF: `papers/cybench.pdf`)
 - **Site:** https://cybench.github.io/ (leaderboard, task specs)
 - **Reviewed:** 2026-08-27
 
