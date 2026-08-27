@@ -88,6 +88,10 @@ def test_smoke_doctor_failure_stops(tmp_path: Path):
     )
     assert not ok
     assert reports[0].startswith("doctor: FAIL")
+    # each failed check gets a detail line (CI logs otherwise say nothing)
+    detail_lines = [r for r in reports if r.startswith("  - ")]
+    assert len(detail_lines) == 4
+    assert all("detail" in r for r in detail_lines)
     assert not any(r.startswith("task:") for r in reports)
     assert not any(r.startswith("mlflow:") for r in reports)
 

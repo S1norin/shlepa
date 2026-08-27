@@ -69,6 +69,9 @@ def run_smoke(
     failed = [c.name for c in doctor_results if not c.ok]
     if failed:
         out(f"doctor: FAIL ({', '.join(failed)})")
+        for c in doctor_results:
+            if not c.ok:
+                out(f"  - {c.name}: {c.detail}")
         return False
     out("doctor: ok")
 
