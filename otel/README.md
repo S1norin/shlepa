@@ -82,11 +82,24 @@ uv run --project cli --no-sync python otel/check_trace.py
 # OK: trace <trace-id> (2 spans, LLM span with token usage, task attribute present)
 ```
 
-Exit code 0 = a valid trace is present, 1 = Jaeger unreachable, no traces,
-or the trace lacks the expected spans/attributes. Options: `--jaeger`,
-`--service` (default `shlepa-agent`), `--timeout`. The script picks the most
-recently finished trace of the service, so a fresh run is checked, not an
-older one.
+Exit code 0 = a valid trace is present, 1 = the backend is unreachable, no
+traces, or the trace lacks the expected spans/attributes. Options:
+`--backend jaeger|mlflow` (default `jaeger`), `--jaeger`, `--service`
+(default `shlepa-agent`), `--timeout`. The script picks the most recent trace
+of the service, so a fresh run is checked, not an older one.
+
+MLflow backend (durable export via the collector):
+
+```bash
+source .env  # MLFLOW_TRACKING_URI / USERNAME / PASSWORD
+uv run --project cli --no-sync python otel/check_trace.py --backend mlflow
+# OK: trace tr-... (N spans, LLM span with token usage, task attribute present)
+```
+
+Reads the experiment from `SLEPA_TRACE_EXPERIMENT` (default `shlepa-traces`) —
+only traces tagged `service.name=shlepa-agent` are considered. Note: the
+collector exports to the remote server asynchronously, so give it a few
+seconds after the run finishes.
 
 The `task` attribute comes from the agent's `agent.run` root span, which
 reads `SLEPA_TASK_SLUG` (set by the dev run engine); ad-hoc runs without a

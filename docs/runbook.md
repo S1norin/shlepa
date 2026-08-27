@@ -61,7 +61,7 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | `run --dry-run [preset]` | Print resolved tasks + model, execute nothing | `shlepa run --dry-run all` |
 | `smoke` | Doctor + one real task + MLflow visibility check; exit 0/1 | `shlepa smoke` |
 | `smoke --ci` | Same, but the secondary CI endpoint and the `shlepa-ci` experiment | `shlepa smoke --ci` |
-| `doctor` | Hard checks: endpoint, model name, MLflow, docker | `shlepa doctor` |
+| `doctor` | Hard checks: endpoint, model name, MLflow, MLflow OTLP ingestion (when `SLEPA_OTEL_ENABLED=1`), docker | `shlepa doctor` |
 | `doctor --probe` | Additionally one chat completion, prints the self-reported model | `shlepa doctor --probe` |
 | `zip` | Build `dist/submission-<sha>.zip` (<= 10 MB, no telemetry) | `shlepa zip` |
 | `zip --register` | Also register the submission as a new version of the `shlepa` MLflow model | `shlepa zip --register` |

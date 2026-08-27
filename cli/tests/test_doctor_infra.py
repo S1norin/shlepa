@@ -99,3 +99,108 @@ def test_docker_daemon_down(monkeypatch):
     result = doctor.check_docker(_settings())
     assert not result.ok
     assert "daemon" in result.detail
+
+
+# --- MLflow OTLP probe -----------------------------------------------------
+
+
+def _raise():
+    raise AssertionError("no HTTP call expected")
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, text: str = ""):
+        self.status_code = status_code
+        self.text = text
+
+
+def _otel_settings(**overrides):
+    base = dict(
+        mlflow_tracking_uri="https://ml.example",
+        mlflow_tracking_username="user",
+        mlflow_tracking_password="secret-pass",
+        shlepa_otel_enabled=True,
+        mlflow_telemetry_experiment_id="21",
+    )
+    base.update(overrides)
+    return _settings(**base)
+
+
+def test_otlp_probe_skipped_when_otel_disabled(monkeypatch):
+    monkeypatch.setattr(doctor.httpx, "get", _raise)
+    monkeypatch.setattr(doctor.httpx, "post", _raise)
+    result = doctor.check_mlflow_otlp(_settings())
+    assert result.ok
+    assert "skipped" in result.detail
+
+
+def test_otlp_probe_missing_uri(monkeypatch):
+    result = doctor.check_mlflow_otlp(_settings(shlepa_otel_enabled=True))
+    assert not result.ok
+    assert "MLFLOW_TRACKING_URI" in result.detail
+
+
+def test_otlp_probe_ok(monkeypatch):
+    calls = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        calls["get"] = (url, headers)
+        return _FakeResponse(200, "3.15.1")
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls["post"] = (url, headers, json)
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(doctor.httpx, "get", fake_get)
+    monkeypatch.setattr(doctor.httpx, "post", fake_post)
+    result = doctor.check_mlflow_otlp(_otel_settings())
+    assert result.ok, result.detail
+    assert "3.15.1" in result.detail
+    get_url, get_headers = calls["get"]
+    assert get_url == "https://ml.example/version"
+    assert get_headers.get("Authorization", "").startswith("Basic ")
+    post_url, post_headers, payload = calls["post"]
+    assert post_url == "https://ml.example/v1/traces"
+    assert post_headers.get("x-mlflow-experiment-id") == "21"
+    blob = str(get_headers) + str(post_headers) + result.detail
+    assert "secret-pass" not in blob
+    assert payload["resourceSpans"]
+
+
+def test_otlp_probe_version_401(monkeypatch):
+    monkeypatch.setattr(doctor.httpx, "get", lambda *a, **k: _FakeResponse(401))
+    monkeypatch.setattr(doctor.httpx, "post", _raise)
+    result = doctor.check_mlflow_otlp(_otel_settings())
+    assert not result.ok
+    assert "401" in result.detail
+
+
+def test_otlp_probe_post_401(monkeypatch):
+    monkeypatch.setattr(doctor.httpx, "get", lambda *a, **k: _FakeResponse(200, "3.15.1"))
+    monkeypatch.setattr(doctor.httpx, "post", lambda *a, **k: _FakeResponse(401))
+    result = doctor.check_mlflow_otlp(_otel_settings())
+    assert not result.ok
+    assert "/v1/traces" in result.detail
+
+
+def test_otlp_probe_no_experiment_id_skips_post(monkeypatch):
+    monkeypatch.setattr(doctor.httpx, "get", lambda *a, **k: _FakeResponse(200, "3.15.1"))
+    monkeypatch.setattr(doctor.httpx, "post", _raise)
+    result = doctor.check_mlflow_otlp(_otel_settings(mlflow_telemetry_experiment_id=None))
+    assert result.ok
+    assert "skipped" in result.detail
+
+
+def test_otlp_probe_included_in_run_doctor(monkeypatch):
+    monkeypatch.setattr(doctor.httpx, "get", lambda *a, **k: _FakeResponse(200, "3.15.1"))
+    monkeypatch.setattr(
+        doctor.httpx, "post", lambda *a, **k: _FakeResponse(200)
+    )
+    settings = _settings(
+        mlflow_tracking_uri="https://ml.example",
+        shlepa_otel_enabled=True,
+        mlflow_telemetry_experiment_id="21",
+    )
+    results, _ = doctor.run_doctor(settings, client_factory=lambda s: _FakeMlflowClient())
+    names = [r.name for r in results]
+    assert "mlflow_otlp" in names
