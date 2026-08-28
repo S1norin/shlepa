@@ -1,6 +1,7 @@
 """shlepa command-line interface (entry point)."""
 
 import os
+from pathlib import Path
 
 import typer
 
@@ -111,6 +112,46 @@ def run(
     typer.echo(run_engine.format_summary(results))
     if not results:
         raise typer.Exit(code=1)
+
+
+@app.command("trace-export")
+def trace_export(
+    batch: str = typer.Option(
+        ..., "--batch", help="SLEPA batch id (printed by 'shlepa run')"
+    ),
+    out: Path = typer.Option(
+        None,
+        "--out",
+        help="Output dir (default tmp/trace-export/<batch>/)",
+    ),
+    experiment: str = typer.Option(
+        None,
+        "--experiment",
+        help="Trace experiment name/id (default from settings)",
+    ),
+) -> None:
+    """Export the agent traces of one batch as JSON + digests + manifest."""
+    from shlepa_cli import trace_export as trace_export_module
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    settings = get_settings()
+    try:
+        client = get_mlflow_client(settings)
+    except ValueError as exc:
+        typer.echo(f"trace-export: MLflow not configured: {exc}", err=True)
+        raise typer.Exit(code=1)
+    out_dir = out or settings.repo_root / "tmp" / "trace-export" / batch
+    try:
+        summary = trace_export_module.export_batch(
+            client, settings, batch, out_dir, experiment
+        )
+    except trace_export_module.TraceBatchNotFound as exc:
+        typer.echo(f"trace-export: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(
+        f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}"
+    )
 
 
 @app.command()

@@ -135,3 +135,14 @@ def test_empty_trace_digest_renders():
     digest = trace_digest.build_digest(_trace([]))
     assert "trace digest" in digest.lower()
     assert "tr-1" in digest
+
+
+def test_token_keys_accept_gen_ai_semconv():
+    span = _llm_span(1, 0, 0)
+    span["attributes"] = {
+        "gen_ai.usage.input_tokens": "42",
+        "gen_ai.usage.output_tokens": "7",
+    }
+    digest = trace_digest.build_digest(_trace([span]))
+    assert "42 in / 7 out" in digest
+    assert "peak context: 42" in digest

@@ -65,6 +65,7 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | `doctor --probe` | Additionally one chat completion, prints the self-reported model | `shlepa doctor --probe` |
 | `zip` | Build `dist/submission-<sha>.zip` (<= 10 MB, no telemetry) | `shlepa zip` |
 | `zip --register` | Also register the submission as a new version of the `shlepa` MLflow model | `shlepa zip --register` |
+| `trace-export --batch <id>` | Export the batch's agent traces from MLflow: manifest + JSON + digests + summary | `shlepa trace-export --batch <id>` |
 | `submit-test [tasks...]` | Contest-faithful check: unzipped submission runs inside Harbor | `shlepa submit-test contest-hello-file` |
 | `submit-test --ci [tasks...]` | Same, CI endpoint + `shlepa-ci` experiment; no args = all tasks | `shlepa submit-test --ci` |
 | `task new <source>-<slug>` | Scaffold a new local task under `tasks/` | `shlepa task new own-math-101` |

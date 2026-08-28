@@ -5,6 +5,8 @@ Pure-function core: the MlflowClient is injected as a fake, no server.
 
 import json
 
+import pytest
+
 from shlepa_cli import trace_export
 from shlepa_cli.config import Settings
 
@@ -203,3 +205,136 @@ def test_trace_to_dict_handles_missing_pieces():
     assert data["task"] is None
     assert data["spans"][0]["attributes"] == {}
     json.dumps(data)  # still JSON-stable
+
+
+# --- export_batch: files on disk ---------------------------------------
+
+
+class _TraceWithTask(_Trace):
+    """_Trace whose agent span also carries the task attribute."""
+
+
+def _llm_span_dict(prompt, completion, i=0):
+    return _Span(
+        span_id=f"llm-{i}",
+        parent_id=None,
+        name="LLM turn",
+        span_type="LLM",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=i * 1_000_000_000,
+        end_time_ns=(i + 1) * 1_000_000_000,
+        attributes={
+            "llm.token_count.prompt": str(prompt),
+            "llm.token_count.completion": str(completion),
+        },
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
+def test_export_batch_raises_when_batch_has_no_traces():
+    client = _FakeClient(
+        [
+            _Trace("tr-other", [_agent_span("batch-9")],
+                   tags={"service.name": "shlepa-agent"})
+        ]
+    )
+    with pytest.raises(trace_export.TraceBatchNotFound):
+        trace_export.export_batch(client, _settings(), "batch-1", ".")
+
+
+def test_export_batch_writes_manifest_traces_and_digests(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-a",
+                [_agent_span("batch-1", "task-a"),
+                 _llm_span_dict(100, 10)],
+                tags={"service.name": "shlepa-agent"},
+            ),
+            _Trace(
+                "tr-b",
+                [_agent_span("batch-1", "task-b")],
+                tags={"service.name": "shlepa-agent"},
+            ),
+        ]
+    )
+    out = tmp_path / "export"
+    summary = trace_export.export_batch(
+        client, _settings(), "batch-1", out
+    )
+    manifest = (out / "manifest.jsonl").read_text().strip().splitlines()
+    assert len(manifest) == 2
+    lines = [json.loads(line) for line in manifest]
+    by_task = {line["task"]: line for line in lines}
+    assert set(by_task) == {"task-a", "task-b"}
+    assert by_task["task-a"]["trace_id"] == "tr-a"
+    assert by_task["task-a"]["tokens_in"] == 100
+    trace_a = json.loads((out / "traces" / "task-a.json").read_text())
+    assert trace_a["trace_id"] == "tr-a"
+    assert (out / "digests" / "task-a.md").read_text().count(
+        "Trace digest"
+    ) == 1
+    summary_md = (out / "summary.md").read_text()
+    assert "batch-1" in summary_md
+    assert summary["batch_id"] == "batch-1"
+    assert summary["traces"] == 2
+
+
+# --- CLI command -------------------------------------------------------
+
+
+def test_trace_export_cli_empty_batch_nonzero_exit(
+    tmp_path, monkeypatch
+):
+    from typer.testing import CliRunner
+
+    from shlepa_cli import main as cli_main
+    from shlepa_cli import mlflow_client as mlflow_module
+
+    monkeypatch.setattr(
+        mlflow_module, "get_mlflow_client", lambda s: _FakeClient([])
+    )
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "trace-export",
+            "--batch",
+            "no-such-batch",
+            "--out",
+            str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code != 0
+    assert "no-such-batch" in (result.output + str(result.exception))
+
+
+def test_trace_export_cli_writes_batch_files(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from shlepa_cli import main as cli_main
+    from shlepa_cli import mlflow_client as mlflow_module
+
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-a",
+                [_agent_span("batch-7", "task-a")],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        mlflow_module, "get_mlflow_client", lambda s: client
+    )
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        cli_main.app,
+        ["trace-export", "--batch", "batch-7", "--out", str(out)],
+    )
+    assert result.exit_code == 0, result.output
+    assert (out / "manifest.jsonl").is_file()
+    assert (out / "traces" / "task-a.json").is_file()
+    assert (out / "summary.md").is_file()

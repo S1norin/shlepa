@@ -15,15 +15,25 @@ from __future__ import annotations
 import hashlib
 import json
 
-__all__ = ["build_digest", "tool_signature", "detect_loops"]
+__all__ = [
+    "build_digest",
+    "detect_loops",
+    "tool_signature",
+    "trace_signals",
+]
 
 #: A signature repeated this many times inside the rolling window is a loop.
 LOOP_THRESHOLD = 4
 #: Rolling window size (in tool calls) for the loop detector.
 LOOP_WINDOW = 6
 
-_PROMPT_KEY = "llm.token_count.prompt"
-_COMPLETION_KEY = "llm.token_count.completion"
+# OpenInference emits either the legacy llm.* keys or the gen_ai.*
+# (OpenTelemetry semantic convention) keys depending on version; accept both.
+_PROMPT_KEYS = ("llm.token_count.prompt", "gen_ai.usage.input_tokens")
+_COMPLETION_KEYS = (
+    "llm.token_count.completion",
+    "gen_ai.usage.output_tokens",
+)
 _TOOL_NAME_KEY = "tool.name"
 _TOOL_ARGS_KEY = "tool.call.arguments"
 _TOOL_RESULT_KEY = "tool.call.result"
@@ -45,6 +55,21 @@ def _tokens(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _attr_first(attrs: dict, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        if key in attrs:
+            return _tokens(attrs.get(key))
+    return 0
+
+
+def span_prompt_tokens(span: dict) -> int:
+    return _attr_first(span.get("attributes") or {}, _PROMPT_KEYS)
+
+
+def span_completion_tokens(span: dict) -> int:
+    return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
 
 
 def _is_error(status) -> bool:
@@ -123,6 +148,25 @@ def detect_loops(tool_spans: list) -> list[dict]:
     return result
 
 
+def trace_signals(trace: dict) -> list[str]:
+    """Short machine-readable signal tags for one trace dict.
+
+    Used in manifest.jsonl: 'loop:<tool>:<count>', 'tool_errors:<n>',
+    'repeated_results:<n>'.
+    """
+    tools = _tool_spans(trace)
+    signals: list[str] = []
+    for loop in detect_loops(tools):
+        signals.append(f"loop:{loop['tool']}:{loop['count']}")
+    errors = [s for s in tools if _is_error(s.get("status"))]
+    if errors:
+        signals.append(f"tool_errors:{len(errors)}")
+    repeated = _repeated_results(tools)
+    if repeated:
+        signals.append(f"repeated_results:{repeated}")
+    return signals
+
+
 def _repeated_results(tool_spans: list) -> int:
     """Number of tool-result values that occur more than once."""
     counts: dict[str, int] = {}
@@ -147,14 +191,9 @@ def build_digest(trace: dict) -> str:
     """Render the Markdown digest for one trace_to_dict dict."""
     llm = _llm_spans(trace)
     tools = _tool_spans(trace)
-    prompt_tokens = sum(_tokens((s.get("attributes") or {}).get(_PROMPT_KEY)) for s in llm)
-    completion_tokens = sum(
-        _tokens((s.get("attributes") or {}).get(_COMPLETION_KEY)) for s in llm
-    )
-    peak_context = max(
-        (_tokens((s.get("attributes") or {}).get(_PROMPT_KEY)) for s in llm),
-        default=0,
-    )
+    prompt_tokens = sum(span_prompt_tokens(s) for s in llm)
+    completion_tokens = sum(span_completion_tokens(s) for s in llm)
+    peak_context = max((span_prompt_tokens(s) for s in llm), default=0)
     tool_errors = [s for s in tools if _is_error(s.get("status"))]
     loops = detect_loops(tools)
     repeated = _repeated_results(tools)
@@ -180,7 +219,6 @@ def build_digest(trace: dict) -> str:
     if not spans:
         lines.append("(no spans)")
     for i, span in enumerate(spans, 1):
-        attrs = span.get("attributes") or {}
         kind = span.get("span_type") or "?"
         name = span.get("name") or "?"
         status = span.get("status")
@@ -189,8 +227,8 @@ def build_digest(trace: dict) -> str:
         extra = ""
         if kind == "LLM":
             extra = (
-                f" in={attrs.get(_PROMPT_KEY, '?')} "
-                f"out={attrs.get(_COMPLETION_KEY, '?')}"
+                f" in={span_prompt_tokens(span)} "
+                f"out={span_completion_tokens(span)}"
             )
         elif kind == "TOOL":
             extra = f" status={status}"
