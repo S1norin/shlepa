@@ -234,6 +234,39 @@ def _llm_span_dict(prompt, completion, i=0):
     )
 
 
+def _llm_span_no_usage():
+    return _Span(
+        span_id="llm-0",
+        parent_id=None,
+        name="chat Qwen",
+        span_type="LLM",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=0,
+        end_time_ns=1_000_000_000,
+        attributes={"gen_ai.operation.name": "chat"},
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
+def test_manifest_carries_tokens_missing_signal(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-nt",
+                [_agent_span("batch-2", "task-a"), _llm_span_no_usage()],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-2", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "tokens_missing" in line["signals"]
+
+
 def test_export_batch_raises_when_batch_has_no_traces():
     client = _FakeClient(
         [

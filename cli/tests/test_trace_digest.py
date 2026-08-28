@@ -5,8 +5,11 @@ synthetic traces here are plain dicts.
 """
 
 import json
+from pathlib import Path
 
 from shlepa_cli import trace_digest
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _llm_span(i, prompt, completion, start_ns=None):
@@ -135,6 +138,36 @@ def test_empty_trace_digest_renders():
     digest = trace_digest.build_digest(_trace([]))
     assert "trace digest" in digest.lower()
     assert "tr-1" in digest
+
+
+def test_real_fixture_token_parse():
+    """Golden fixture: a REAL exported LLM span (trace tr-a5420d2d, 2026-08-28)
+    carrying both semconv key sets. Fails loudly if the agent's
+    instrumentation stops emitting these usage attributes."""
+    span = json.loads((FIXTURES / "llm_span_real.json").read_text())
+    assert trace_digest.span_prompt_tokens(span) == 581
+    assert trace_digest.span_completion_tokens(span) == 165
+
+
+def test_tokens_missing_signal():
+    llm = _llm_span(1, 0, 0)
+    llm["attributes"] = {"gen_ai.operation.name": "chat"}  # no usage
+    trace = {
+        "trace_id": "tr-x",
+        "task": "t",
+        "state": "OK",
+        "spans": [llm],
+    }
+    assert "tokens_missing" in trace_digest.trace_signals(trace)
+
+    good = _llm_span(1, 10, 2)
+    trace2 = {
+        "trace_id": "tr-x",
+        "task": "t",
+        "state": "OK",
+        "spans": [good],
+    }
+    assert "tokens_missing" not in trace_digest.trace_signals(trace2)
 
 
 def test_token_keys_accept_gen_ai_semconv():

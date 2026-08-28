@@ -164,6 +164,17 @@ def trace_signals(trace: dict) -> list[str]:
     repeated = _repeated_results(tools)
     if repeated:
         signals.append(f"repeated_results:{repeated}")
+    # Unfinished LLM spans (timeout/crash mid-call) carry no usage
+    # attributes; flag it so an analysis LLM does not mistake "no data"
+    # for "zero tokens".
+    llm_spans = _llm_spans(trace)
+    usage_keys = _PROMPT_KEYS + _COMPLETION_KEYS
+    has_usage = any(
+        any(key in (s.get("attributes") or {}) for key in usage_keys)
+        for s in llm_spans
+    )
+    if llm_spans and not has_usage:
+        signals.append("tokens_missing")
     return signals
 
 
