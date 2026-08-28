@@ -167,16 +167,29 @@ def find_batch_trace(
     request_time window); a span-level shlepa.batch_id/task match decides.
     Never raises: the caller treats None as 'not found yet'.
     """
-    exp_id = _resolve_trace_experiment_id(client, settings)
-    if exp_id is None:
-        return None
     try:
-        paged = client.search_traces(
-            experiment_ids=[exp_id], max_results=max_results
+        exp_id = _resolve_trace_experiment_id(client, settings)
+        if exp_id is None:
+            return None
+        return _find_batch_trace_inner(
+            client, exp_id, batch_id, task_slug, since_ms, max_results
         )
     except Exception:  # noqa: BLE001 - lookup must never fail the run
         return None
-    for trace in paged.items:
+
+
+def _find_batch_trace_inner(
+    client,
+    exp_id: str,
+    batch_id: str,
+    task_slug: str,
+    since_ms: int | None,
+    max_results: int,
+) -> str | None:
+    paged = client.search_traces(
+        experiment_ids=[exp_id], max_results=max_results
+    )
+    for trace in paged:  # PagedList is list-like; fakes may be plain lists
         info = trace.info
         tags = getattr(info, "tags", None) or {}
         if tags.get("service.name") != AGENT_SERVICE:

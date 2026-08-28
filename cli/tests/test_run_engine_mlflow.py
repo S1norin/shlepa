@@ -170,9 +170,8 @@ class _FakeTrace:
         self.data = _FakeTraceData(spans)
 
 
-class _FakePagedList:
-    def __init__(self, items):
-        self.items = items
+class _FakePagedList(list):
+    """List stand-in for mlflow PagedList (it is a list subclass)."""
 
 
 AGENT_TAG = {"service.name": "shlepa-agent"}
@@ -241,6 +240,17 @@ def test_find_batch_trace_requires_task_match():
     )
     assert run_engine.find_batch_trace(
         client, _otel_settings(Path(".")), "batch-2", "contest-hello-file"
+    ) is None
+
+
+def test_find_batch_trace_never_raises_on_broken_client():
+    class _BrokenClient(_FakeTraceClient):
+        def search_traces(self, *args, **kwargs):
+            raise RuntimeError("server exploded")
+
+    client = _BrokenClient([_agent_trace("tr-x", "b", "t")])
+    assert run_engine.find_batch_trace(
+        client, _otel_settings(Path(".")), "b", "t"
     ) is None
 
 
