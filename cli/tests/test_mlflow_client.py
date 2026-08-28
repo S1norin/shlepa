@@ -109,3 +109,21 @@ def test_get_mlflow_client_builds_client():
     )
     client = get_mlflow_client(settings)
     assert "user:pass@mlflow.example" in client.tracking_uri
+
+
+def test_get_mlflow_client_suppresses_library_url_printing(monkeypatch):
+    # the 3.x client prints its View-run URLs (computed from the
+    # credential-carrying tracking URI) on set_terminated; the env var
+    # tells the library to stay quiet
+    import os
+
+    monkeypatch.delenv(
+        "MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT", raising=False
+    )
+    settings = _settings(
+        mlflow_tracking_uri="https://mlflow.example",
+        mlflow_tracking_username="user",
+        mlflow_tracking_password="pass",
+    )
+    get_mlflow_client(settings)
+    assert os.environ["MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT"] == "1"

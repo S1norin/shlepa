@@ -97,6 +97,33 @@ def test_log_task_to_mlflow_masks_view_run_url(tmp_path, capsys):
     assert "https://user:***@mlflow.example" in out
 
 
+def test_log_task_to_mlflow_prints_clean_run_url(tmp_path, capsys):
+    client = _PrintingClient()
+    settings = Settings(
+        repo_root=tmp_path,
+        openai_base_url=None,
+        openai_api_key=None,
+        local_agent_model=None,
+        ci_openai_base_url=None,
+        ci_openai_api_key=None,
+        ci_model=None,
+        mlflow_tracking_uri="https://user:pw123@mlflow.example",
+        mlflow_tracking_username=None,
+        mlflow_tracking_password=None,
+        shlepa_otel_enabled=False,
+        otel_exporter_otlp_endpoint=None,
+    )
+    run_engine.log_task_to_mlflow(
+        client, settings, "all", None, _result(tmp_path)
+    )
+    out = capsys.readouterr().out
+    # shlepa prints its own run link, host only, never the password
+    assert "https://mlflow.example/#/experiments/99/runs/r1" in out
+    assert "pw123" not in out
+    # and whatever the client still prints is masked
+    assert "secretpass" not in out
+
+
 def test_log_task_to_mlflow_file_store(tmp_path):
     tracking_uri = f"file://{tmp_path / 'mlstore'}"
     client = MlflowClient(tracking_uri=tracking_uri)

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -291,11 +292,22 @@ def log_task_to_mlflow(
         tags["trace_ref"] = f"{jaeger} service=shlepa-agent task={result.slug}"
     from shlepa_cli.mlflow_client import masked_client_stdout
 
-    with masked_client_stdout():  # the client prints a View-run URL
+    with masked_client_stdout():  # defensive: mask any raw client output
         run = client.create_run(
             experiment_id=experiment_id, run_name=result.slug, tags=tags
         )
     run_id = run.info.run_id
+    # The library's own View-run URL carries the embedded basic-auth
+    # credentials; print a clean one instead (host without userinfo).
+    parts = urlsplit(settings.mlflow_tracking_uri or "")
+    host = parts.hostname or ""
+    if parts.port is not None:
+        host += f":{parts.port}"
+    if host:
+        print(
+            f"mlflow run: https://{host}/#/experiments/{experiment_id}/runs/{run_id}",
+            flush=True,
+        )
     client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
     client.log_metric(run_id, "duration_sec", result.duration_sec)
     client.log_metric(run_id, "tokens_in", result.tokens_in)
