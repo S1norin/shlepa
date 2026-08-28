@@ -1,0 +1,17 @@
+SOC ticket AL-4471 (opened 2026-04-20 10:05 UTC)
+
+Alert: `tcp-syn-burst`
+  A burst of short-lived, response-less TCP connections was observed on
+  2026-04-20 (see /app/evidence/zeek_conn.jsonl for the flagged window).
+  The rule pages the SOC when more than 10 such connections originate from
+  a single source within 60 minutes.
+
+Change management record CM-2026-0417 (attached by the ticket author):
+  Engagement:   Annual external penetration test
+  Approved by:  CISO office
+  Date:         2026-04-20
+  Window:       09:00 - 10:00 UTC
+  Source:       dedicated pentest segment 10.10.200.0/24
+  Scope:        internal asset network 10.10.0.0/16
+  Notes:        Port sweeps and vulnerability scans expected during the
+                window; all other sources remain out of scope.

@@ -1,0 +1,5 @@
+{
+  "verdict": "FALSE_POSITIVE_AUTHORIZED_PENTEST",
+  "flagged_source_ip": "10.10.200.15",
+  "within_approved_window": true
+}

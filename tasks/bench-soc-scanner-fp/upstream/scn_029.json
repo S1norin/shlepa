@@ -1,0 +1,552 @@
+{
+  "scenario_id": "SCN-029",
+  "title": "Vulnerability scanner generating anomalous network traffic",
+  "description": "Scenario 29: Vulnerability scanner generating anomalous network traffic. Generated from template TMPL-FP-002.",
+  "soc_tier": "tier1",
+  "difficulty": "easy",
+  "attack_duration_minutes": 88,
+  "dwell_time_minutes": 599,
+  "mitre_techniques": [],
+  "primary_skills_tested": [
+    "FP-02",
+    "FP-04"
+  ],
+  "log_sources_present": [
+    "zeek_conn"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-ENG-20",
+    "victim_user": "d.wilson",
+    "seed": 71
+  },
+  "telemetry": {
+    "zeek_conn": [
+      {
+        "timestamp": "2026-04-20T09:59:24.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.4.77",
+        "dst_port": 5685,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:11:59.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.4.139",
+        "dst_port": 1586,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:49:01.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.6.248",
+        "dst_port": 53449,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:27:29.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.6.175",
+        "dst_port": 10932,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:02:31.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.1.109",
+        "dst_port": 42489,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:35:29.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.3.92",
+        "dst_port": 58223,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:50:08.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.2.244",
+        "dst_port": 43514,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:01:34.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.3.49",
+        "dst_port": 16161,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:48:55.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.9.100",
+        "dst_port": 19524,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:34:50.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.6.63",
+        "dst_port": 25740,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:01:48.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.4.35",
+        "dst_port": 19363,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:08:35.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.8.207",
+        "dst_port": 37070,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      },
+      {
+        "timestamp": "2026-04-20T09:35:49.000Z",
+        "src_ip": "10.10.200.15",
+        "dst_ip": "10.10.5.34",
+        "dst_port": 13410,
+        "proto": "tcp",
+        "duration": 0.1,
+        "bytes_sent": 200,
+        "conn_state": "S0",
+        "ground_truth_label": "benign",
+        "analyst_note": "Authorized scanner traffic from pentest VLAN."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-20T10:43:49.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:16:44.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:33:13.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:19:49.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T12:42:47.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:13:43.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:16:33.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:33:14.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:19:25.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:02:35.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:49:22.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:18:17.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:03:23.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:20:05.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:43:46.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:51:03.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:19:08.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:55:54.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:38:05.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:28:07.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:28:18.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:06:15.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:41:28.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:12:50.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:53:58.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:10:11.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:20:21.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:01:45.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:47:11.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:51:47.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T12:55:26.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:44:58.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:38:05.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:19:32.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:35:34.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:56:54.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:43:58.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:40:07.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T12:09:29.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:06:40.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:52:55.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:37:27.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:26:16.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:10:28.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "FALSE_POSITIVE_AUTHORIZED_PENTEST",
+    "attack_chain": [
+      "Authorized activity"
+    ],
+    "compromised_accounts": [
+      "d.wilson@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-ENG-20"
+    ],
+    "root_cause": "Authorized activity \u2014 verify change management record",
+    "blast_radius": "Single host",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting observed activity"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify authorized activity: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
