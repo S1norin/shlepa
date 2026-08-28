@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -37,9 +38,11 @@ AGENT_SERVICE = "shlepa-agent"
 class AgentRun:
     """Outcome of one agent execution.
 
-    ``termination`` is one of 'ok', 'timeout' (the agent's own wait_for
-    expired), 'exec_timeout' (the docker exec hard timeout hit) or
-    'crash' (the agent died without a metrics marker).
+    ``termination`` is one of 'ok', 'budget' (the v1 main phase hit its
+    budget and handed off to the commit phase), 'error' (the main run
+    failed; the process still exited 0), 'timeout' (the agent's own
+    wait_for expired), 'exec_timeout' (the docker exec hard timeout hit)
+    or 'crash' (the agent died without a metrics marker).
     """
 
     final_output: str
@@ -86,6 +89,32 @@ def make_batch_id() -> str:
     return f"{timestamp}-{secrets.token_hex(3)}"
 
 
+class _HostMetricsCapture(logging.Handler):
+    """Collect token/tool metrics from the v1 agent's JSON event log.
+
+    The v1 core logs a ``usage`` event with cumulative tokens after each
+    model request and a ``llm_tool_call`` event per tool invocation.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tokens_in = 0
+        self.tokens_out = 0
+        self.tool_calls = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            data = json.loads(record.getMessage())
+        except (TypeError, ValueError):
+            return
+        event = data.get("event")
+        if event == "usage":
+            self.tokens_in = int(data.get("cumulative_input") or 0)
+            self.tokens_out = int(data.get("cumulative_output") or 0)
+        elif event == "llm_tool_call":
+            self.tool_calls += 1
+
+
 def run_agent_on_host(
     instruction: str,
     workdir: Path,
@@ -96,41 +125,48 @@ def run_agent_on_host(
     """Run the shlepa agent on the host against one instruction.
 
     Env vars for the agent come from the process environment (the CLI
-    loads .env at startup); LOCAL_AGENT_MODEL is overridden by ``model``.
+    loads .env at startup); LOCAL_AGENT_MODEL and LOCAL_AGENT_WORKDIR
+    are overridden for the duration of the run. Works like the
+    in-container path: core.run_prompt runs the budgeted v1 agent (main
+    phase plus the commit phase) and never raises on budget; an outer
+    wait_for timeout still surfaces as TimeoutError.
     """
-    from shlepa_agent.core import LocalAgentDeps, get_pydantic_agent
+    from shlepa_agent import core
 
+    capture = _HostMetricsCapture()
+    core._configure_logging()
+    core.LOGGER.addHandler(capture)
     old_model = os.environ.get("LOCAL_AGENT_MODEL")
+    old_workdir = os.environ.get("LOCAL_AGENT_WORKDIR")
     if model:
         os.environ["LOCAL_AGENT_MODEL"] = model
+    os.environ["LOCAL_AGENT_WORKDIR"] = str(workdir)
     try:
-        agent = get_pydantic_agent(instrument=otel_enabled)
         try:
-            result = asyncio.run(
+            output = asyncio.run(
                 asyncio.wait_for(
-                    agent.run(
-                        instruction,
-                        deps=LocalAgentDeps(workdir=Path(workdir)),
-                    ),
+                    core.run_prompt(instruction, instrument=otel_enabled),
                     timeout=timeout_sec,
                 )
             )
         except asyncio.TimeoutError:
-            raise TimeoutError(
-                f"agent timed out after {timeout_sec}s"
-            ) from None
+            raise TimeoutError(f"agent timed out after {timeout_sec}s") from None
     finally:
         if old_model is None:
             os.environ.pop("LOCAL_AGENT_MODEL", None)
         else:
             os.environ["LOCAL_AGENT_MODEL"] = old_model
+        if old_workdir is None:
+            os.environ.pop("LOCAL_AGENT_WORKDIR", None)
+        else:
+            os.environ["LOCAL_AGENT_WORKDIR"] = old_workdir
+        core.LOGGER.removeHandler(capture)
 
-    usage = result.usage
     return AgentRun(
-        final_output=str(result.output),
-        tokens_in=int(usage.input_tokens or 0) if usage else 0,
-        tokens_out=int(usage.output_tokens or 0) if usage else 0,
-        tool_calls=int(usage.tool_calls or 0) if usage else 0,
+        final_output=output,
+        tokens_in=capture.tokens_in,
+        tokens_out=capture.tokens_out,
+        tool_calls=capture.tool_calls,
     )
 
 
