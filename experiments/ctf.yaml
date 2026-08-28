@@ -1,0 +1,5 @@
+name: ctf
+tasks:
+  - bench-ctf-smug-dino
+  - bench-ctf-target-practice
+  - bench-ctf-whyos
