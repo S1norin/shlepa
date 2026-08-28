@@ -263,6 +263,7 @@ def test_run_agent_in_container_success_termination_is_ok() -> None:
 
 def test_dev_run_source_marks_internal_timeout() -> None:
     # The baked entrypoint must report its own wait_for expiry with a
-    # termination=timeout marker (the e2e pass verifies it live).
+    # termination=timeout marker (the e2e pass verifies it live), and the
+    # v1 main-phase status 'done' must map to the engine's 'ok'.
     assert '"termination": "timeout"' in dev_env.DEV_RUN_SOURCE
-    assert '"termination": "ok"' in dev_env.DEV_RUN_SOURCE
+    assert '"done": "ok"' in dev_env.DEV_RUN_SOURCE
