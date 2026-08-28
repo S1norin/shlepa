@@ -1,4 +1,4 @@
-"""Integration test: baseline agent loop against a stub OpenAI-compatible server."""
+"""Integration test: agent loop (v1) against a stub OpenAI-compatible server."""
 
 import asyncio
 
@@ -19,4 +19,4 @@ def test_baseline_completes_against_stub(monkeypatch, stub_openai, tmp_path):
     body = stub_state["last_body"]
     assert body["model"] == "stub-model"
     system_prompt = body["messages"][0]["content"]
-    assert "non-interactive coding agent" in system_prompt
+    assert "expert autonomous cybersecurity agent" in system_prompt
