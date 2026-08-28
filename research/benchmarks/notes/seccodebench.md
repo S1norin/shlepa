@@ -42,6 +42,37 @@ the vulnerability is absent. No LLM judge.
   fix-sqli tasks (including the failure mode we most fear: fixing the vuln
   by breaking functionality).
 
+## Adapted into Harbor tasks (2026-08-27, tag `v2.2.0`)
+
+Three **fix-mode** Python scenarios vendored from
+`alibaba/sec-code-bench` @ tag `v2.2.0` (commit `67126ef`, Apache-2.0)
+into `tasks/bench-seccodebench-*`, per `docs/tasks.md`. Each task keeps a
+byte-identical `upstream/` audit copy of the scenario plus the upstream
+`LICENSE`, and a two-sided verifier (`tests/test.sh`): functional pytest
+first, then security-PoC pytest; reward `1` only when **both** pass
+(functionality-first protocol).
+
+| Harbor task | Upstream scenario (`datasets/templates/python/2_1_0/…`) | CWE |
+|---|---|---|
+| `bench-seccodebench-cwe89` | `SQLInjectionPsycopg2` | CWE-89 (SQL injection) |
+| `bench-seccodebench-cwe78` | `CommandInjectionSubprocessRun` | CWE-78 (OS command injection) |
+| `bench-seccodebench-cwe1336` | `SSTIJinja2Template` | CWE-1336 (server-side template injection) |
+
+All tests are fully mocked (no live services). The agent runs inside the
+`secureintelligent/acp:latest` image against the scenario scaffold in
+`/app`.
+
+### First agent run (preset `seccodebench`, 2026-08-27)
+
+| Task | Solved | Duration | Tokens (in/out/total) |
+|---|---|---|---|
+| bench-seccodebench-cwe89 | ✅ 1/1 | 179.7s | 45384 / 1652 / 47036 |
+| bench-seccodebench-cwe78 | ✅ 1/1 | 211.2s | 73415 / 6626 / 80041 |
+| bench-seccodebench-cwe1336 | ✅ 1/1 | 146.0s | 53324 / 2965 / 56289 |
+
+Model: `Qwen3.8:27B-UD-IQ4_XS` (local llama.cpp, `LOCAL_AGENT_MODEL`), container mode, 3/3 solved on the first agent run. Verifier anomalies: none (all functional + security suites passed in-container).
+
 ## Sources
 - Paper: https://arxiv.org/abs/2602.15485
 - Index entry: https://benchmarklist.com/benchmarks/seccodebench/
+- Upstream repo: https://github.com/alibaba/sec-code-bench (tag `v2.2.0`)
