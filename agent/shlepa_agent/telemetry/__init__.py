@@ -161,8 +161,12 @@ def root_span(provider: TracerProvider, task: str | None = None):
         except Exception:
             # start_as_current_span records the ERROR status automatically;
             # the reason attribute tells the digest builder WHY the run
-            # ended (crash vs. handled timeout).
-            span.set_attribute("shlepa.termination_reason", "crash")
+            # ended (crash vs. handled timeout). Entrypoints that already
+            # stamped a specific reason via mark_termination (e.g.
+            # 'crash:<Exc>') keep it; this is only the generic fallback.
+            already = "shlepa.termination_reason" in getattr(span, "attributes", {}) or {}
+            if not already:
+                span.set_attribute("shlepa.termination_reason", "crash")
             raise
 
 

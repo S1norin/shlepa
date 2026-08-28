@@ -64,6 +64,25 @@ def test_mark_termination_stamps_current_span():
     assert roots[0].status.status_code == StatusCode.ERROR
 
 
+def test_specific_termination_stamp_survives_root_context():
+    """An entrypoint stamps 'crash:<Exc>' via mark_termination, then the
+    exception propagates out of root_span; the specific reason must not
+    be clobbered by the generic 'crash' fallback."""
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with pytest.raises(RuntimeError):
+            with telemetry.root_span(provider, task="t"):
+                telemetry.mark_termination("crash:BoomError")
+                raise RuntimeError("boom")
+    finally:
+        provider.shutdown()
+
+    roots = _root_spans(exporter)
+    assert roots, "no agent.run root span"
+    assert roots[0].attributes.get("shlepa.termination_reason") == "crash:BoomError"
+
+
 def test_mark_termination_is_a_noop_without_active_span():
     exporter = InMemorySpanExporter()
     provider = telemetry.configure(exporter=exporter)
