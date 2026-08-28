@@ -33,12 +33,18 @@ AGENT_SERVICE = "shlepa-agent"
 
 @dataclass(frozen=True)
 class AgentRun:
-    """Outcome of one agent execution."""
+    """Outcome of one agent execution.
+
+    ``termination`` is one of 'ok', 'timeout' (the agent's own wait_for
+    expired), 'exec_timeout' (the docker exec hard timeout hit) or
+    'crash' (the agent died without a metrics marker).
+    """
 
     final_output: str
     tokens_in: int
     tokens_out: int
     tool_calls: int
+    termination: str = "ok"
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,7 @@ class TaskResult:
     error: str | None
     score_detail: str
     workspace: Path
+    termination: str = "ok"
 
 
 def make_workspace(repo_root: Path, slug: str) -> Path:
@@ -294,6 +301,7 @@ def log_task_to_mlflow(
     client.log_metric(run_id, "tokens_total", result.tokens_total)
     client.log_metric(run_id, "tool_calls", result.tool_calls)
     client.log_param(run_id, "final_output", result.final_output[:2000])
+    client.log_param(run_id, "termination", result.termination)
     if result.error:
         client.log_param(run_id, "error", result.error[:2000])
     result_json = result.workspace / "result.json"
@@ -625,6 +633,12 @@ def run_task(
             solved, score_detail = _score_no_docker(task, workspace)
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
+            if "timeout" in type(exc).__name__.lower():
+                agent_run = AgentRun(
+                    "", 0, 0, 0, termination="exec_timeout"
+                )
+            else:
+                agent_run = AgentRun("", 0, 0, 0, termination="crash")
     else:
         from shlepa_cli import dev_env
         from shlepa_cli.docker_client import Mount
@@ -674,6 +688,16 @@ def run_task(
                 pass
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
+            if "timeout" in type(exc).__name__.lower():
+                # The docker exec hard timeout (agent timeout + 120s
+                # buffer) fired; the in-container wait_for did not.
+                agent_run = AgentRun(
+                    "", 0, 0, 0, termination="exec_timeout"
+                )
+            else:
+                # Crash: the agent died without a metrics marker
+                # (run_agent_in_container raises) or the build/run failed.
+                agent_run = AgentRun("", 0, 0, 0, termination="crash")
         finally:
             if container is not None:
                 try:
@@ -695,6 +719,7 @@ def run_task(
         error=error,
         score_detail=score_detail,
         workspace=workspace,
+        termination=agent_run.termination,
     )
     _write_result_json(workspace, result)
     return result

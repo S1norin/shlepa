@@ -6,6 +6,7 @@ wrapper), the verifier is tests/test.sh writing the host-mounted
 telemetry reaches the local OTLP collector.
 """
 
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -148,6 +149,49 @@ class FakeDocker:
 
     def stop(self, name):
         self.stopped.append(name)
+
+
+class _TimeoutExecDocker(FakeDocker):
+    """FakeDocker whose agent exec hits the subprocess hard timeout."""
+
+    def exec(self, name, cmd, env, timeout=None):
+        if "/agent/dev_run.py" in cmd:
+            raise subprocess.TimeoutExpired(cmd, timeout or 240)
+        return super().exec(name, cmd, env, timeout)
+
+
+def test_container_ok_termination(tmp_path: Path):
+    fake = FakeDocker(reward="1")
+    task = _repo(tmp_path)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert result.ok
+    assert result.termination == "ok"
+
+
+def test_container_exec_hard_timeout_reports_exec_timeout(tmp_path: Path):
+    fake = _TimeoutExecDocker(reward=None)
+    task = _repo(tmp_path)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert not result.ok
+    assert result.termination == "exec_timeout"
+    data = json.loads((result.workspace / "result.json").read_text())
+    assert data["termination"] == "exec_timeout"
+
+
+def test_container_agent_crash_reports_crash(tmp_path: Path):
+    fake = FakeDocker(reward=None, agent_rc=1, agent_stderr="Traceback: boom")
+    task = _repo(tmp_path)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert not result.ok
+    assert result.termination == "crash"
+    data = json.loads((result.workspace / "result.json").read_text())
+    assert data["termination"] == "crash"
 
 
 def test_container_faithful_solved(tmp_path: Path):

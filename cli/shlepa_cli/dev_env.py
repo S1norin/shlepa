@@ -63,7 +63,22 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
             )
         )
     except asyncio.TimeoutError:
+        # wait_for expired: report a termination=timeout marker so the
+        # engine can distinguish a clean timeout from a crash.
         print(f"agent timed out after {timeout}s", file=sys.stderr)
+        print(
+            METRICS_MARKER
+            + json.dumps(
+                {
+                    "final_output": "",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 0,
+                    "termination": "timeout",
+                }
+            ),
+            file=sys.stderr,
+        )
         return 1
     usage = result.usage
     metrics = {
@@ -71,6 +86,7 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
         "tokens_in": int(usage.input_tokens or 0) if usage else 0,
         "tokens_out": int(usage.output_tokens or 0) if usage else 0,
         "tool_calls": int(usage.tool_calls or 0) if usage else 0,
+        "termination": "ok",
     }
     print(metrics["final_output"])
     print(METRICS_MARKER + json.dumps(metrics), file=sys.stderr)
@@ -206,6 +222,7 @@ def run_agent_in_container(
         tokens_in=metrics["tokens_in"],
         tokens_out=metrics["tokens_out"],
         tool_calls=metrics["tool_calls"],
+        termination=metrics["termination"],
     )
 
 
@@ -213,14 +230,16 @@ def parse_agent_metrics(stderr: str) -> dict:
     """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
 
     Returns a dict with final_output / tokens_in / tokens_out /
-    tool_calls; defaults to empty values when the marker is missing or
-    broken (the run still counts as an unsolved, not a crash).
+    tool_calls / termination; defaults to empty values and
+    termination='ok' when the marker is missing or broken (the run
+    still counts as an unsolved, not a crash).
     """
     defaults = {
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "termination": "ok",
     }
     for line in reversed((stderr or "").splitlines()):
         line = line.strip()
