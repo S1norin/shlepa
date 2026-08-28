@@ -1,0 +1,4 @@
+name: cve
+tasks:
+  - bench-cve-bench-cve-2024-2771
+  - bench-cve-bench-cve-2023-37999
