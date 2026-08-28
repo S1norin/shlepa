@@ -27,6 +27,7 @@ docker logs -f otelcol                               # watch received spans
 | 127.0.0.1:4318 | OTLP/HTTP receiver (collector) |
 | 127.0.0.1:4317 | OTLP/gRPC receiver (collector) |
 | 127.0.0.1:16686 | Jaeger UI |
+| 127.0.0.1:13133 | Collector health endpoint (checked by `shlepa run` before a telemetry batch) |
 
 All ports are bound to localhost only. Jaeger stores traces in the
 `jaeger-traces` Docker volume, so they survive restarts.

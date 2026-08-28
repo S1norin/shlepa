@@ -130,3 +130,25 @@ culprit is a large vendored file under `agent/`. Check what bloated it:
 bounds the agent; the engine adds a buffer and then kills the container.
 A timeout is logged as an unsolved run (not a crash). Increase the timeout
 deliberately; do not silence it.
+
+**Missing traces after a run.** `shlepa run` prints a warning when the
+collector's health endpoint (`http://127.0.0.1:13133/`) is unreachable,
+but if the trace still does not show up, work through this checklist:
+
+1. **Collector down?** `docker compose -f otel/docker-compose.yml ps` and
+   `curl -s http://127.0.0.1:13133/` — if it is down, the agent's spans
+   were lost (the agent never buffers to disk); rerun the batch.
+2. **MLflow exporter failing?** `docker logs --tail 100 otel-otelcol-1`
+   — look for `otlp_http/mlflow` export errors (auth, body-size, TLS).
+   Traces may still be in Jaeger even when the MLflow export fails.
+3. **Local copy?** `uv run --project cli python otel/check_trace.py
+   --backend jaeger` — Jaeger is the other half of the dual export and
+   keeps a volume-backed copy.
+4. **Async lag?** The collector exports to the remote server
+   asynchronously; wait a minute and retry `shlepa trace-export
+   --batch <id>`.
+
+Note: a hard `exec_timeout` kills the container; most spans are already
+flushed (batch processor), and every span now carries `shlepa.batch_id`
+so the trace still correlates by batch even if the `agent.run` root span
+never made it.
