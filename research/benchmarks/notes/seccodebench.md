@@ -44,7 +44,7 @@ the vulnerability is absent. No LLM judge.
 
 ## Adapted into Harbor tasks (2026-08-27, tag `v2.2.0`)
 
-Three **fix-mode** Python scenarios vendored from
+Four **fix-mode** Python scenarios vendored from
 `alibaba/sec-code-bench` @ tag `v2.2.0` (commit `67126ef`, Apache-2.0)
 into `tasks/bench-seccodebench-*`, per `docs/tasks.md`. Each task keeps a
 byte-identical `upstream/` audit copy of the scenario plus the upstream
@@ -55,8 +55,20 @@ first, then security-PoC pytest; reward `1` only when **both** pass
 | Harbor task | Upstream scenario (`datasets/templates/python/2_1_0/…`) | CWE |
 |---|---|---|
 | `bench-seccodebench-cwe89` | `SQLInjectionPsycopg2` | CWE-89 (SQL injection) |
+| `bench-seccodebench-cwe89-sqlite3` | `SQLInjectionSQLite3` | CWE-89 (SQL injection, stdlib sqlite3) |
 | `bench-seccodebench-cwe78` | `CommandInjectionSubprocessRun` | CWE-78 (OS command injection) |
 | `bench-seccodebench-cwe1336` | `SSTIJinja2Template` | CWE-1336 (server-side template injection) |
+
+Adaptation deviation (2026-08-28): the vendored
+`tests/test_security.py` of `bench-seccodebench-cwe89-sqlite3` appends two
+marked PoC tests to the upstream suite (the `upstream/` audit copy stays
+untouched). Reason: the upstream PoC tests for this scenario only fail when
+an injection both executes *and* returns schema text in the result rows —
+for the `GROUP BY` column sink most payloads raise `sqlite3.Error` and are
+caught non-fatally, so the upstream suite passed 8/8 on the vulnerable
+baseline (verified). The additions make the security side fail on the
+vulnerable code while still accepting defensive `ValueError`/`TypeError`
+rejection and sanitised inputs.
 
 All tests are fully mocked (no live services). The agent runs inside the
 `secureintelligent/acp:latest` image against the scenario scaffold in
