@@ -9,6 +9,11 @@ receivers:
 processors:
   batch: {}
 
+extensions:
+  # Liveness endpoint for the engine's pre-flight warning (localhost only).
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 exporters:
   # Traces go to stdout for quick inspection (docker logs otelcol).
   debug:
@@ -29,6 +34,7 @@ exporters:
       x-mlflow-experiment-id: "${env:MLFLOW_TELEMETRY_EXPERIMENT_ID}"
 
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]

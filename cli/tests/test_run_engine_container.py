@@ -380,6 +380,67 @@ def test_run_preset_generates_batch_id_per_invocation(tmp_path: Path):
         assert BATCH_ID_RE.match(batch_id)
 
 
+def test_run_preset_warns_when_collector_unreachable(
+    tmp_path: Path, monkeypatch, capsys
+):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    settings = _settings(tmp_path, shlepa_otel_enabled=True)
+    probed = []
+
+    def _down(endpoint):
+        probed.append(endpoint)
+        return False
+
+    monkeypatch.setattr(run_engine, "_probe_collector", _down)
+    run_engine.run_preset(
+        settings,
+        Preset(name="all", tasks="all"),
+        [task],
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+    )
+    assert probed == ["http://localhost:4318"]
+    err = capsys.readouterr().err
+    assert "collector unreachable" in err
+    assert "traces will be LOST" in err
+
+
+def test_probe_collector_never_raises(monkeypatch):
+    # the health port is fixed at 13133 per otel/otelcol.yaml; any probe
+    # failure (refused, timeout, DNS) must yield False, never raise
+    def _refused(*args, **kwargs):
+        raise OSError("connection refused")
+
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", _refused)
+    assert run_engine._probe_collector("http://127.0.0.1:4318") is False
+
+
+def test_run_preset_no_probe_when_otel_disabled(
+    tmp_path: Path, monkeypatch, capsys
+):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    settings = _settings(tmp_path)
+
+    def _no_probe(endpoint):
+        raise AssertionError("probe must not run")
+
+    monkeypatch.setattr(run_engine, "_probe_collector", _no_probe)
+    run_engine.run_preset(
+        settings,
+        Preset(name="all", tasks="all"),
+        [task],
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+    )
+    assert "collector unreachable" not in capsys.readouterr().err
+
+
 def test_container_faithful_agent_env_from_settings(tmp_path: Path):
     fake = FakeDocker()
     task = _repo(tmp_path)

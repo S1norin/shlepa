@@ -379,6 +379,18 @@ def run_preset(
     """
     batch_id = batch_id or make_batch_id()
     batch_started_ms = int(time.time() * 1000)
+    if settings.shlepa_otel_enabled:
+        endpoint = (
+            settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
+        )
+        if not _probe_collector(endpoint):
+            print(
+                f"warning: OTel collector unreachable (probed {endpoint}) "
+                "\u2014 agent traces will be LOST for this batch; start it with "
+                "docker compose -f otel/docker-compose.yml up -d",
+                file=sys.stderr,
+                flush=True,
+            )
     results: list[TaskResult] = []
     for index, task in enumerate(tasks, 1):
         print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
@@ -542,6 +554,24 @@ def _score_container_faithful(
         f"out={(proc.stdout or proc.stderr)[-500:]}"
     )
     return content == "1", detail
+
+
+def _probe_collector(endpoint: str) -> bool:
+    """One cheap GET to the collector's health_check extension (13133).
+
+    Never raises: any failure simply means "unreachable". The probe is
+    a warning aid only; it must not fail a run.
+    """
+    from urllib.parse import urlsplit
+    from urllib.request import urlopen
+
+    parts = urlsplit(endpoint or "")
+    host = parts.hostname or "localhost"
+    try:
+        with urlopen(f"http://{host}:13133/", timeout=1) as resp:
+            return getattr(resp, "status", 200) == 200
+    except Exception:  # noqa: BLE001 - probe must never break the run
+        return False
 
 
 def _classify_termination(exc: Exception) -> str:
