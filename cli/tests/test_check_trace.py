@@ -300,6 +300,77 @@ def test_fetch_latest_mlflow_trace_filters_service_and_picks_newest(
     assert "user" in captured["uri"] and "passw0rd" in captured["uri"]
 
 
+def _fake_clock(monkeypatch):
+    """Deterministic clock: sleep advances time instead of blocking."""
+    clock = {"t": 0.0}
+    monkeypatch.setattr(check_trace.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(check_trace.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    return clock
+
+
+def test_main_mlflow_wait_retries_until_trace_lands(monkeypatch, capsys):
+    """MLflow ingestion is async: right after a batch the newest trace may
+    not be searchable yet, so the check sees a stale trace and FAILs.
+    --wait retries until the fresh trace lands."""
+    stale = _FakeMlflowTrace(
+        "tr-stale", [_FakeSpan("agent.run", {"task": "t"})]
+    )  # no LLM span -> FAIL
+    fresh = _mlflow_trace("tr-fresh")
+    calls = {"n": 0}
+
+    def fake_fetch(*args, **kwargs):
+        calls["n"] += 1
+        return stale if calls["n"] < 3 else fresh
+
+    _fake_clock(monkeypatch)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://ml.example")
+    monkeypatch.setattr(
+        check_trace, "fetch_latest_mlflow_trace", fake_fetch
+    )
+
+    rc = check_trace.main(["--backend", "mlflow", "--wait", "60"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert calls["n"] == 3
+    assert "tr-fresh" in out
+
+
+def test_main_mlflow_wait_gives_up_at_deadline(monkeypatch, capsys):
+    stale = _FakeMlflowTrace(
+        "tr-stale", [_FakeSpan("agent.run", {"task": "t"})]
+    )
+    _fake_clock(monkeypatch)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://ml.example")
+    monkeypatch.setattr(
+        check_trace, "fetch_latest_mlflow_trace", lambda *a, **k: stale
+    )
+
+    rc = check_trace.main(["--backend", "mlflow", "--wait", "15"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "tr-stale" in out
+
+
+def test_main_mlflow_no_wait_by_default(monkeypatch, capsys):
+    """Without --wait a single failed check fails immediately (no retry)."""
+    stale = _FakeMlflowTrace(
+        "tr-stale", [_FakeSpan("agent.run", {"task": "t"})]
+    )
+    _fake_clock(monkeypatch)
+    calls = {"n": 0}
+
+    def fake_fetch(*args, **kwargs):
+        calls["n"] += 1
+        return stale
+
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://ml.example")
+    monkeypatch.setattr(check_trace, "fetch_latest_mlflow_trace", fake_fetch)
+
+    rc = check_trace.main(["--backend", "mlflow"])
+    assert rc == 1
+    assert calls["n"] == 1
+
+
 def test_fetch_latest_mlflow_trace_no_experiment(monkeypatch):
     import sys as _sys
 

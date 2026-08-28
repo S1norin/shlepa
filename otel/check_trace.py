@@ -31,13 +31,16 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 
 DEFAULT_JAEGER = "http://localhost:16686"
 DEFAULT_SERVICE = "shlepa-agent"
 DEFAULT_TRACE_EXPERIMENT = "shlepa-traces"
-TRACE_LIMIT = 20
+# Wide window: the MLflow search is unordered, so a small limit can
+# exclude the just-finished trace from the candidate set entirely.
+TRACE_LIMIT = 500
 
 LLM_KIND_KEY = "openinference.span.kind"
 LLM_KIND = "LLM"
@@ -194,6 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--service", default=DEFAULT_SERVICE, help="service name")
     parser.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout (s)")
+    parser.add_argument(
+        "--wait",
+        type=int,
+        default=0,
+        help=(
+            "if the check fails, retry for up to N seconds (MLflow "
+            "ingestion is async; 0 = no retry, default)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.backend == "mlflow":
@@ -201,29 +213,47 @@ def main(argv: list[str] | None = None) -> int:
         if not tracking_uri:
             print("FAIL: MLFLOW_TRACKING_URI is not set (see .env.example)")
             return 1
-        try:
-            trace = fetch_latest_mlflow_trace(
-                tracking_uri,
-                os.environ.get("MLFLOW_TRACKING_USERNAME"),
-                os.environ.get("MLFLOW_TRACKING_PASSWORD"),
-                args.experiment,
-                service=args.service,
-            )
-        except Exception as exc:  # noqa: BLE001 - report any fetch failure
-            print(f"FAIL: cannot query MLflow at {tracking_uri}: {type(exc).__name__}: {exc}")
-            return 1
-        if trace is None:
-            print(
-                f"FAIL: no traces found for service '{args.service}' "
-                f"in experiment '{args.experiment}'"
-            )
-            return 1
-        result = check_mlflow_trace(trace)
-        if not result.ok:
+        # MLflow ingestion is async: right after a batch the newest trace
+        # may not be searchable yet, so the check can validate a stale one
+        # and false-FAIL. --wait retries until the deadline.
+        deadline = time.monotonic() + args.wait
+        while True:
+            try:
+                trace = fetch_latest_mlflow_trace(
+                    tracking_uri,
+                    os.environ.get("MLFLOW_TRACKING_USERNAME"),
+                    os.environ.get("MLFLOW_TRACKING_PASSWORD"),
+                    args.experiment,
+                    service=args.service,
+                )
+            except Exception as exc:  # noqa: BLE001 - report any fetch failure
+                print(f"FAIL: cannot query MLflow at {tracking_uri}: {type(exc).__name__}: {exc}")
+                return 1
+            if trace is None:
+                message = (
+                    f"FAIL: no traces found for service '{args.service}' "
+                    f"in experiment '{args.experiment}'"
+                )
+                if time.monotonic() < deadline:
+                    print(message + " (waiting for ingestion…)", file=sys.stderr)
+                    time.sleep(5)
+                    continue
+                print(message)
+                return 1
+            result = check_mlflow_trace(trace)
+            if result.ok:
+                print(f"OK: trace {result.trace_id} ({result.detail})")
+                return 0
+            if time.monotonic() < deadline:
+                print(
+                    f"retry: trace {result.trace_id} not ready "
+                    f"({result.detail}); waiting for a newer trace…",
+                    file=sys.stderr,
+                )
+                time.sleep(5)
+                continue
             print(f"FAIL: trace {result.trace_id}: {result.detail}")
             return 1
-        print(f"OK: trace {result.trace_id} ({result.detail})")
-        return 0
 
     try:
         trace = fetch_latest_trace(args.jaeger, args.service, args.timeout)
