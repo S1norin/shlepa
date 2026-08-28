@@ -1,14 +1,17 @@
 """shlepa doctor: environment health checks.
 
 Each check returns a CheckResult(ok, detail). Hard checks: LLM endpoint,
-model match, MLflow, docker. The --probe chat completion is best effort
-and never fails the run.
+model match, MLflow, MLflow OTLP ingestion (when SLEPA_OTEL_ENABLED=1),
+docker. The --probe chat completion is best effort and never fails the run.
 """
 
 from __future__ import annotations
 
+import base64
+import secrets
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -130,6 +133,117 @@ def check_docker(settings: Settings) -> CheckResult:
     return CheckResult("docker", True, f"server {proc.stdout.strip()}")
 
 
+def _basic_auth_header(username: str, password: str | None) -> str:
+    raw = f"{username}:{password or ''}".encode("utf-8")
+    return "Basic " + base64.b64encode(raw).decode("ascii")
+
+
+def _otlp_probe_payload() -> dict:
+    """Minimal OTLP/HTTP JSON body with one no-op span (doctor probe).
+
+    The probe lands in the telemetry experiment as service 'shlepa-doctor';
+    trace lookups filter on service 'shlepa-agent', so it never interferes.
+    """
+    now_ns = time.time_ns()
+    trace_id = secrets.token_hex(16)
+    span_id = secrets.token_hex(8)
+    return {
+        "resourceSpans": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "shlepa-doctor"}}
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "scope": {"name": "shlepa-doctor"},
+                        "spans": [
+                            {
+                                "traceId": trace_id,
+                                "spanId": span_id,
+                                "name": "doctor.otlp.probe",
+                                "kind": 1,
+                                "startTimeUnixNano": str(now_ns),
+                                "endTimeUnixNano": str(now_ns),
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def check_mlflow_otlp(settings: Settings) -> CheckResult:
+    """MLflow OTLP ingestion: GET /version (+ no-op POST /v1/traces).
+
+    Only runs when SLEPA_OTEL_ENABLED=1 (the collector is the one that
+    exports to the remote server, so this is the dev-only path). Reports
+    HTTP-level failures without leaking credentials.
+    """
+    if not settings.shlepa_otel_enabled:
+        return CheckResult(
+            "mlflow_otlp", True, "skipped (SLEPA_OTEL_ENABLED not set)"
+        )
+    if not settings.mlflow_tracking_uri:
+        return CheckResult(
+            "mlflow_otlp", False, "MLFLOW_TRACKING_URI is not set"
+        )
+    headers: dict[str, str] = {}
+    if settings.mlflow_tracking_username:
+        headers["Authorization"] = _basic_auth_header(
+            settings.mlflow_tracking_username,
+            settings.mlflow_tracking_password,
+        )
+    base = settings.mlflow_tracking_uri.rstrip("/")
+    try:
+        version_resp = httpx.get(f"{base}/version", headers=headers, timeout=HTTP_TIMEOUT)
+    except httpx.HTTPError as exc:
+        return CheckResult(
+            "mlflow_otlp", False, f"unreachable: {type(exc).__name__}: {exc}"
+        )
+    if version_resp.status_code // 100 != 2:
+        return CheckResult(
+            "mlflow_otlp",
+            False,
+            f"GET /version returned HTTP {version_resp.status_code}",
+        )
+    version = version_resp.text.strip() or "(version unknown)"
+    if not settings.mlflow_telemetry_experiment_id:
+        return CheckResult(
+            "mlflow_otlp",
+            True,
+            (
+                f"server {version} "
+                "(POST /v1/traces skipped: MLFLOW_TELEMETRY_EXPERIMENT_ID not set)"
+            ),
+        )
+    post_headers = {
+        **headers,
+        "Content-Type": "application/json",
+        "x-mlflow-experiment-id": settings.mlflow_telemetry_experiment_id,
+    }
+    try:
+        resp = httpx.post(
+            f"{base}/v1/traces",
+            headers=post_headers,
+            json=_otlp_probe_payload(),
+            timeout=HTTP_TIMEOUT,
+        )
+    except httpx.HTTPError as exc:
+        return CheckResult(
+            "mlflow_otlp", False, f"POST /v1/traces failed: {type(exc).__name__}: {exc}"
+        )
+    if resp.status_code // 100 != 2:
+        return CheckResult(
+            "mlflow_otlp",
+            False,
+            f"POST /v1/traces returned HTTP {resp.status_code}",
+        )
+    return CheckResult("mlflow_otlp", True, f"server {version}, OTLP ingestion OK")
+
+
 def probe_chat(settings: Settings) -> str:
     """One best-effort chat completion; returns a display string, never raises."""
     if not settings.openai_base_url:
@@ -167,6 +281,7 @@ def run_doctor(
         check_llm_endpoint(settings),
         check_llm_model(settings),
         check_mlflow(settings, client_factory=client_factory),
+        check_mlflow_otlp(settings),
         check_docker(settings),
     ]
     probe_info = probe_chat(settings) if probe else None

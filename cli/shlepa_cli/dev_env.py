@@ -63,14 +63,50 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
             )
         )
     except asyncio.TimeoutError:
+        # wait_for expired: report a termination=timeout marker so the
+        # engine can distinguish a clean timeout from a crash, and stamp
+        # the root span so the exported trace shows the same reason.
+        if otel:
+            try:
+                from shlepa_agent.telemetry import mark_termination
+
+                mark_termination("timeout")
+            except Exception:  # telemetry must never break the run
+                pass
         print(f"agent timed out after {timeout}s", file=sys.stderr)
+        print(
+            METRICS_MARKER
+            + json.dumps(
+                {
+                    "final_output": "",
+                    "tokens_in": 0,
+                    "tokens_out": 0,
+                    "tool_calls": 0,
+                    "termination": "timeout",
+                }
+            ),
+            file=sys.stderr,
+        )
         return 1
+    except Exception as exc:  # noqa: BLE001 - stamp the reason, re-raise
+        # Crash: stamp the root span with the exception class so the
+        # exported trace carries the same 'crash:<Exc>' reason that ends
+        # up in result.json, then re-raise for a non-zero exit.
+        if otel:
+            try:
+                from shlepa_agent.telemetry import mark_termination
+
+                mark_termination(f"crash:{type(exc).__name__}")
+            except Exception:  # telemetry must never break the run
+                pass
+        raise
     usage = result.usage
     metrics = {
         "final_output": str(result.output),
         "tokens_in": int(usage.input_tokens or 0) if usage else 0,
         "tokens_out": int(usage.output_tokens or 0) if usage else 0,
         "tool_calls": int(usage.tool_calls or 0) if usage else 0,
+        "termination": "ok",
     }
     print(metrics["final_output"])
     print(METRICS_MARKER + json.dumps(metrics), file=sys.stderr)
@@ -174,6 +210,18 @@ def _has_metrics_marker(stderr: str) -> bool:
     )
 
 
+class AgentCrashError(RuntimeError):
+    """The agent container exited non-zero without a metrics marker.
+
+    Carries the exit code so the engine can tell an OOM kill (137) from
+    a plain crash.
+    """
+
+    def __init__(self, message: str, returncode: int | None = None):
+        super().__init__(message)
+        self.returncode = returncode
+
+
 def run_agent_in_container(
     docker,
     container: str,
@@ -200,12 +248,16 @@ def run_agent_in_container(
     metrics = parse_agent_metrics(proc.stderr or "")
     if proc.returncode != 0 and not _has_metrics_marker(proc.stderr or ""):
         tail = (proc.stderr or proc.stdout or "")[-1000:]
-        raise RuntimeError(f"agent exited with code {proc.returncode}: {tail}")
+        raise AgentCrashError(
+            f"agent exited with code {proc.returncode}: {tail}",
+            returncode=proc.returncode,
+        )
     return AgentRun(
         final_output=metrics["final_output"] or (proc.stdout or "").strip(),
         tokens_in=metrics["tokens_in"],
         tokens_out=metrics["tokens_out"],
         tool_calls=metrics["tool_calls"],
+        termination=metrics["termination"],
     )
 
 
@@ -213,14 +265,16 @@ def parse_agent_metrics(stderr: str) -> dict:
     """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
 
     Returns a dict with final_output / tokens_in / tokens_out /
-    tool_calls; defaults to empty values when the marker is missing or
-    broken (the run still counts as an unsolved, not a crash).
+    tool_calls / termination; defaults to empty values and
+    termination='ok' when the marker is missing or broken (the run
+    still counts as an unsolved, not a crash).
     """
     defaults = {
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "termination": "ok",
     }
     for line in reversed((stderr or "").splitlines()):
         line = line.strip()

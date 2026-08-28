@@ -61,10 +61,11 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | `run --dry-run [preset]` | Print resolved tasks + model, execute nothing | `shlepa run --dry-run all` |
 | `smoke` | Doctor + one real task + MLflow visibility check; exit 0/1 | `shlepa smoke` |
 | `smoke --ci` | Same, but the secondary CI endpoint and the `shlepa-ci` experiment | `shlepa smoke --ci` |
-| `doctor` | Hard checks: endpoint, model name, MLflow, docker | `shlepa doctor` |
+| `doctor` | Hard checks: endpoint, model name, MLflow, MLflow OTLP ingestion (when `SLEPA_OTEL_ENABLED=1`), docker | `shlepa doctor` |
 | `doctor --probe` | Additionally one chat completion, prints the self-reported model | `shlepa doctor --probe` |
 | `zip` | Build `dist/submission-<sha>.zip` (<= 10 MB, no telemetry) | `shlepa zip` |
 | `zip --register` | Also register the submission as a new version of the `shlepa` MLflow model | `shlepa zip --register` |
+| `trace-export --batch <id>` | Export the batch's agent traces from MLflow: manifest + JSON + digests + summary | `shlepa trace-export --batch <id>` |
 | `submit-test [tasks...]` | Contest-faithful check: unzipped submission runs inside Harbor | `shlepa submit-test contest-hello-file` |
 | `submit-test --ci [tasks...]` | Same, CI endpoint + `shlepa-ci` experiment; no args = all tasks | `shlepa submit-test --ci` |
 | `task new <source>-<slug>` | Scaffold a new local task under `tasks/` | `shlepa task new own-math-101` |
@@ -129,3 +130,28 @@ culprit is a large vendored file under `agent/`. Check what bloated it:
 bounds the agent; the engine adds a buffer and then kills the container.
 A timeout is logged as an unsolved run (not a crash). Increase the timeout
 deliberately; do not silence it.
+
+**Missing traces after a run.** `shlepa run` prints a warning when the
+collector's health endpoint (`http://127.0.0.1:13133/`) is unreachable,
+but if the trace still does not show up, work through this checklist:
+
+1. **Collector down?** `docker compose -f otel/docker-compose.yml ps` and
+   `curl -s http://127.0.0.1:13133/` — if it is down, the agent's spans
+   were lost (the agent never buffers to disk); rerun the batch.
+2. **MLflow exporter failing?** `docker logs --tail 100 otel-otelcol-1`
+   — look for `otlp_http/mlflow` export errors (auth, body-size, TLS).
+   Traces may still be in Jaeger even when the MLflow export fails.
+3. **Local copy?** `uv run --project cli python otel/check_trace.py
+   --backend jaeger` — Jaeger is the other half of the dual export and
+   keeps an in-memory copy (capped at 100k traces, lost on restart).
+4. **Async lag?** The collector exports to the remote server
+   asynchronously; wait a minute and retry `shlepa trace-export
+   --batch <id>`.
+5. **Jaeger restarted?** Jaeger v2 keeps its local copy in memory (capped
+   at 100k traces); a restart of the `jaeger` container wipes it. The
+   remote MLflow experiment is the durable copy.
+
+Note: a hard `exec_timeout` kills the container; most spans are already
+flushed (batch processor), and every span now carries `shlepa.batch_id`
+so the trace still correlates by batch even if the `agent.run` root span
+never made it.

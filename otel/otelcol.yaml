@@ -9,6 +9,11 @@ receivers:
 processors:
   batch: {}
 
+extensions:
+  # Liveness endpoint for the engine's pre-flight warning (localhost only).
+  health_check:
+    endpoint: 0.0.0.0:13133
+
 exporters:
   # Traces go to stdout for quick inspection (docker logs otelcol).
   debug:
@@ -18,10 +23,20 @@ exporters:
     endpoint: jaeger:4317
     tls:
       insecure: true
+  # Forward to the remote MLflow server (OTLP/HTTP ingestion, MLflow >= 3.6).
+  # The exporter appends the signal path /v1/traces to the base endpoint.
+  # Credentials/experiment come from otel/.env (gitignored) via env expansion.
+  otlp_http/mlflow:
+    endpoint: "https://mlflow.sinorin.ru"
+    compression: gzip
+    headers:
+      authorization: "Basic ${env:MLFLOW_BASIC_B64}"
+      x-mlflow-experiment-id: "${env:MLFLOW_TELEMETRY_EXPERIMENT_ID}"
 
 service:
+  extensions: [health_check]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug, otlp_grpc/jaeger]
+      exporters: [debug, otlp_grpc/jaeger, otlp_http/mlflow]

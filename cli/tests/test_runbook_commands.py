@@ -22,6 +22,7 @@ KNOWN_COMMANDS = {
     "smoke",
     "doctor",
     "zip",
+    "trace-export",
     "submit-test",
     "clean",
     "help",

@@ -60,6 +60,7 @@ class Settings:
     mlflow_tracking_password: str | None
     shlepa_otel_enabled: bool
     otel_exporter_otlp_endpoint: str | None
+    mlflow_telemetry_experiment_id: str | None = None
 
 
 def get_settings(root: Path | None = None) -> Settings:
@@ -80,4 +81,7 @@ def get_settings(root: Path | None = None) -> Settings:
         otel_exporter_otlp_endpoint=(
             os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or None
         ),
+        mlflow_telemetry_experiment_id=os.environ.get(
+            "MLFLOW_TELEMETRY_EXPERIMENT_ID"
+        ) or None,
     )
