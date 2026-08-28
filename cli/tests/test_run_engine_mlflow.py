@@ -52,6 +52,51 @@ def _result(tmp_path, **overrides):
     return run_engine.TaskResult(**base)
 
 
+class _PrintingClient:
+    """Fake client that mimics the MLflow library printing a View-run
+    URL (with the tracking URI's embedded credentials) to stdout at
+    create_run time."""
+
+    def __init__(self):
+        self.metrics = {}
+
+    def create_experiment(self, name):
+        return "99"
+
+    def get_experiment_by_name(self, name):
+        return type("Exp", (), {"experiment_id": "99", "name": name})()
+
+    def create_run(self, experiment_id, run_name, tags=None):
+        import sys
+
+        sys.stdout.write(
+            "🏃 View run x at: "
+            "https://user:secretpass@mlflow.example/#/experiments/99/runs/r1\n"
+        )
+        info = type("Info", (), {"run_id": "r1"})()
+        return type("Run", (), {"info": info})()
+
+    def log_metric(self, run_id, key, value, **kwargs):
+        self.metrics[key] = value
+
+    def log_param(self, *args, **kwargs):
+        pass
+
+    def set_terminated(self, *args, **kwargs):
+        pass
+
+
+def test_log_task_to_mlflow_masks_view_run_url(tmp_path, capsys):
+    client = _PrintingClient()
+    run_id = run_engine.log_task_to_mlflow(
+        client, _settings(tmp_path), "all", None, _result(tmp_path)
+    )
+    out = capsys.readouterr().out
+    assert run_id == "r1"
+    assert "secretpass" not in out
+    assert "https://user:***@mlflow.example" in out
+
+
 def test_log_task_to_mlflow_file_store(tmp_path):
     tracking_uri = f"file://{tmp_path / 'mlstore'}"
     client = MlflowClient(tracking_uri=tracking_uri)

@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from shlepa_cli.config import Settings
-from shlepa_cli.mlflow_client import build_tracking_uri, get_mlflow_client
+from shlepa_cli.mlflow_client import (
+    build_tracking_uri,
+    get_mlflow_client,
+    mask_url_auth,
+    masked_client_stdout,
+)
 
 
 def _settings(**overrides) -> Settings:
@@ -25,6 +30,48 @@ def _settings(**overrides) -> Settings:
     }
     base.update(overrides)
     return Settings(**base)
+
+
+def test_mask_url_auth_masks_password():
+    assert (
+        mask_url_auth("https://user:secretpass@mlflow.example/#/x")
+        == "https://user:***@mlflow.example/#/x"
+    )
+
+
+def test_mask_url_auth_leaves_plain_urls_untouched():
+    assert mask_url_auth("https://mlflow.example/#/x") == (
+        "https://mlflow.example/#/x"
+    )
+    assert mask_url_auth("not a url") == "not a url"
+
+
+def test_masked_client_stdout_masks_library_output(capsys):
+    # the MLflow client prints View-run URLs (with the tracking URI's
+    # embedded credentials) straight to sys.stdout
+    with masked_client_stdout():
+        import sys
+
+        sys.stdout.write(
+            "🏃 View run x at: "
+            "https://user:secretpass@mlflow.example/#/experiments/1\n"
+        )
+    out = capsys.readouterr().out
+    assert "secretpass" not in out
+    assert "https://user:***@mlflow.example/#/experiments/1" in out
+
+
+def test_masked_client_stdout_restores_stdout_on_error(capsys):
+    import sys
+
+    original = sys.stdout
+    try:
+        with pytest.raises(RuntimeError):
+            with masked_client_stdout():
+                sys.stdout.write("https://u:p@host/\n")
+                raise RuntimeError("boom")
+    finally:
+        assert sys.stdout is original
 
 
 def test_build_tracking_uri_with_credentials():

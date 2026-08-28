@@ -295,9 +295,12 @@ def log_task_to_mlflow(
             ":4318", ":16686"
         )
         tags["trace_ref"] = f"{jaeger} service=shlepa-agent task={result.slug}"
-    run = client.create_run(
-        experiment_id=experiment_id, run_name=result.slug, tags=tags
-    )
+    from shlepa_cli.mlflow_client import masked_client_stdout
+
+    with masked_client_stdout():  # the client prints a View-run URL
+        run = client.create_run(
+            experiment_id=experiment_id, run_name=result.slug, tags=tags
+        )
     run_id = run.info.run_id
     client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
     client.log_metric(run_id, "duration_sec", result.duration_sec)
