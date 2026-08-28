@@ -1,0 +1,36 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/seccodebench-cwe94"
+description = "Fix the code injection (CWE-94) in the workflow_transformer module while keeping the functional tests green."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "bench", "code-injection", "cwe-94", "code-fix"]
+source = "alibaba/sec-code-bench"
+url = "https://github.com/alibaba/sec-code-bench/tree/v2.2.0/datasets/templates/python/2_1_0/CodeInjectionEval"
+synced_at = "2026-08-28"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
