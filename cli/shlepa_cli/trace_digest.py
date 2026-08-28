@@ -157,7 +157,10 @@ def trace_signals(trace: dict) -> list[str]:
     tools = _tool_spans(trace)
     signals: list[str] = []
     for loop in detect_loops(tools):
-        signals.append(f"loop:{loop['tool']}:{loop['count']}")
+        # args excerpt so the analysis LLM can judge polling vs. stuck
+        # loop without pulling the full trace
+        excerpt = (loop["args"] or "").replace("\n", " ")[:60]
+        signals.append(f"loop:{loop['tool']}:{loop['count']}:{excerpt}")
     errors = [s for s in tools if _is_error(s.get("status"))]
     if errors:
         signals.append(f"tool_errors:{len(errors)}")
@@ -179,13 +182,18 @@ def trace_signals(trace: dict) -> list[str]:
 
 
 def _repeated_results(tool_spans: list) -> int:
-    """Number of tool-result values that occur more than once."""
+    """Number of non-empty tool-result values that occur more than once.
+
+    Empty/whitespace-only results are skipped: no-op commands returning
+    '' is not a stuck loop (main false-positive source).
+    """
     counts: dict[str, int] = {}
     for span in tool_spans:
         attrs = span.get("attributes") or {}
-        if _TOOL_RESULT_KEY not in attrs:
+        value = attrs.get(_TOOL_RESULT_KEY)
+        if value is None or not str(value).strip():
             continue
-        key = hashlib.sha256(_norm(attrs.get(_TOOL_RESULT_KEY)).encode()).hexdigest()
+        key = hashlib.sha256(_norm(value).encode()).hexdigest()
         counts[key] = counts.get(key, 0) + 1
     return sum(1 for count in counts.values() if count > 1)
 

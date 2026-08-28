@@ -179,3 +179,41 @@ def test_token_keys_accept_gen_ai_semconv():
     digest = trace_digest.build_digest(_trace([span]))
     assert "42 in / 7 out" in digest
     assert "peak context: 42" in digest
+
+
+def test_repeated_empty_results_not_flagged():
+    # no-op commands return '' — that is not a stuck loop
+    spans = [_tool_span(i, "bash", f"true {i}", result="") for i in range(10)]
+    trace = _trace(spans)
+    assert "repeated_results" not in trace_digest.trace_signals(trace)
+
+
+def test_repeated_nonempty_results_still_flagged():
+    spans = [
+        _tool_span(1, "bash", "a", result="same output"),
+        _tool_span(2, "bash", "b", result="same output"),
+        _tool_span(3, "bash", "c", result="same output"),
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    # one repeated result value, seen 3 times
+    assert "repeated_results:1" in signals
+
+
+def test_loop_signal_contains_args_excerpt():
+    spans = [_tool_span(i, "bash", "ls -la /tmp", result="x") for i in range(4)]
+    signals = trace_digest.trace_signals(_trace(spans))
+    loop = [s for s in signals if s.startswith("loop:bash:4")]
+    assert loop, signals
+    assert "ls -la /tmp" in loop[0]
+
+
+def test_digest_loop_line_contains_args_excerpt():
+    spans = [_tool_span(i, "bash", "ls -la /tmp", result="x") for i in range(4)]
+    digest = trace_digest.build_digest(_trace(spans))
+    lines = [
+        ln
+        for ln in digest.splitlines()
+        if "loop" in ln.lower() and "bash" in ln
+    ]
+    assert lines, digest
+    assert "ls -la /tmp" in lines[0]
