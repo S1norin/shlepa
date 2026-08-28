@@ -251,6 +251,57 @@ def _llm_span_no_usage():
     )
 
 
+def test_export_batch_applies_since_window(tmp_path):
+    # batch id 20260828-000000-abc123 -> batch start 2026-08-28 00:00:00Z
+    batch_start_ms = 1_787_875_200_000
+    old = _Trace(
+        "tr-old",
+        [_agent_span("20260828-000000-abc123", "task-a")],
+        tags={"service.name": "shlepa-agent"},
+        request_time=batch_start_ms - 30 * 86_400_000,
+    )
+    fresh = _Trace(
+        "tr-fresh",
+        [_agent_span("20260828-000000-abc123", "task-a")],
+        tags={"service.name": "shlepa-agent"},
+        request_time=batch_start_ms + 1_000,
+    )
+    client = _FakeClient([old, fresh])
+    out = tmp_path / "e"
+    trace_export.export_batch(
+        client, _settings(), "20260828-000000-abc123", out
+    )
+    lines = (out / "manifest.jsonl").read_text().strip().splitlines()
+    assert len(lines) == 1
+    assert "tr-fresh" in lines[0]
+
+
+def test_batch_since_ms_parsing():
+    # 2026-08-28 00:00:00Z - 5min margin
+    assert trace_export._batch_since_ms(
+        "20260828-000000-abc123"
+    ) == 1_787_875_200_000 - 300_000
+    assert trace_export._batch_since_ms("ad-hoc") is None
+    assert trace_export._batch_since_ms("20261399-000000-abc123") is None
+
+
+def test_export_batch_tolerates_ad_hoc_batch_id(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-x",
+                [_agent_span("ad-hoc", "task-a")],
+                tags={"service.name": "shlepa-agent"},
+                request_time=0,
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "ad-hoc", out)
+    lines = (out / "manifest.jsonl").read_text().strip().splitlines()
+    assert len(lines) == 1
+
+
 def test_manifest_carries_tokens_missing_signal(tmp_path):
     client = _FakeClient(
         [

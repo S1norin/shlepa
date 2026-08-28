@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,10 +54,37 @@ def _spans(trace) -> list:
     return getattr(getattr(trace, "data", None), "spans", None) or []
 
 
-def find_batch_traces(client, settings, batch_id: str, limit: int = 200):
+# Batch ids embed their UTC start time: YYYYMMDD-HHMMSS-<6 hex>.
+_BATCH_ID_RE = re.compile(r"(\d{8})-(\d{6})-[0-9a-f]{6}")
+
+
+def _batch_since_ms(batch_id: str, margin_min: int = 5) -> int | None:
+    """Batch start (embedded in the batch id) minus a safety margin, ms.
+
+    None for ids not in the generated format (ad-hoc ids): the export
+    then falls back to the unfiltered search.
+    """
+    m = _BATCH_ID_RE.fullmatch(batch_id)
+    if m is None:
+        return None
+    date = m.group(1)
+    clock = m.group(2)
+    try:
+        start = datetime(
+            int(date[0:4]), int(date[4:6]), int(date[6:8]),
+            int(clock[0:2]), int(clock[2:4]), int(clock[4:6]),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:  # e.g. month 13
+        return None
+    return int(start.timestamp() * 1000) - margin_min * 60_000
+
+
+def find_batch_traces(client, settings, batch_id: str, limit: int = 500):
     """Return the raw Trace objects of one batch in the trace experiment.
 
-    Candidate filtering: trace-level service.name tag, then a
+    Candidate filtering: trace-level service.name tag, an age window
+    derived from the batch id's embedded timestamp, then a
     shlepa.batch_id match at trace-tag level (fast path) or span level.
     Never raises: any client/server problem yields an empty list.
     """
@@ -65,14 +93,18 @@ def find_batch_traces(client, settings, batch_id: str, limit: int = 200):
         if exp_id is None:
             return []
         return _find_batch_traces_inner(
-            client, exp_id, batch_id, limit
+            client, exp_id, batch_id, _batch_since_ms(batch_id), limit
         )
     except Exception:  # noqa: BLE001 - export must not crash the caller
         return []
 
 
 def _find_batch_traces_inner(
-    client, exp_id: str, batch_id: str, limit: int
+    client,
+    exp_id: str,
+    batch_id: str,
+    since_ms: int | None,
+    limit: int,
 ) -> list:
     found: list = []
     with warnings.catch_warnings():
@@ -86,6 +118,10 @@ def _find_batch_traces_inner(
         info = trace.info
         tags = getattr(info, "tags", None) or {}
         if tags.get("service.name") != AGENT_SERVICE:
+            continue
+        if since_ms is not None and (
+            getattr(info, "request_time", None) or 0
+        ) < since_ms:
             continue
         if tags.get("shlepa.batch_id") == batch_id:
             found.append(trace)
