@@ -88,6 +88,18 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
             file=sys.stderr,
         )
         return 1
+    except Exception as exc:  # noqa: BLE001 - stamp the reason, re-raise
+        # Crash: stamp the root span with the exception class so the
+        # exported trace carries the same 'crash:<Exc>' reason that ends
+        # up in result.json, then re-raise for a non-zero exit.
+        if otel:
+            try:
+                from shlepa_agent.telemetry import mark_termination
+
+                mark_termination(f"crash:{type(exc).__name__}")
+            except Exception:  # telemetry must never break the run
+                pass
+        raise
     usage = result.usage
     metrics = {
         "final_output": str(result.output),
@@ -198,6 +210,18 @@ def _has_metrics_marker(stderr: str) -> bool:
     )
 
 
+class AgentCrashError(RuntimeError):
+    """The agent container exited non-zero without a metrics marker.
+
+    Carries the exit code so the engine can tell an OOM kill (137) from
+    a plain crash.
+    """
+
+    def __init__(self, message: str, returncode: int | None = None):
+        super().__init__(message)
+        self.returncode = returncode
+
+
 def run_agent_in_container(
     docker,
     container: str,
@@ -224,7 +248,10 @@ def run_agent_in_container(
     metrics = parse_agent_metrics(proc.stderr or "")
     if proc.returncode != 0 and not _has_metrics_marker(proc.stderr or ""):
         tail = (proc.stderr or proc.stdout or "")[-1000:]
-        raise RuntimeError(f"agent exited with code {proc.returncode}: {tail}")
+        raise AgentCrashError(
+            f"agent exited with code {proc.returncode}: {tail}",
+            returncode=proc.returncode,
+        )
     return AgentRun(
         final_output=metrics["final_output"] or (proc.stdout or "").strip(),
         tokens_in=metrics["tokens_in"],

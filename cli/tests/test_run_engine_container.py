@@ -194,6 +194,18 @@ def test_container_agent_crash_reports_crash(tmp_path: Path):
     assert data["termination"] == "crash"
 
 
+def test_container_oom_killed_reports_oom(tmp_path: Path):
+    fake = FakeDocker(reward=None, agent_rc=137, agent_stderr="Killed")
+    task = _repo(tmp_path)
+    result = run_engine.run_task(
+        task, _settings(tmp_path), model="m", no_docker=False, docker_client=fake
+    )
+    assert not result.ok
+    assert result.termination == "oom"
+    data = json.loads((result.workspace / "result.json").read_text())
+    assert data["termination"] == "oom"
+
+
 def test_container_faithful_solved(tmp_path: Path):
     fake = FakeDocker(reward="1")
     task = _repo(tmp_path)

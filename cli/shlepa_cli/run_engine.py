@@ -544,6 +544,23 @@ def _score_container_faithful(
     return content == "1", detail
 
 
+def _classify_termination(exc: Exception) -> str:
+    """Map a run exception to a termination reason.
+
+    'exec_timeout' for docker exec hard timeouts, 'oom' for OOM-killed
+    containers (exit 137 / signal 9), 'crash' for everything else.
+    """
+    if "timeout" in type(exc).__name__.lower():
+        # The docker exec hard timeout (agent timeout + 120s buffer)
+        # fired; the in-container wait_for did not.
+        return "exec_timeout"
+    if getattr(exc, "returncode", None) in (137, -9):
+        # docker exec reports the container's exit code; 137 = SIGKILL,
+        # the usual OOM-kill signature.
+        return "oom"
+    return "crash"
+
+
 def _agent_env(
     settings: Settings,
     model: str | None,
@@ -641,12 +658,9 @@ def run_task(
             solved, score_detail = _score_no_docker(task, workspace)
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
-            if "timeout" in type(exc).__name__.lower():
-                agent_run = AgentRun(
-                    "", 0, 0, 0, termination="exec_timeout"
-                )
-            else:
-                agent_run = AgentRun("", 0, 0, 0, termination="crash")
+            agent_run = AgentRun(
+                "", 0, 0, 0, termination=_classify_termination(exc)
+            )
     else:
         from shlepa_cli import dev_env
         from shlepa_cli.docker_client import Mount
@@ -696,16 +710,9 @@ def run_task(
                 pass
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
-            if "timeout" in type(exc).__name__.lower():
-                # The docker exec hard timeout (agent timeout + 120s
-                # buffer) fired; the in-container wait_for did not.
-                agent_run = AgentRun(
-                    "", 0, 0, 0, termination="exec_timeout"
-                )
-            else:
-                # Crash: the agent died without a metrics marker
-                # (run_agent_in_container raises) or the build/run failed.
-                agent_run = AgentRun("", 0, 0, 0, termination="crash")
+            agent_run = AgentRun(
+                "", 0, 0, 0, termination=_classify_termination(exc)
+            )
         finally:
             if container is not None:
                 try:
