@@ -1,0 +1,4 @@
+name: socbench
+tasks:
+  - bench-soc-scanner-fp
+  - bench-soc-ntds-vss

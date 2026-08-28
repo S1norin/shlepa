@@ -30,6 +30,30 @@ Structured-output scoring over the JSON report (5 dimensions); verdict
 precision matters — false positives are an explicit category (benign
 anomaly handling is scored, not ignored).
 
+## Vendored into this repo
+
+Adapted on 2026-08-28 (upstream @ `4d96147`, MIT). Per the recommendation
+below, two scenarios were mined — one easy, one hard — covering the two
+verdict classes that exist in the v1 data (the index holds 45 scenarios: 39
+`TRUE_POSITIVE_INCIDENT`, 6 `FALSE_POSITIVE_AUTHORIZED_PENTEST`, no
+`BENIGN_ANOMALY` scenario yet; the repo advertises 55):
+
+| task | scenario | difficulty (upstream label) | graded report fields |
+|------|----------|-----------------------------|----------------------|
+| `bench-soc-scanner-fp` | SCN-029 — port sweep from the pentest VLAN (Zeek conn log + change-management context) | easy | verdict, flagged source IP, within-approved-window flag |
+| `bench-soc-ntds-vss` | SCN-012 — NTDS.dit via volume shadow copy on DC01 (event logs + background noise) | hard | verdict, MITRE technique, exact host/account attribution, evidence-verbatim IOCs |
+
+Adaptation decisions (see `tasks/README.md`, SOCBench subset section):
+- telemetry becomes static JSONL fixtures in `environment/evidence/`;
+  upstream answer-key fields (`ground_truth_label`, `analyst_note`) stripped,
+  matching how the upstream harness builds its prompt;
+- the LLM judge is replaced by a deterministic field-by-field grader
+  (`tests/report_grader.py`) over a strict JSON report at `/app/report.json`,
+  using the upstream verdict taxonomy;
+- upstream `background_noise` is kept as context for the hard task (the
+  upstream harness excludes it from the prompt; including it adds realistic
+  correlation work without changing the answer).
+
 ## Fit for Shlepa
 - **Overlap:** **closest match to `contest-incident-log-forensics`**
   (log correlation → attribution/impact → remediation). Our forensics task
