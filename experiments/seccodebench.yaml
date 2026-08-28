@@ -2,5 +2,6 @@ name: seccodebench
 tasks:
   - bench-seccodebench-cwe89
   - bench-seccodebench-cwe89-sqlite3
+  - bench-seccodebench-cwe94
   - bench-seccodebench-cwe78
   - bench-seccodebench-cwe1336

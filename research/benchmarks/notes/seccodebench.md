@@ -44,7 +44,7 @@ the vulnerability is absent. No LLM judge.
 
 ## Adapted into Harbor tasks (2026-08-27, tag `v2.2.0`)
 
-Four **fix-mode** Python scenarios vendored from
+Five **fix-mode** Python scenarios vendored from
 `alibaba/sec-code-bench` @ tag `v2.2.0` (commit `67126ef`, Apache-2.0)
 into `tasks/bench-seccodebench-*`, per `docs/tasks.md`. Each task keeps a
 byte-identical `upstream/` audit copy of the scenario plus the upstream
@@ -56,6 +56,7 @@ first, then security-PoC pytest; reward `1` only when **both** pass
 |---|---|---|
 | `bench-seccodebench-cwe89` | `SQLInjectionPsycopg2` | CWE-89 (SQL injection) |
 | `bench-seccodebench-cwe89-sqlite3` | `SQLInjectionSQLite3` | CWE-89 (SQL injection, stdlib sqlite3) |
+| `bench-seccodebench-cwe94` | `CodeInjectionEval` | CWE-94 (code injection via `eval`) |
 | `bench-seccodebench-cwe78` | `CommandInjectionSubprocessRun` | CWE-78 (OS command injection) |
 | `bench-seccodebench-cwe1336` | `SSTIJinja2Template` | CWE-1336 (server-side template injection) |
 
