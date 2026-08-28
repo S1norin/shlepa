@@ -105,6 +105,37 @@ The `task` attribute comes from the agent's `agent.run` root span, which
 reads `SLEPA_TASK_SLUG` (set by the dev run engine); ad-hoc runs without a
 task slug get `task=dev-run`.
 
+## Export a batch for LLM analysis (`shlepa trace-export`)
+
+`shlepa run` prints a batch id (`<UTC>-<random>`); the same id tags the
+MLflow runs (`batch_id`) and the agent traces (`shlepa.batch_id`). To get
+a batch's traces out of the durable MLflow backend:
+
+```bash
+uv run --project cli --no-sync shlepa trace-export --batch <batch-id>
+# -> tmp/trace-export/<batch-id>/
+#    manifest.jsonl  one line per task: task, trace_id, state, tokens, signals
+#    traces/<task>.json   full trace dump (spans, attributes, events, I/O)
+#    digests/<task>.md    compact timeline + failure signals
+#    summary.md           batch totals + aggregated signals
+```
+
+`--out <dir>` and `--experiment <name|id>` override the defaults
+(`SLEPA_TRACE_EXPERIMENT` or `shlepa-traces`). Non-zero exit with a clear
+message when the batch has no traces (async export lag or telemetry was
+off).
+
+Recommended workflow for a second (analysis) LLM:
+
+1. feed it `manifest.jsonl` + `digests/*.md` (cheap; one context each);
+2. for tasks flagged in the manifest (loop / tool_errors /
+   repeated_results signals, or state != OK) pull the full
+   `traces/<task>.json`.
+
+The digest's failure signals are computed over the exported spans:
+`loop:<tool>:<n>` (>=4 identical name+args calls in a 6-call rolling
+window), `tool_errors:<n>`, `repeated_results:<n>`.
+
 ## What spans carry
 
 pydantic-ai instrumentation emits spans with OpenAI Inference (`gen_ai.*`)

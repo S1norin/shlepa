@@ -81,18 +81,28 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 - Registered model **`shlepa`**: one version per submission
   (`shlepa zip --register`), artifacts = submission zip + full agent
   source tarball, tags `git_sha`/`model`.
-- Telemetry: the local collector stack in `otel/`
-  (`docker compose -f otel/docker-compose.yml up`); with
-  `SLEPA_OTEL_ENABLED=1` every agent trace is dual-exported: Jaeger
-  (UI :16686, local debugging) **and** the remote MLflow server
+- Telemetry data flow: `SLEPA_OTEL_ENABLED=1` makes every agent run
+  export its spans via OTLP to the local collector in `otel/`
+  (`docker compose -f otel/docker-compose.yml up`), which dual-exports:
+  Jaeger (UI :16686, local debugging) **and** the remote MLflow server
   (OTLP/HTTP `POST /v1/traces`, durable) into the trace experiment
-  **`shlepa-traces`** (credentials live in gitignored `otel/.env`, never
-  in the agent). `otel/check_trace.py` verifies either backend
+  **`shlepa-traces`**. Credentials live in gitignored `otel/.env`, never
+  in the agent. `otel/check_trace.py` verifies either backend
   (`--backend jaeger|mlflow`); `shlepa doctor` probes MLflow OTLP
-  ingestion when telemetry is on. `shlepa run` tags its MLflow runs with
-  `batch_id` + `mlflow_trace_id`; `shlepa trace-export --batch <id>`
-  exports a batch's traces as manifest/JSON/digests for offline LLM
-  analysis (see `otel/README.md`).
+  ingestion when telemetry is on.
+- Run ↔ trace correlation: `shlepa run` prints a `batch` id and tags its
+  MLflow runs with `batch_id` + `mlflow_trace_id`; the agent's root span
+  carries `shlepa.batch_id`/`shlepa.preset`/`git.commit`/`task` and, when
+  the run doesn't finish cleanly, `shlepa.termination_reason`
+  (`timeout`/`crash`).
+- Second-LLM analysis workflow: `shlepa trace-export --batch <id>` writes
+  `manifest.jsonl` (one line per task: state, tokens, signal tags),
+  per-task `traces/<task>.json` (full dump) and `digests/<task>.md`
+  (compact timeline + failure signals), plus `summary.md`. Feed the
+  analysis LLM the **manifest + digests first** (cheap, one context each);
+  pull the full `traces/<task>.json` only for tasks flagged in the
+  manifest (loop / tool_errors / repeated_results signals, or state !=
+  OK). Details in `otel/README.md`.
 
 ## CI secrets (GitHub Actions)
 
