@@ -1,0 +1,36 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/soc-ntds-vss"
+description = "Triage a domain-controller process anomaly: attribute NTDS.dit extraction via volume shadow copy."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "bench", "forensics", "soc", "log-analysis"]
+source = "Abhiro0p/SOCBench"
+url = "https://github.com/Abhiro0p/SOCBench/blob/main/benchmark/scenarios/scn_012.json"
+synced_at = "2026-08-28"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

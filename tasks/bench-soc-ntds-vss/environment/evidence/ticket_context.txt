@@ -1,0 +1,18 @@
+SOC ticket AL-3318 (opened 2026-04-15 09:10 UTC)
+
+Alert: `dc-process-anomaly`
+  Process-creation behaviour on DC01.corp.local deviated from the
+  baseline around 09:00-09:10 UTC on 2026-04-15. The exported telemetry
+  for the surrounding window (08:00-11:00 UTC) is attached.
+
+Artifacts in /app/evidence/:
+  windows_event_logs.jsonl   - Windows Event Log export for the window
+                               (one JSON object per event; includes
+                               process, logon, and object-access events
+                               from multiple hosts).
+  background_activity.jsonl  - routine background activity feed (DNS
+                               queries, AV scans, Windows Update, etc.)
+                               for the same window, for context.
+
+Investigate and produce the structured report described in the task
+instructions.

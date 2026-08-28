@@ -1,0 +1,464 @@
+{
+  "scenario_id": "SCN-012",
+  "title": "NTDS.dit extraction via Volume Shadow Copy on domain controller",
+  "description": "Scenario 12: NTDS.dit extraction via Volume Shadow Copy on domain controller. Generated from template TMPL-CRED-002.",
+  "soc_tier": "tier3",
+  "difficulty": "hard",
+  "attack_duration_minutes": 15,
+  "dwell_time_minutes": 3556,
+  "mitre_techniques": [
+    "T1003.003"
+  ],
+  "primary_skills_tested": [
+    "LA-01",
+    "LA-02",
+    "EC-01",
+    "HG-04"
+  ],
+  "log_sources_present": [
+    "windows_event_logs",
+    "sysmon"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-MKT-18",
+    "victim_user": "j.doe",
+    "seed": 54
+  },
+  "telemetry": {
+    "windows_event_logs": [
+      {
+        "timestamp": "2026-04-15T09:02:15.000Z",
+        "host": "DC01",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\vssadmin.exe",
+          "CommandLine": "vssadmin create shadow /for=C:",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "VSS shadow copy on DC \u2014 prerequisite for NTDS.dit theft."
+      },
+      {
+        "timestamp": "2026-04-15T09:04:28.000Z",
+        "host": "DC01",
+        "event_id": 4663,
+        "description": "Object Access",
+        "fields": {
+          "ObjectName": "\\Device\\HarddiskVolumeShadowCopy1\\Windows\\NTDS\\NTDS.dit",
+          "AccessList": "%%4416",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Direct read of NTDS.dit via VSS."
+      },
+      {
+        "timestamp": "2026-04-15T09:08:42.000Z",
+        "host": "WS-FIN-19",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "s.garcia",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:38:12.000Z",
+        "host": "WS-IT-07",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "t.nguyen",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:58:26.000Z",
+        "host": "WS-MKT-20",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "l.martin",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:01:22.000Z",
+        "host": "WS-MKT-09",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "j.doe",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:17:44.000Z",
+        "host": "WS-FIN-09",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "k.brown",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:41:46.000Z",
+        "host": "WS-HR-12",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "j.smith",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-15T11:22:08.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:39:39.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:28:43.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:06:01.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:48:08.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:18:53.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:17:58.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:56:23.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:27:07.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:00:56.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:37:51.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:48:02.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:11:58.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:21:01.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:31:17.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T11:13:36.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:48:13.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:44:21.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:46:18.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:18:14.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:31:16.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:46:11.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:20:26.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:13:11.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:17:17.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:20:36.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:15:03.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:26:39.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:16:14.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:11:24.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T11:49:58.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:13:23.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:44:15.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:41:48.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:05:15.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:02:44.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:08:57.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:12:05.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:16:25.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1003.003: NTDS.dit extraction via Volume Shadow Copy on domain controller"
+    ],
+    "compromised_accounts": [
+      "j.doe@corp.local"
+    ],
+    "compromised_hosts": [
+      "DC01"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1003.003"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
