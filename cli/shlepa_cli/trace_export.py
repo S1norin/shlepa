@@ -19,10 +19,10 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
+from shlepa_cli import mlflow_compat as compat
 from shlepa_cli import trace_digest
 from shlepa_cli.run_engine import (
     AGENT_SERVICE,
@@ -107,13 +107,7 @@ def _find_batch_traces_inner(
     limit: int,
 ) -> list:
     found: list = []
-    with warnings.catch_warnings():
-        # experiment_ids is deprecated in favor of locations, but the
-        # locations form hangs on the current MLflow server.
-        warnings.simplefilter("ignore", FutureWarning)
-        paged = client.search_traces(
-            experiment_ids=[exp_id], max_results=limit
-        )
+    paged = compat.search_experiment_traces(client, exp_id, limit)
     for trace in paged:
         info = trace.info
         tags = getattr(info, "tags", None) or {}

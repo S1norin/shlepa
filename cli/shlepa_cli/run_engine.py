@@ -20,11 +20,11 @@ import secrets
 import subprocess
 import sys
 import time
-import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from shlepa_cli import mlflow_compat as compat
 from shlepa_cli.config import Settings
 from shlepa_cli.tasks import Task
 
@@ -194,13 +194,7 @@ def _find_batch_trace_inner(
     since_ms: int | None,
     max_results: int,
 ) -> str | None:
-    with warnings.catch_warnings():
-        # experiment_ids is deprecated in favor of locations, but the
-        # locations form hangs on the current MLflow server.
-        warnings.simplefilter("ignore", FutureWarning)
-        paged = client.search_traces(
-            experiment_ids=[exp_id], max_results=max_results
-        )
+    paged = compat.search_experiment_traces(client, exp_id, max_results)
     for trace in paged:  # PagedList is list-like; fakes may be plain lists
         info = trace.info
         tags = getattr(info, "tags", None) or {}
