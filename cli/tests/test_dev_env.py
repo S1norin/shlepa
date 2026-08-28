@@ -101,6 +101,7 @@ def test_parse_agent_metrics() -> None:
         "tokens_in": 5,
         "tokens_out": 7,
         "tool_calls": 2,
+        "termination": "ok",
     }
 
 
@@ -110,6 +111,7 @@ def test_parse_agent_metrics_missing_or_broken() -> None:
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "termination": "ok",
     }
     assert dev_env.parse_agent_metrics("no marker") == defaults
     assert dev_env.parse_agent_metrics("") == defaults
@@ -184,6 +186,22 @@ def test_run_agent_in_container_crash_raises() -> None:
         assert "boom" in str(exc)
 
 
+def test_run_agent_in_container_crash_carries_returncode() -> None:
+    fake = _ExecFakeDocker(rc=137, stdout="", stderr="Killed")
+    try:
+        dev_env.run_agent_in_container(fake, "c", "p", {})
+        raise AssertionError("expected AgentCrashError")
+    except dev_env.AgentCrashError as exc:
+        assert exc.returncode == 137
+        assert "exited with code 137" in str(exc)
+
+
+def test_dev_run_marks_crash_reason_on_root_span() -> None:
+    # a crash (any non-timeout exception) must stamp the root span with
+    # the exception class, not a bare 'crash'
+    assert 'mark_termination(f"crash:{type(exc).__name__}")' in dev_env.DEV_RUN_SOURCE
+
+
 def test_run_agent_in_container_marker_rescues_nonzero_exit() -> None:
     marker = (
         'SLEPA_AGENT_METRICS_JSON='
@@ -200,3 +218,51 @@ def test_run_agent_in_container_ok_without_marker_uses_stdout() -> None:
     run = dev_env.run_agent_in_container(fake, "c", "p", {})
     assert run.final_output == "answer line"
     assert (run.tokens_in, run.tokens_out, run.tool_calls) == (0, 0, 0)
+
+
+def test_parse_agent_metrics_reports_termination() -> None:
+    timeout_marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "", "tokens_in": 0, "tokens_out": 0, '
+        '"tool_calls": 0, "termination": "timeout"}\n'
+    )
+    assert dev_env.parse_agent_metrics(
+        timeout_marker
+    )["termination"] == "timeout"
+    assert dev_env.parse_agent_metrics("") == {
+        "final_output": "",
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "tool_calls": 0,
+        "termination": "ok",
+    }
+
+
+def test_run_agent_in_container_reports_timeout_termination() -> None:
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "", "tokens_in": 0, "tokens_out": 0, '
+        '"tool_calls": 0, "termination": "timeout"}\n'
+    )
+    fake = _ExecFakeDocker(rc=1, stderr="agent timed out after 5s\n" + marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {}, timeout_sec=5)
+    assert run.termination == "timeout"
+    assert run.final_output == ""
+
+
+def test_run_agent_in_container_success_termination_is_ok() -> None:
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "done", "tokens_in": 1, "tokens_out": 1, '
+        '"tool_calls": 0}\n'
+    )
+    fake = _ExecFakeDocker(rc=0, stderr=marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {})
+    assert run.termination == "ok"
+
+
+def test_dev_run_source_marks_internal_timeout() -> None:
+    # The baked entrypoint must report its own wait_for expiry with a
+    # termination=timeout marker (the e2e pass verifies it live).
+    assert '"termination": "timeout"' in dev_env.DEV_RUN_SOURCE
+    assert '"termination": "ok"' in dev_env.DEV_RUN_SOURCE

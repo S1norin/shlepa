@@ -53,7 +53,7 @@ def test_run_doctor_probe_flag():
         server.shutdown()
         server.server_close()
     assert probe_info is not None and probe_info.startswith("ok")
-    assert len(results) == 4
+    assert len(results) == 5
 
     results, probe_info = doctor.run_doctor(_settings(url, "stub-model"))
     assert probe_info is None

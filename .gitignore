@@ -17,9 +17,10 @@ mlruns/
 tmp/*
 !tmp/README.md
 
-# pi tooling (local tool output / schedule state, not part of the repo)
+# pi tooling (local tool output / schedule state / local packages, not part of the repo)
 .pi/quiet-tools/
 .pi/schedule-prompts.json
+.pi/npm/
 
 # editor / OS
 .DS_Store

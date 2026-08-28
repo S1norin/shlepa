@@ -25,7 +25,8 @@ files, code, comments, docs and commit messages are in English**.
 | command | what it does |
 |---------|--------------|
 | `shlepa doctor [--probe]` | hard env checks (LLM endpoint + model match, MLflow, docker); `--probe` sends one real LLM request. Exit 0/1/2. |
-| `shlepa run [preset] [--dry-run]` | dev experiment loop: per task build env+dev images, run the agent **inside** the container (`/app`, `--network host`), score via `tests/test.sh` → `reward.txt`, log to MLflow. `SLEPA_NO_DOCKER=1` switches to the legacy host-agent mode. |
+| `shlepa run [preset] [--dry-run]` | dev experiment loop: per task build env+dev images, run the agent **inside** the container (`/app`, `--network host`), score via `tests/test.sh` → `reward.txt`, log to MLflow (runs tagged `batch_id`/`mlflow_trace_id` when telemetry is on). `SLEPA_NO_DOCKER=1` switches to the legacy host-agent mode. |
+| `shlepa trace-export --batch <id>` | export a batch's agent traces from the MLflow trace experiment: `manifest.jsonl`, per-task trace JSON + Markdown digests, `summary.md` (LLM-readable failure analysis). |
 | `shlepa smoke` | fail-fast end-to-end check: doctor → `contest-hello-file` → MLflow run exists. Exit 0/1. |
 | `shlepa submit-test [--ci]` | strict contest-faithful test via Harbor inside the acp container (planned in CI). |
 | `shlepa zip [--register]` | build the flat submission zip (telemetry/tests/pyproject stripped, ≤10MB); `--register` logs it + full source tarball to MLflow and creates a `shlepa` model version. |
@@ -80,11 +81,28 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 - Registered model **`shlepa`**: one version per submission
   (`shlepa zip --register`), artifacts = submission zip + full agent
   source tarball, tags `git_sha`/`model`.
-- Telemetry: the local collector+Jaeger stack in `otel/`
-  (`docker compose -f otel/docker-compose.yml up`); spans land in
-  Jaeger as service `shlepa-agent`. **MLflow OTLP ingestion is pending**
-  (remote server has no OTLP endpoint yet) — cutover will be a one-line
-  `.env` change.
+- Telemetry data flow: `SLEPA_OTEL_ENABLED=1` makes every agent run
+  export its spans via OTLP to the local collector in `otel/`
+  (`docker compose -f otel/docker-compose.yml up`), which dual-exports:
+  Jaeger (UI :16686, local debugging) **and** the remote MLflow server
+  (OTLP/HTTP `POST /v1/traces`, durable) into the trace experiment
+  **`shlepa-traces`**. Credentials live in gitignored `otel/.env`, never
+  in the agent. `otel/check_trace.py` verifies either backend
+  (`--backend jaeger|mlflow`); `shlepa doctor` probes MLflow OTLP
+  ingestion when telemetry is on.
+- Run ↔ trace correlation: `shlepa run` prints a `batch` id and tags its
+  MLflow runs with `batch_id` + `mlflow_trace_id`; the agent's root span
+  carries `shlepa.batch_id`/`shlepa.preset`/`git.commit`/`task` and, when
+  the run doesn't finish cleanly, `shlepa.termination_reason`
+  (`timeout`/`crash`).
+- Second-LLM analysis workflow: `shlepa trace-export --batch <id>` writes
+  `manifest.jsonl` (one line per task: state, tokens, signal tags),
+  per-task `traces/<task>.json` (full dump) and `digests/<task>.md`
+  (compact timeline + failure signals), plus `summary.md`. Feed the
+  analysis LLM the **manifest + digests first** (cheap, one context each);
+  pull the full `traces/<task>.json` only for tasks flagged in the
+  manifest (loop / tool_errors / repeated_results signals, or state !=
+  OK). Details in `otel/README.md`.
 
 ## CI secrets (GitHub Actions)
 

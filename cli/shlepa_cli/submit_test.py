@@ -307,9 +307,12 @@ def log_trials_to_mlflow(
             "harbor_status": trial.status,
             "git_sha": _git_short_sha(settings.repo_root),
         }
-        run = client.create_run(
-            experiment_id=experiment_id, run_name=trial.task_name, tags=tags
-        )
+        from shlepa_cli.mlflow_client import masked_client_stdout
+
+        with masked_client_stdout():  # the client prints a View-run URL
+            run = client.create_run(
+                experiment_id=experiment_id, run_name=trial.task_name, tags=tags
+            )
         run_id = run.info.run_id
         client.log_metric(run_id, "solved", 1.0 if trial.status == "solved" else 0.0)
         if trial.reward is not None:

@@ -1,0 +1,198 @@
+{
+  "span_id": "2c6d3bad84b53827",
+  "parent_id": "ab6cbe4443a2a8bc",
+  "name": "chat Qwen3.8-27B-UD-IQ4_XS-MTP",
+  "span_type": "LLM",
+  "model_name": "Qwen3.8-27B-UD-IQ4_XS-MTP",
+  "status": "SpanStatus(status_code=<SpanStatusCode.OK: 'OK'>, description='')",
+  "start_time_ns": 1787876316163797162,
+  "end_time_ns": 1787876329931841253,
+  "attributes": {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.provider.name": "openai",
+    "gen_ai.system": "openai",
+    "gen_ai.request.model": "Qwen3.8-27B-UD-IQ4_XS-MTP",
+    "server.address": "100.98.79.56",
+    "server.port": 9999,
+    "gen_ai.agent.name": "agent",
+    "gen_ai.agent.call.id": "01a045bb-93ff-7496-848d-41e58ebe145b",
+    "gen_ai.conversation.id": "01a045bb-93ff-7496-848d-41e4b827d471",
+    "gen_ai.input.messages": [
+      {
+        "role": "system",
+        "parts": [
+          {
+            "type": "text",
+            "content": "You are a non-interactive coding agent. Complete the user's request autonomously. Use tools to inspect files, run commands, and apply focused diffs. Work in concise steps and explain what you changed in the final response."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "content": "Create a file at `/app/hello.txt` whose entire content is exactly the single word `Hello` (no trailing newline required, but the file must contain only those five characters).\n"
+          }
+        ]
+      }
+    ],
+    "gen_ai.output.messages": [
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "thinking",
+            "content": "The user is asking to create a file at `/app/hello.txt` with content that is exactly \"Hello\" (5 characters, no newline). Let's do that.\n\nShould I use the apply_diff tool? Actually, for file creation, apply_diff can create a new file. Or maybe a bash command like `printf 'Hello' > /app/hello.txt` would be better. The simplest way is using bash with printf to avoid the trailing newline.\n\nLet's check whether /app exists.\n"
+          },
+          {
+            "type": "tool_call",
+            "id": "xt6A2Lt7faQEOnSBksad8kkUY1d3oT8L",
+            "name": "bash",
+            "arguments": "{\"command\":\"mkdir -p /app && printf 'Hello' > /app/hello.txt && wc -c /app/hello.txt && od -c /app/hello.txt\"}"
+          }
+        ],
+        "finish_reason": "tool_call"
+      }
+    ],
+    "logfire.json_schema": {
+      "type": "object",
+      "properties": {
+        "gen_ai.input.messages": {
+          "type": "array"
+        },
+        "gen_ai.output.messages": {
+          "type": "array"
+        },
+        "model_request_parameters": {
+          "type": "object"
+        }
+      }
+    },
+    "gen_ai.usage.input_tokens": 581,
+    "gen_ai.usage.output_tokens": 165,
+    "gen_ai.usage.cache_read.input_tokens": 353,
+    "gen_ai.usage.details.cache_read_tokens": 353,
+    "gen_ai.response.model": "Qwen3.8-27B-UD-IQ4_XS-MTP",
+    "gen_ai.response.id": "chatcmpl-JN1gLLYIb3tgboVhSIUR82UKdluATFkI",
+    "gen_ai.response.finish_reasons": [
+      "tool_call"
+    ],
+    "openinference.span.kind": "LLM",
+    "llm.model_name": "Qwen3.8-27B-UD-IQ4_XS-MTP",
+    "llm.finish_reason": "tool_call",
+    "llm.provider": "openai",
+    "llm.system": "openai",
+    "llm.token_count.prompt": 581,
+    "llm.token_count.completion": 165,
+    "llm.token_count.total": 746,
+    "session.id": "01a045bb-93ff-7496-848d-41e4b827d471",
+    "llm.tools.0.tool.name": "bash",
+    "llm.tools.0.tool.json_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "llm.tools.1.tool.name": "read_file",
+    "llm.tools.1.tool.json_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "llm.tools.2.tool.name": "apply_diff",
+    "llm.tools.2.tool.json_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "diff_content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "diff_content"
+      ],
+      "type": "object"
+    },
+    "llm.tools.3.tool.name": "append_file",
+    "llm.tools.3.tool.json_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    },
+    "llm.input_messages.0.message.contents.0.message_content.text": "You are a non-interactive coding agent. Complete the user's request autonomously. Use tools to inspect files, run commands, and apply focused diffs. Work in concise steps and explain what you changed in the final response.",
+    "llm.input_messages.0.message.contents.0.message_content.type": "text",
+    "llm.input_messages.0.message.role": "system",
+    "llm.input_messages.1.message.contents.0.message_content.text": "Create a file at `/app/hello.txt` whose entire content is exactly the single word `Hello` (no trailing newline required, but the file must contain only those five characters).\n",
+    "llm.input_messages.1.message.contents.0.message_content.type": "text",
+    "llm.input_messages.1.message.role": "user",
+    "input.value": "Create a file at `/app/hello.txt` whose entire content is exactly the single word `Hello` (no trailing newline required, but the file must contain only those five characters).\n",
+    "llm.output_messages.0.message.role": "assistant",
+    "llm.output_messages.0.message.tool_calls.1.tool_call.function.name": "bash",
+    "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments": {
+      "command": "mkdir -p /app && printf 'Hello' > /app/hello.txt && wc -c /app/hello.txt && od -c /app/hello.txt"
+    },
+    "llm.output_messages.0.message.tool_calls.1.tool_call.id": "xt6A2Lt7faQEOnSBksad8kkUY1d3oT8L",
+    "output.value": [
+      {
+        "id": "xt6A2Lt7faQEOnSBksad8kkUY1d3oT8L",
+        "name": "bash",
+        "arguments": "{\"command\":\"mkdir -p /app && printf 'Hello' > /app/hello.txt && wc -c /app/hello.txt && od -c /app/hello.txt\"}"
+      }
+    ],
+    "output.mime_type": "application/json",
+    "mlflow.traceRequestId": "tr-a5420d2da7b3141e457de448bfbc181e",
+    "mlflow.spanType": "LLM",
+    "mlflow.spanInputs": "Create a file at `/app/hello.txt` whose entire content is exactly the single word `Hello` (no trailing newline required, but the file must contain only those five characters).\n",
+    "mlflow.spanOutputs": [
+      {
+        "id": "xt6A2Lt7faQEOnSBksad8kkUY1d3oT8L",
+        "name": "bash",
+        "arguments": "{\"command\":\"mkdir -p /app && printf 'Hello' > /app/hello.txt && wc -c /app/hello.txt && od -c /app/hello.txt\"}"
+      }
+    ],
+    "mlflow.chat.tokenUsage": {
+      "input_tokens": 581,
+      "output_tokens": 165,
+      "total_tokens": 746
+    },
+    "mlflow.llm.model": "Qwen3.8-27B-UD-IQ4_XS-MTP",
+    "mlflow.llm.provider": "openai"
+  },
+  "events": [],
+  "inputs": "Create a file at `/app/hello.txt` whose entire content is exactly the single word `Hello` (no trailing newline required, but the file must contain only those five characters).\n",
+  "outputs": [
+    {
+      "id": "xt6A2Lt7faQEOnSBksad8kkUY1d3oT8L",
+      "name": "bash",
+      "arguments": "{\"command\":\"mkdir -p /app && printf 'Hello' > /app/hello.txt && wc -c /app/hello.txt && od -c /app/hello.txt\"}"
+    }
+  ]
+}

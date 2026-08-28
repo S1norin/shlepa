@@ -7,6 +7,7 @@ from mlflow.exceptions import MlflowException
 
 from shlepa_cli import zip_build
 from shlepa_cli.config import Settings
+from shlepa_cli.mlflow_client import masked_client_stdout
 
 MODEL_NAME = "shlepa"
 # Dedicated experiment for submission registrations; the remote MLflow
@@ -62,9 +63,10 @@ def register_submission(client, settings: Settings, zip_path: Path) -> str:
     make_agent_tarball(settings.repo_root, tar_path)
 
     experiment_id = _get_or_create_experiment(client, SUBMISSION_EXPERIMENT)
-    run = client.create_run(
-        experiment_id=experiment_id, run_name=f"submission-{zip_path.stem}"
-    )
+    with masked_client_stdout():  # the client prints a View-run URL
+        run = client.create_run(
+            experiment_id=experiment_id, run_name=f"submission-{zip_path.stem}"
+        )
     run_id = run.info.run_id
     try:
         client.log_artifact(run_id, str(zip_path))
