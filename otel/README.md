@@ -5,7 +5,7 @@ Local OpenTelemetry pipeline for `shlepa-agent` traces. The collector
 
 ```
 agent (OTLP) --> otelcol (localhost:4318 http / 4317 grpc)
-                   |---> Jaeger (UI :16686, local debugging, volume-backed)
+                   |---> Jaeger (UI :16686, local debugging, in-memory <= 100k traces)
                    +----> remote MLflow server (durable backend, OTLP/HTTP)
 ```
 
@@ -17,9 +17,8 @@ destination experiment live in `otel/.env` (gitignored; see
 
 ```bash
 docker compose -f otel/docker-compose.yml up -d      # start (pulls images first time)
-docker compose -f otel/docker-compose.yml down       # stop (volume keeps traces)
-docker compose -f otel/docker-compose.yml down -v    # stop + delete stored traces
-docker logs -f otelcol                               # watch received spans
+docker compose -f otel/docker-compose.yml down       # stop (Jaeger's local copies are lost)
+docker logs -f otel-otelcol-1                        # watch received spans
 ```
 
 | Port | Service |
@@ -29,8 +28,12 @@ docker logs -f otelcol                               # watch received spans
 | 127.0.0.1:16686 | Jaeger UI |
 | 127.0.0.1:13133 | Collector health endpoint (checked by `shlepa run` before a telemetry batch) |
 
-All ports are bound to localhost only. Jaeger stores traces in the
-`jaeger-traces` Docker volume, so they survive restarts.
+All ports are bound to localhost only. The pinned Jaeger v2 all-in-one
+(`jaegertracing/jaeger:2.9.0`) runs with its embedded default config:
+in-memory storage capped at 100,000 traces (oldest evicted first), so
+the local debug copy is bounded in RAM and never grows the disk; it is
+lost on restart. The durable copy lives in the remote MLflow
+experiment — treat Jaeger as a scratch pad, not a store.
 
 ## MLflow export configuration (`otel/.env`)
 

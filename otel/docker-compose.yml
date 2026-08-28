@@ -25,12 +25,11 @@ services:
     restart: unless-stopped
 
   jaeger:
+    # v2 all-in-one: embedded default config = in-memory storage capped
+    # at 100,000 traces; the local copy is a scratch pad, the durable
+    # copy is the remote MLflow experiment (see README).
     image: jaegertracing/jaeger:2.9.0
     ports:
       - "127.0.0.1:16686:16686"
-    volumes:
-      - jaeger-traces:/var/lib/jaeger
     restart: unless-stopped
 
-volumes:
-  jaeger-traces:

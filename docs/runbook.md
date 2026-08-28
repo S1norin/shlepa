@@ -143,10 +143,13 @@ but if the trace still does not show up, work through this checklist:
    Traces may still be in Jaeger even when the MLflow export fails.
 3. **Local copy?** `uv run --project cli python otel/check_trace.py
    --backend jaeger` — Jaeger is the other half of the dual export and
-   keeps a volume-backed copy.
+   keeps an in-memory copy (capped at 100k traces, lost on restart).
 4. **Async lag?** The collector exports to the remote server
    asynchronously; wait a minute and retry `shlepa trace-export
    --batch <id>`.
+5. **Jaeger restarted?** Jaeger v2 keeps its local copy in memory (capped
+   at 100k traces); a restart of the `jaeger` container wipes it. The
+   remote MLflow experiment is the durable copy.
 
 Note: a hard `exec_timeout` kills the container; most spans are already
 flushed (batch processor), and every span now carries `shlepa.batch_id`
