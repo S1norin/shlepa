@@ -160,5 +160,18 @@ Verified facts (2026-08):
   `x-mlflow-experiment-id` → 200, trace visible via `mlflow.search_traces`
 - the OTLP/gRPC path is **not** served (404); use OTLP/HTTP
 
+Body-size limits (checked 2026-08-28 from the dev machine):
+- a 10 MB dummy body to `POST /v1/traces` returns `400 Invalid
+  OpenTelemetry format` (i.e. it passes the reverse proxy and reaches
+  the MLflow app), so the proxy limit is comfortably above 10 MB;
+- a 30 MB body produced no `413` from the proxy (the upload simply did
+  not finish in time on the narrow VPS link) — no evidence of a limit
+  between 10 and 30 MB either.
+- TODO (on the VPS): confirm `client_max_body_size` >= 64 MB in nginx
+  (or equivalent in the reverse proxy) and record the exact value here;
+  see the corresponding backlog issue. A realistic batch of a single
+  task is far below this, but long multi-task runs with large tool
+  results can grow big.
+
 Retention: no archival policy is configured; archived span payloads keep
 tag filtering but lose full-text search.
