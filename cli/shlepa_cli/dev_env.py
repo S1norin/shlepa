@@ -64,7 +64,15 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
         )
     except asyncio.TimeoutError:
         # wait_for expired: report a termination=timeout marker so the
-        # engine can distinguish a clean timeout from a crash.
+        # engine can distinguish a clean timeout from a crash, and stamp
+        # the root span so the exported trace shows the same reason.
+        if otel:
+            try:
+                from shlepa_agent.telemetry import mark_termination
+
+                mark_termination("timeout")
+            except Exception:  # telemetry must never break the run
+                pass
         print(f"agent timed out after {timeout}s", file=sys.stderr)
         print(
             METRICS_MARKER

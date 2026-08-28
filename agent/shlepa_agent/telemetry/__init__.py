@@ -56,7 +56,32 @@ def root_span(provider: TracerProvider, task: str | None = None):
             value = os.environ.get(env_var)
             if value:
                 span.set_attribute(attr, value)
-        yield span
+        try:
+            yield span
+        except Exception:
+            # start_as_current_span records the ERROR status automatically;
+            # the reason attribute tells the digest builder WHY the run
+            # ended (crash vs. handled timeout).
+            span.set_attribute("shlepa.termination_reason", "crash")
+            raise
+
+
+def mark_termination(reason: str) -> None:
+    """Stamp the active span with ``shlepa.termination_reason`` + ERROR status.
+
+    Used by entrypoints that handle a termination themselves (e.g. the
+    in-container dev entrypoint catches asyncio.TimeoutError and exits
+    without raising), so the trace still reflects how the run ended.
+    No-op when there is no active recording span.
+    """
+    from opentelemetry import trace
+    from opentelemetry.trace import Status, StatusCode
+
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return
+    span.set_attribute("shlepa.termination_reason", reason)
+    span.set_status(Status(StatusCode.ERROR, reason))
 
 
 def configure(exporter: Any | None = None) -> TracerProvider:
