@@ -1,0 +1,5 @@
+{"timestamp": "2026-04-19T09:02:09.000Z", "host": "DC01", "event_id": 4688, "description": "Process Created", "fields": {"NewProcessName": "C:\\Windows\\System32\\vssadmin.exe", "CommandLine": "vssadmin create shadow /for=C:", "SubjectUserName": "l.martin"}}
+{"timestamp": "2026-04-19T09:04:13.000Z", "host": "DC01", "event_id": 4663, "description": "Object Access", "fields": {"ObjectName": "\\Device\\HarddiskVolumeShadowCopy1\\Windows\\NTDS\\NTDS.dit", "AccessList": "%%4416", "SubjectUserName": "l.martin"}}
+{"timestamp": "2026-04-19T10:03:53.000Z", "host": "WS-FIN-14", "event_id": 4648, "description": "Account Logon", "fields": {"TargetUserName": "a.patel", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T10:52:48.000Z", "host": "WS-MKT-01", "event_id": 4648, "description": "Account Logon", "fields": {"TargetUserName": "s.garcia", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T09:04:44.000Z", "host": "WS-MKT-12", "event_id": 4624, "description": "Account Logon", "fields": {"TargetUserName": "p.adams", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
