@@ -1,0 +1,415 @@
+{
+  "scenario_id": "SCN-036",
+  "title": "RDP lateral movement with pass-the-ticket",
+  "description": "Scenario 36: RDP lateral movement with pass-the-ticket. Generated from template TMPL-LAT-003.",
+  "soc_tier": "tier2",
+  "difficulty": "hard",
+  "attack_duration_minutes": 80,
+  "dwell_time_minutes": 58,
+  "mitre_techniques": [
+    "T1021.001",
+    "T1550.003"
+  ],
+  "primary_skills_tested": [
+    "LA-01",
+    "EC-02",
+    "HG-01"
+  ],
+  "log_sources_present": [
+    "windows_event_logs",
+    "zeek_conn"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-HR-10",
+    "victim_user": "r.chen",
+    "seed": 78
+  },
+  "telemetry": {
+    "windows_event_logs": [
+      {
+        "timestamp": "2026-04-15T09:05:20.000Z",
+        "host": "DB-SRV-01",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "r.chen",
+          "LogonType": "10",
+          "WorkstationName": "WS-HR-10",
+          "IpAddress": "10.10.3.236",
+          "AuthenticationPackageName": "Kerberos"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "LogonType 10 (RemoteInteractive) = RDP session."
+      },
+      {
+        "timestamp": "2026-04-15T09:12:28.000Z",
+        "host": "WS-IT-16",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "l.martin",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:02:10.000Z",
+        "host": "WS-IT-06",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "s.garcia",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:01:04.000Z",
+        "host": "WS-MKT-06",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "d.wilson",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:05:48.000Z",
+        "host": "WS-HR-07",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "t.nguyen",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:52:46.000Z",
+        "host": "WS-ENG-09",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "j.doe",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:52:53.000Z",
+        "host": "WS-MKT-03",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "l.martin",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:00:30.000Z",
+        "host": "WS-FIN-08",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "m.jones",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:14:07.000Z",
+        "host": "WS-IT-01",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "d.wilson",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      }
+    ],
+    "zeek_conn": [
+      {
+        "timestamp": "2026-04-15T09:05:10.000Z",
+        "src_ip": "10.10.9.150",
+        "dst_ip": "10.10.5.41",
+        "dst_port": 3389,
+        "proto": "tcp",
+        "duration": 2517.09,
+        "bytes_sent": 314259,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "RDP session \u2014 long duration, large data transfer."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-15T08:14:27.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:39:53.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:08:58.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:33:43.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T11:56:14.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:32:27.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:19:26.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:11:18.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:46:45.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:13:38.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T07:05:00.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:46:45.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:05:19.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:27:01.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:16:55.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T11:04:03.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:11:24.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:59:54.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:31:53.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:18:57.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:43:14.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T08:46:01.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:00:42.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T11:03:59.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T09:38:56.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:09:56.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T10:44:55.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-15T12:44:32.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1021.001: RDP lateral movement with pass-the-ticket",
+      "T1550.003: RDP lateral movement with pass-the-ticket"
+    ],
+    "compromised_accounts": [
+      "r.chen"
+    ],
+    "compromised_hosts": [
+      "DB-SRV-01"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1021.001"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+SOC ticket AL-3036 (opened 2026-04-15 09:15 UTC)
+
+Alert: `rdp-lateral-anomaly`
+  An interactive (RDP, LogonType 10) logon was flagged during the export window. The surrounding telemetry is attached.
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  windows_event_logs.jsonl     - Windows Event Log export for the window (one JSON object per event; process, logon, object-access, and script-block events from multiple hosts).
+  zeek_conn.jsonl              - Zeek connection log for the window (one JSON object per line).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.
