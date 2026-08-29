@@ -138,7 +138,11 @@ Recommended workflow for a second (analysis) LLM:
 
 The digest's failure signals are computed over the exported spans:
 `loop:<tool>:<n>` (>=4 identical name+args calls in a 6-call rolling
-window), `tool_errors:<n>`, `repeated_results:<n>`.
+window), `tool_errors:<n>`, `repeated_results:<n>`, `tokens_missing`
+(LLM spans with no usage attributes, e.g. an unfinished call),
+`no_thinking` (typed output messages captured, zero thinking parts) and
+`messages_missing` (no typed output messages at all; the two thinking
+signals are mutually exclusive — see "Reasoning capture" below).
 
 ## What spans carry
 
@@ -148,6 +152,52 @@ attributes: model name, token usage, prompt/completion content, tool calls
 `service.name=shlepa-agent`, `service.version=<agent version>`. MLflow runs
 created by `shlepa run` get a `trace_ref` tag pointing at this Jaeger when
 `SLEPA_OTEL_ENABLED=1`.
+
+## Reasoning capture (thinking parts)
+
+The dev endpoint (llama.cpp, Qwen3.8-27B on :11434) runs with
+`--reasoning on` and `--chat-template-kwargs {"preserve_thinking": true}`,
+so the model's reasoning stream comes back as OpenAI `reasoning_content`
+and the instrumentation records it as `type: "thinking"` parts inside the
+LLM span's `gen_ai.output.messages` attribute (next to `text` /
+`tool_call` parts).
+
+Where reasoning shows up:
+
+| Surface | What you see |
+|---|---|
+| `gen_ai.output.messages` on each LLM span (Jaeger span details, `traces/<task>.json` from trace-export) | typed parts incl. the full thinking content |
+| MLflow trace UI, span **Output** panel | `<thinking>...</thinking>` + the final answer — a dev-only exporter wrapper rewrites `output.value` / `mlflow.spanOutputs` before OTLP export (#40) |
+| `shlepa trace-export` | digest header line `thinking_parts: N` (or `n/a (no output messages)`); manifest signals `no_thinking` / `messages_missing` (#41) |
+
+Signals (mutually exclusive by design):
+
+- `no_thinking` — typed output messages **are** captured but contain
+  zero thinking parts: the endpoint/model did not reason (`--reasoning`
+  off, or a non-reasoning model).
+- `messages_missing` — the LLM spans carry no `gen_ai.output.messages`
+  at all (pre-capture-era traces, below): "no thinking" is unknowable,
+  so `no_thinking` is **not** emitted alongside it.
+
+Server-side requirement for new runs: the LLM endpoint must be started
+with `--reasoning on` and serve a reasoning-capable model; otherwise LLM
+spans carry zero thinking parts and the manifest gets `no_thinking`.
+
+Pre-v1 gap: the oldest traces (late 08-27 through the morning of 08-28,
+around the v1 core rollout on 2026-08-28 20:00 local, commit ab8a3ce)
+may carry **no** `gen_ai.output.messages` and **no** token usage
+attributes at all — those runs were tracked without reasoning (and
+without token counts); example
+`tr-229800636e040f92a39bb12855b268bf` (08-28 06:53 local). The digest
+shows `thinking_parts: n/a` and the manifest flags `messages_missing`.
+The gap is partial — some pre-rollout runs (e.g. the golden fixture span
+`cli/tests/fixtures/llm_span_real.json`, 08-28 07:18 local) already
+carry typed output messages — so the timestamp is **not** authoritative:
+trust the per-trace signals. Details:
+docs/known_issues/20260829-reasoning-capture.md.
+
+Related: #38 (family experiments) · #39 (run↔trace link) · #40 (span
+Output enrichment) · #41 (digest signals) · #42 (this documentation).
 
 ## Remote MLflow backend (live)
 
