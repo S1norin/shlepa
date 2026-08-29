@@ -42,52 +42,15 @@ from shlepa_agent.log import (
     _log_event,
     _log_stream_event,
 )
+from shlepa_agent.template import render_system, render_user
 from shlepa_agent.tools import AgentDeps, get_tools
 
-COMMIT_PROMPT = (
-    "\u26a0\ufe0f BUDGET EXHAUSTED. Stop exploring. Write the final deliverable NOW to the exact "
-    "path with the exact format using only the information you already have. If the deliverable "
-    "file already exists, verify it exactly once (re-read / jq / wc -l) and correct it if wrong. "
-    "Then finish with one short line. Use only the tools needed to write and verify the file."
-)
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
-SYSTEM_PROMPT = """You are an expert autonomous cybersecurity agent. You work alone in an isolated
-Linux container with no internet access. Task files live in the working directory (usually /app).
-Always use absolute paths.
 
-ENVIRONMENT
-- Tools: bash (killed after 120 seconds), read_file, write_file (writes exact full content, adds
-nothing, no trailing newline), append_file, apply_diff (unified diff).
-- Start any server with nohup, &, then verify it responds.
-
-PROTOCOL (follow strictly, in order)
-1. Read the task. Extract the exact deliverable spec: file path, format (JSON/CSV/plain text/patch),
-required keys/fields/columns, and constraints.
-2. Do the minimum work needed. Explore only what is required.
-3. Write the deliverable to the exact path in the exact format. Prefer write_file over bash
-heredocs.
-4. Verify mechanically: re-read the file; validate JSON with jq or python -c json.load; check line
-counts with wc -l; compare required names, values, and order against the spec. Fix any mismatch.
-5. Reply with one short line naming the deliverable path, then STOP. Never do extra work after
-verification.
-
-FORMAT DISCIPLINE
-- Output nothing extra and nothing missing: only the required fields/lines, with exact names, in the
-required order.
-- Copy strings, hashes, timestamps, and commands verbatim from the source data. Never paraphrase,
-reformat, or "improve" values.
-
-CODE FIX TASKS
-- Fix the root cause with the smallest correct change (e.g. parameterized queries instead of
-string-built SQL).
-- Keep the API surface unchanged: same function names, signatures, ports, endpoints.
-- No new dependencies; use only the standard library or packages already present.
-- Run the provided tests until green. Do not modify tests unless the task explicitly says to.
-
-BUDGET
-- Never run the same failing command more than twice; change strategy.
-- If you receive a "BUDGET EXHAUSTED" message: stop exploring immediately, write the deliverable
-now from the information you already have, verify it once, and finish with one line."""
+def load_prompt(name: str) -> str:
+    """Read a prompt file (prompts/*.md), stripped of surrounding whitespace."""
+    return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
 
 
 class BudgetExceeded(Exception):
@@ -476,22 +439,30 @@ def _is_budget_error(exc: BaseException) -> bool:
 def get_pydantic_agent(
     model: TrackedModel,
     agent_cfg: AgentConfig,
+    phase_id: str,
     tool_names: list[str],
     instrument: bool = False,
 ) -> Agent[AgentDeps, str]:
     """Build a pydantic-ai agent with the configured tool subset.
 
-    Tool descriptions live in the tool modules (pydantic-ai tool spec);
-    ``tool_names`` comes from a phase's config (``[phases.<id>].tools``).
+    The system prompt is rendered from the common request template (base.md
+    plus the per-tool usage notes); tool descriptions themselves live in the
+    tool modules (pydantic-ai tool spec). ``tool_names`` comes from a phase's
+    config (``[phases.<id>].tools``).
     """
-    agent = Agent(
-        model,
-        deps_type=AgentDeps,
-        system_prompt=SYSTEM_PROMPT,
+    tools = get_tools(agent_cfg, tool_names)
+    system = render_system(
+        agent_cfg,
+        phase_id,
+        {
+            "system": load_prompt("base.md"),
+            "tools": "\n".join(f"- {tool.note}" for tool in tools),
+        },
     )
+    agent = Agent(model, deps_type=AgentDeps, system_prompt=system)
     if instrument:
         agent.instrument = True
-    for tool in get_tools(agent_cfg, tool_names):
+    for tool in tools:
         agent.tool(tool.run)
     return agent
 
@@ -552,10 +523,14 @@ async def _run_commit(
         )
         return
     history = _trim_history(model.last_messages)
-    commit_prompt = COMMIT_PROMPT
+    # Commit message: the common template rendered for the emergency phase.
+    # The task block is repeated only when there is no history to resume
+    # (otherwise the task is already in the conversation).
+    commit_id = deps.cfg.agent.emergency
+    commit_contents: dict[str, str] = {"phase_prompt": load_prompt(f"{commit_id}.md")}
     if not history:
-        # No conversation to resume: re-state the task so the commit run has context.
-        commit_prompt = COMMIT_PROMPT + "\n\nORIGINAL TASK:\n" + prompt
+        commit_contents["task"] = prompt
+    commit_prompt = render_user(deps.cfg, commit_id, commit_contents)
     # The commit phase is allowed to spend the remaining hard-time window.
     model.enable_soft_check = False
     _log_event(
@@ -607,9 +582,16 @@ async def run_prompt(prompt: str, instrument: bool = False) -> str:
         cfg,
     )
     agent_cfg = load_agent_config()
-    entry_phase = agent_cfg.phases[agent_cfg.agent.entry]
-    agent = get_pydantic_agent(model, agent_cfg, entry_phase.tools, instrument=instrument)
+    phase_id = agent_cfg.agent.entry
+    phase = agent_cfg.phases[phase_id]
+    agent = get_pydantic_agent(model, agent_cfg, phase_id, phase.tools, instrument=instrument)
     deps = AgentDeps(workdir=workdir, cfg=agent_cfg)
+    # First user message: the common template rendered for the entry phase.
+    first_message = render_user(
+        agent_cfg,
+        phase_id,
+        {"task": prompt, "phase_prompt": load_prompt(f"{phase_id}.md")},
+    )
     _log_event(
         "agent_start",
         model=_resolve_model_name(),
@@ -622,7 +604,7 @@ async def run_prompt(prompt: str, instrument: bool = False) -> str:
         request_limit=cfg.request_limit,
         token_budget=cfg.token_budget,
     )
-    status, output = await _run_main(agent, model, cfg, prompt, deps)
+    status, output = await _run_main(agent, model, cfg, first_message, deps)
     if status == "budget":
         await _run_commit(agent, model, cfg, deps, prompt)
     model.log_pending_usage()

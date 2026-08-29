@@ -11,7 +11,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 FINAL_ANSWER = "Created hello.txt with the exact content hello"
 
 # Captured request state (filled by the stub handler).
-stub_state: dict = {}
+#   last_path / last_body: the most recent request
+#   bodies: every request body, in order
+#   script: optional list of response steps; step i answers request i+1.
+#     step {"final": "text"}  -> plain final answer (default FINAL_ANSWER)
+#     step {"tool_call": {"name": "bash", "arguments": {...}}} -> assistant tool call
+stub_state: dict = {"last_path": None, "last_body": None, "bodies": [], "script": None}
+
+
+def reset_stub_state() -> None:
+    stub_state.clear()
+    stub_state.update({"last_path": None, "last_body": None, "bodies": [], "script": None})
 
 
 class StubHandler(BaseHTTPRequestHandler):
@@ -20,11 +30,19 @@ class StubHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence request logging
         pass
 
+    def _step(self) -> dict:
+        script = stub_state.get("script") or [{"final": FINAL_ANSWER}]
+        index = min(len(stub_state["bodies"]) - 1, len(script) - 1)
+        return script[index]
+
     def do_POST(self):  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
+        stub_state["bodies"].append(body)
         stub_state["last_path"] = self.path
         stub_state["last_body"] = body
+        step = self._step()
+        tool_call = step.get("tool_call")
         base = {
             "id": "chatcmpl-stub",
             "created": 1700000000,
@@ -32,16 +50,29 @@ class StubHandler(BaseHTTPRequestHandler):
         }
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         if not body.get("stream"):
+            if tool_call:
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_stub",
+                            "type": "function",
+                            "function": {
+                                "name": tool_call["name"],
+                                "arguments": json.dumps(tool_call.get("arguments", {})),
+                            },
+                        }
+                    ],
+                }
+                finish = "tool_calls"
+            else:
+                message = {"role": "assistant", "content": step.get("final", FINAL_ANSWER)}
+                finish = "stop"
             payload = {
                 **base,
                 "object": "chat.completion",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": FINAL_ANSWER},
-                        "finish_reason": "stop",
-                    }
-                ],
+                "choices": [{"index": 0, "message": message, "finish_reason": finish}],
                 "usage": usage,
             }
             data = json.dumps(payload).encode()
@@ -54,36 +85,71 @@ class StubHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        chunks = [
-            {
-                **base,
-                "object": "chat.completion.chunk",
-                "choices": [
+        if tool_call:
+            tool_delta = {
+                "tool_calls": [
                     {
                         "index": 0,
-                        "delta": {"role": "assistant", "content": ""},
-                        "finish_reason": None,
+                        "id": "call_stub",
+                        "type": "function",
+                        "function": {
+                            "name": tool_call["name"],
+                            "arguments": json.dumps(tool_call.get("arguments", {})),
+                        },
                     }
-                ],
-            },
-            {
-                **base,
-                "object": "chat.completion.chunk",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": FINAL_ANSWER},
-                        "finish_reason": None,
-                    }
-                ],
-            },
-            {
-                **base,
-                "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                "usage": usage,
-            },
-        ]
+                ]
+            }
+            chunks = [
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": None},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": tool_delta, "finish_reason": None}],
+                },
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                },
+            ]
+        else:
+            final = step.get("final", FINAL_ANSWER)
+            chunks = [
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": ""},
+                            "finish_reason": None,
+                        }
+                    ],
+                },
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [
+                        {"index": 0, "delta": {"content": final}, "finish_reason": None}
+                    ],
+                },
+                {
+                    **base,
+                    "object": "chat.completion.chunk",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": usage,
+                },
+            ]
         for chunk in chunks:
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
             self.wfile.flush()
