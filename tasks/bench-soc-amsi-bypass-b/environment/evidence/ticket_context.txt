@@ -1,0 +1,19 @@
+SOC ticket AL-3042 (opened 2026-04-21 09:15 UTC)
+
+Alert: `powershell-scriptblock-anomaly`
+  PowerShell Script Block Logging (event 4104) and a correlated process-access event were flagged on WS-FIN-02.
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+  Host:          WS-FIN-02
+  Host owner:    e.taylor
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  windows_event_logs.jsonl     - Windows Event Log export for the window (one JSON object per event; process, logon, object-access, and script-block events from multiple hosts).
+  sysmon.jsonl                 - Sysmon export for the window (one JSON object per event; image-load, process-injection, and process-access events).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.

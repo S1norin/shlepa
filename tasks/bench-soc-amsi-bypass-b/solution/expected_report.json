@@ -1,0 +1,16 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1562.001",
+  "compromised_hosts": [
+    "WS-FIN-02"
+  ],
+  "compromised_accounts": [
+    "e.taylor"
+  ],
+  "key_indicators": [
+    "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)",
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "C:\\Windows\\System32\\amsi.dll",
+    "0x1410"
+  ]
+}
