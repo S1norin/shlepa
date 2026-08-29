@@ -20,8 +20,6 @@ module never imports the otel SDK stack.
 
 import argparse
 import asyncio
-import json
-import logging
 import os
 import sys
 import time
@@ -31,25 +29,20 @@ from pathlib import Path
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
-from pydantic_ai.messages import (
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
-    ModelRequest,
-    ModelResponse,
-    ToolCallPart,
-    ToolReturnPart,
-)
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.run import AgentRunResultEvent
 from pydantic_ai.usage import UsageLimits
 
-MAX_LOG_VALUE_CHARS = 16000
-LOGGER = logging.getLogger("shlepa-agent")
-# NOTE: "token" on its own is too broad (would redact usage fields like input_tokens).
-SECRET_FIELD_MARKERS = ("api_key", "apikey", "secret", "password", "auth_token", "access_token")
+from shlepa_agent.config import AgentConfig, load_config as load_agent_config
+from shlepa_agent.log import (
+    _configure_logging,
+    _log_event,
+    _log_stream_event,
+)
+from shlepa_agent.tools import AgentDeps, get_tools
 
 COMMIT_PROMPT = (
     "\u26a0\ufe0f BUDGET EXHAUSTED. Stop exploring. Write the final deliverable NOW to the exact "
@@ -166,85 +159,6 @@ def load_config() -> Config:
     )
 
 
-@dataclass(frozen=True)
-class LocalAgentDeps:
-    workdir: Path
-    bash_timeout: float
-    max_tool_output: int
-
-
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return f"{text[:limit]}\n... [output truncated to {limit} chars]"
-
-
-def _configure_logging() -> None:
-    if LOGGER.handlers:
-        return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("[shlepa-agent] %(message)s"))
-    LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.propagate = False
-
-
-def _safe_log_value(key: str, value: Any) -> Any:
-    if any(marker in key.lower() for marker in SECRET_FIELD_MARKERS):
-        return "<redacted>"
-    if isinstance(value, str):
-        return _truncate(value, MAX_LOG_VALUE_CHARS)
-    if isinstance(value, dict):
-        return {str(k): _safe_log_value(str(k), v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_safe_log_value(key, item) for item in value]
-    return value
-
-
-def _log_event(event: str, **fields: Any) -> None:
-    _configure_logging()
-    payload = {"event": event}
-    payload.update({key: _safe_log_value(key, value) for key, value in fields.items()})
-    LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
-
-
-def _log_stream_event(event: Any) -> str | None:
-    if isinstance(event, FunctionToolCallEvent):
-        part = event.part
-        fields = {"tool": part.tool_name}
-        if isinstance(part.args, dict):
-            fields.update(part.args)
-        else:
-            fields["args"] = part.args
-        _log_event("llm_tool_call", **fields)
-        return None
-
-    if isinstance(event, FunctionToolResultEvent):
-        result = getattr(event, "result", None) or getattr(event, "part", None)
-        _log_event(
-            "llm_tool_result",
-            tool=getattr(result, "tool_name", None),
-            result=getattr(result, "content", getattr(event, "content", None)),
-        )
-        return None
-
-    if isinstance(event, AgentRunResultEvent):
-        output = str(event.result.output)
-        usage = getattr(event.result, "usage", None)
-        if usage is not None:
-            _log_event(
-                "run_usage",
-                input_tokens=getattr(usage, "input_tokens", None),
-                output_tokens=getattr(usage, "output_tokens", None),
-                requests=getattr(usage, "requests", None),
-                tool_calls=getattr(usage, "tool_calls", None),
-            )
-        _log_event("agent_done", output=output)
-        return output
-
-    return None
-
-
 def _resolve_workdir() -> Path:
     # In the ACP image the agent cwd is /app; prefer it so task-relative paths work.
     app = Path("/app")
@@ -254,12 +168,6 @@ def _resolve_workdir() -> Path:
     if raw:
         return Path(raw).resolve()
     return Path.cwd().resolve()
-
-
-def _resolve_path(path: str, workdir: Path) -> Path:
-    if Path(path).is_absolute():
-        return Path(path).resolve()
-    return (workdir / path).resolve()
 
 
 def _required_env(name: str) -> str:
@@ -565,178 +473,26 @@ def _is_budget_error(exc: BaseException) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-async def _run_bash(command: str, workdir: Path, timeout: float) -> str:
-    _log_event("tool_call", tool="bash", command=command, cwd=str(workdir))
-    proc = await asyncio.create_subprocess_shell(
-        command,
-        cwd=str(workdir),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    timed_out = False
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except (TimeoutError, asyncio.TimeoutError):
-        timed_out = True
-        proc.kill()
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
-        except Exception:
-            stdout, stderr = b"", b""
-    out = stdout.decode("utf-8", errors="replace")
-    err = stderr.decode("utf-8", errors="replace")
-    if timed_out:
-        header = (
-            f"$ {command}\n[cwd] {workdir}\n"
-            f"[exit_code] 124 (KILLED after {timeout:.0f}s timeout - command was too "
-            f"slow or hung)\n"
-        )
-    else:
-        header = f"$ {command}\n[cwd] {workdir}\n[exit_code] {proc.returncode}\n"
-    result = _truncate(
-        header + f"[stdout]\n{out or '<empty>'}\n[stderr]\n{err or '<empty>'}",
-        16000,
-    )
-    _log_event(
-        "tool_result",
-        tool="bash",
-        exit_code="timeout" if timed_out else proc.returncode,
-        stdout=out or "<empty>",
-        stderr=err or "<empty>",
-    )
-    return result
-
-
-async def _read_file(path: str, workdir: Path, max_chars: int) -> str:
-    _log_event("tool_call", tool="read_file", path=path)
-    file_path = _resolve_path(path, workdir)
-    if not file_path.exists():
-        result = f"File not found: {file_path}"
-        _log_event("tool_result", tool="read_file", result=result)
-        return result
-    if not file_path.is_file():
-        result = f"Not a file: {file_path}"
-        _log_event("tool_result", tool="read_file", result=result)
-        return result
-    result = _truncate(
-        await asyncio.to_thread(file_path.read_text, encoding="utf-8"), max_chars
-    )
-    _log_event("tool_result", tool="read_file", path=path, result=result)
-    return result
-
-
-async def _write_file(path: str, content: str, workdir: Path) -> str:
-    _log_event("tool_call", tool="write_file", path=path, content=content)
-    file_path = _resolve_path(path, workdir)
-    try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(file_path.write_text, content, encoding="utf-8")
-    except Exception as e:
-        result = f"Failed to write {file_path}: {e}"
-        _log_event("tool_result", tool="write_file", result=result)
-        return result
-    result = f"Wrote exactly {len(content)} chars to {file_path}"
-    _log_event("tool_result", tool="write_file", path=str(file_path), result=result)
-    return result
-
-
-async def _append_file(path: str, content: str, workdir: Path) -> str:
-    _log_event("tool_call", tool="append_file", path=path, content=content)
-    file_path = _resolve_path(path, workdir)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(_append_text, file_path, content)
-    result = f"Appended {len(content)} chars to {file_path}"
-    _log_event("tool_result", tool="append_file", result=result)
-    return result
-
-
-def _append_text(file_path: Path, content: str) -> None:
-    with file_path.open("a", encoding="utf-8") as f:
-        f.write(content)
-
-
-async def _apply_diff(path: str, diff_content: str, workdir: Path) -> str:
-    _log_event("tool_call", tool="apply_diff", path=path, diff=diff_content)
-    file_path = _resolve_path(path, workdir)
-    if not file_path.exists():
-        result = f"File not found: {file_path}"
-        _log_event("tool_result", tool="apply_diff", result=result)
-        return result
-    if not file_path.is_file():
-        result = f"Not a file: {file_path}"
-        _log_event("tool_result", tool="apply_diff", result=result)
-        return result
-    _log_event("tool_call", tool="patch", path=str(file_path))
-    proc = await asyncio.create_subprocess_exec(
-        "patch",
-        "-N",
-        "-r",
-        "-",
-        str(file_path),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate(diff_content.encode())
-    out = stdout.decode("utf-8", errors="replace")
-    err = stderr.decode("utf-8", errors="replace")
-    output = (
-        f"[exit_code] {proc.returncode}\n"
-        f"[stdout]\n{out or '<empty>'}\n"
-        f"[stderr]\n{err or '<empty>'}"
-    )
-    if proc.returncode != 0:
-        result = f"Failed to apply diff to {file_path}.\n{output}"
-    else:
-        result = f"Applied diff to {file_path}.\n{output}"
-    _log_event("tool_result", tool="apply_diff", exit_code=proc.returncode, result=result)
-    return result
-
-
 def get_pydantic_agent(
-    model: TrackedModel, cfg: Config, instrument: bool = False
-) -> Agent[LocalAgentDeps, str]:
+    model: TrackedModel,
+    agent_cfg: AgentConfig,
+    tool_names: list[str],
+    instrument: bool = False,
+) -> Agent[AgentDeps, str]:
+    """Build a pydantic-ai agent with the configured tool subset.
+
+    Tool descriptions live in the tool modules (pydantic-ai tool spec);
+    ``tool_names`` comes from a phase's config (``[phases.<id>].tools``).
+    """
     agent = Agent(
         model,
-        deps_type=LocalAgentDeps,
+        deps_type=AgentDeps,
         system_prompt=SYSTEM_PROMPT,
     )
     if instrument:
         agent.instrument = True
-
-    @agent.tool
-    async def bash(ctx: RunContext[LocalAgentDeps], command: str) -> str:
-        """Run a shell command in the working directory. Killed after 120 seconds.
-        Use absolute paths; combine steps with && where sensible."""
-        return await _run_bash(command, ctx.deps.workdir, ctx.deps.bash_timeout)
-
-    @agent.tool
-    async def read_file(ctx: RunContext[LocalAgentDeps], path: str) -> str:
-        """Read a text file (truncated to a limit). For long files use bash: head/tail/sed -n."""
-        return await _read_file(path, ctx.deps.workdir, ctx.deps.max_tool_output)
-
-    @agent.tool
-    async def write_file(ctx: RunContext[LocalAgentDeps], path: str, content: str) -> str:
-        """Write EXACT content to a file (creates parent dirs, overwrites).
-        No trailing newline is added. Use this for final deliverables."""
-        return await _write_file(path, content, ctx.deps.workdir)
-
-    @agent.tool
-    async def append_file(ctx: RunContext[LocalAgentDeps], path: str, content: str) -> str:
-        """Append text to a file (no newline added)."""
-        return await _append_file(path, content, ctx.deps.workdir)
-
-    @agent.tool
-    async def apply_diff(
-        ctx: RunContext[LocalAgentDeps], path: str, diff_content: str
-    ) -> str:
-        """Apply a unified diff (patch -N) to an existing file."""
-        return await _apply_diff(path, diff_content, ctx.deps.workdir)
-
+    for tool in get_tools(agent_cfg, tool_names):
+        agent.tool(tool.run)
     return agent
 
 
@@ -745,11 +501,11 @@ def get_pydantic_agent(
 # ---------------------------------------------------------------------------
 
 async def _run_main(
-    agent: Agent[LocalAgentDeps, str],
+    agent: Agent[AgentDeps, str],
     model: TrackedModel,
     cfg: Config,
     prompt: str,
-    deps: LocalAgentDeps,
+    deps: AgentDeps,
 ) -> tuple[str, str]:
     """Returns (status, output); status in {'done', 'budget', 'error'}."""
     output = ""
@@ -779,10 +535,10 @@ async def _run_main(
 
 
 async def _run_commit(
-    agent: Agent[LocalAgentDeps, str],
+    agent: Agent[AgentDeps, str],
     model: TrackedModel,
     cfg: Config,
-    deps: LocalAgentDeps,
+    deps: AgentDeps,
     prompt: str,
 ) -> None:
     remaining = max(0.0, cfg.hard_time - model.elapsed())
@@ -850,10 +606,10 @@ async def run_prompt(prompt: str, instrument: bool = False) -> str:
         ),
         cfg,
     )
-    agent = get_pydantic_agent(model, cfg, instrument=instrument)
-    deps = LocalAgentDeps(
-        workdir=workdir, bash_timeout=cfg.bash_timeout, max_tool_output=cfg.max_tool_output
-    )
+    agent_cfg = load_agent_config()
+    entry_phase = agent_cfg.phases[agent_cfg.agent.entry]
+    agent = get_pydantic_agent(model, agent_cfg, entry_phase.tools, instrument=instrument)
+    deps = AgentDeps(workdir=workdir, cfg=agent_cfg)
     _log_event(
         "agent_start",
         model=_resolve_model_name(),
