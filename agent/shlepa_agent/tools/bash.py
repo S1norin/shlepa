@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from pydantic_ai import RunContext
 
 from shlepa_agent.log import _log_event, _truncate
-from shlepa_agent.tools.base import AgentDeps, Tool
+from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
 
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_TIMEOUT = 120.0
@@ -22,6 +23,7 @@ async def bash(
     per-call limit in seconds (default 30, max 120; out-of-range values are
     clamped and reported). Use absolute paths; combine steps with && where
     sensible. Start servers with nohup + & then verify they respond."""
+    t0 = time.monotonic()
     tcfg = ctx.deps.cfg.tools.bash
     max_timeout = tcfg.max_timeout or DEFAULT_MAX_TIMEOUT
     max_output = tcfg.max_output or DEFAULT_MAX_OUTPUT
@@ -30,22 +32,34 @@ async def bash(
     _log_event(
         "tool_call", tool="bash", command=command, cwd=str(workdir), timeout=timeout
     )
+    args = {"command": command}
+    if timeout is not None:
+        args["timeout"] = timeout
+
+    def finish(body: str, *, note: str | None = None, failed: str | None = None) -> str:
+        return format_tool_result(
+            ctx, "bash", body, t0, args=args, note=note, failed=failed, untrusted=True
+        )
 
     note = ""
     t = default if timeout is None else float(timeout)
     if t > max_timeout:
-        note = f"[timeout clamped to {max_timeout:.0f}s (max)]\n"
+        note = f"timeout clamped to {max_timeout:.0f}s (max)"
         t = max_timeout
     elif t < MIN_TIMEOUT:
-        note = f"[timeout clamped to {MIN_TIMEOUT:.0f}s (min)]\n"
+        note = f"timeout clamped to {MIN_TIMEOUT:.0f}s (min)"
         t = MIN_TIMEOUT
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
-        cwd=str(workdir),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(workdir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as e:
+        return finish("", note=note or None, failed=f"spawn error: {e}")
+
     timed_out = False
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=t)
@@ -60,14 +74,13 @@ async def bash(
     err = stderr.decode("utf-8", errors="replace")
     if timed_out:
         header = (
-            note
-            + f"$ {command}\n[cwd] {workdir}\n"
+            f"$ {command}\n[cwd] {workdir}\n"
             f"[exit_code] 124 (KILLED after {t:.0f}s timeout - command was too "
             f"slow or hung)\n"
         )
     else:
-        header = note + f"$ {command}\n[cwd] {workdir}\n[exit_code] {proc.returncode}\n"
-    result = _truncate(
+        header = f"$ {command}\n[cwd] {workdir}\n[exit_code] {proc.returncode}\n"
+    body = _truncate(
         header + f"[stdout]\n{out or '<empty>'}\n[stderr]\n{err or '<empty>'}",
         max_output,
     )
@@ -78,7 +91,13 @@ async def bash(
         stdout=out or "<empty>",
         stderr=err or "<empty>",
     )
-    return result
+    if timed_out:
+        return finish(
+            body,
+            note=note or None,
+            failed=f"command killed after {t:.0f}s timeout (exit 124)",
+        )
+    return finish(body, note=note or None)
 
 
 BASH_TOOL = Tool(

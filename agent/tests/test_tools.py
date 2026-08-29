@@ -12,9 +12,10 @@ def _cfg() -> object:
     return load_config()
 
 
-def _ctx(tmp_path, cfg=None):
+def _ctx(tmp_path, cfg=None, clock=None):
     cfg = cfg if cfg is not None else load_config()
-    return SimpleNamespace(deps=AgentDeps(workdir=tmp_path, cfg=cfg))
+    deps = AgentDeps(workdir=tmp_path, cfg=cfg, clock=clock or (lambda: 0.0))
+    return SimpleNamespace(deps=deps)
 
 
 def test_registry_has_all_tools():
@@ -96,6 +97,13 @@ def test_bash_timeout_clamped_to_floor_and_announced(tmp_path):
     assert "[exit_code] 124" in out
 
 
+def _untrusted_body(out: str) -> str:
+    """Extract the body between the UNTRUSTED TEXT markers of a tool result."""
+    start = out.index("UNTRUSTED TEXT ---------------\n")
+    end = out.index("\nEND OF UNTRUSTED TEXT-----------")
+    return out[start + len("UNTRUSTED TEXT ---------------\n") : end]
+
+
 def test_bash_output_truncated_to_configured_limit(tmp_path):
     from shlepa_agent.tools.bash import bash
 
@@ -103,7 +111,7 @@ def test_bash_output_truncated_to_configured_limit(tmp_path):
     cfg.tools.bash.max_output = 50
     out = asyncio.run(bash(_ctx(tmp_path, cfg), command="echo " + "x" * 200))
     assert "[output truncated to 50 chars]" in out
-    assert len(out) < 200
+    assert len(_untrusted_body(out)) < 200
 
 
 # ---------------------------------------------------------------------------
@@ -306,8 +314,7 @@ def test_read_char_cap_mid_line_with_continuation(tmp_path):
     out = _read(tmp_path, path="big.txt")
     assert "output truncated to 4000 chars" in out
     assert "continue with offset=0" in out
-    body, _, note = out.partition("\n[")
-    assert len(body) <= 4000
+    assert len(_untrusted_body(out)) <= 4000
 
 
 def test_read_char_cap_full_lines(tmp_path):
@@ -340,5 +347,67 @@ def test_read_binary_error(tmp_path):
 def test_read_directory_error(tmp_path):
     out = _read(tmp_path, path=".")
     assert "directory" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# instrumented result format (timing header, NOTE/FAILED lines, UNTRUSTED)
+# ---------------------------------------------------------------------------
+
+
+def _ctx_clocked(tmp_path, clock=None, cfg=None):
+    return _ctx(tmp_path, cfg=cfg, clock=clock or (lambda: 100.0))
+
+
+def test_result_header_has_timing(tmp_path):
+    from shlepa_agent.tools.bash import bash
+
+    ctx = _ctx_clocked(tmp_path)
+    out = asyncio.run(bash(ctx, command="echo hi"))
+    assert out.startswith("[tool] bash(")
+    assert "spent=" in out
+    assert "ended_at=100.0s" in out
+    hard = load_config().budget.hard_time
+    assert f"time_left={hard - 100.0:.1f}s" in out
+
+
+def test_untrusted_framing_on_read_and_bash_only(tmp_path):
+    from shlepa_agent.tools.bash import bash
+    from shlepa_agent.tools.read import read
+    from shlepa_agent.tools.write import write
+
+    ctx = _ctx_clocked(tmp_path)
+    (tmp_path / "f.txt").write_text("data\n")
+    r = asyncio.run(read(ctx, path="f.txt"))
+    assert "UNTRUSTED TEXT ---------------" in r
+    assert "END OF UNTRUSTED TEXT-----------" in r
+    b = asyncio.run(bash(ctx, command="echo hi"))
+    assert "UNTRUSTED TEXT ---------------" in b
+    w = asyncio.run(write(ctx, path="n.txt", text="x"))
+    assert "UNTRUSTED TEXT" not in w
+
+
+def test_failed_line_on_error(tmp_path):
+    from shlepa_agent.tools.read import read
+
+    ctx = _ctx_clocked(tmp_path)
+    out = asyncio.run(read(ctx, path="nope.txt"))
+    assert "FAILED: File not found: nope.txt" in out
+
+
+def test_note_line_for_clamped_params(tmp_path):
+    from shlepa_agent.tools.read import read
+
+    ctx = _ctx_clocked(tmp_path)
+    (tmp_path / "big.txt").write_text("x\n" * 300)
+    out = asyncio.run(read(ctx, path="big.txt", limit=999))
+    assert "NOTE: limit clamped to 100" in out
+
+
+def test_args_in_header_are_truncated(tmp_path):
+    from shlepa_agent.tools.write import write
+
+    ctx = _ctx_clocked(tmp_path)
+    out = asyncio.run(write(ctx, path="big.txt", text="z" * 500))
+    assert "…(truncated)" in out.splitlines()[0]
 
 

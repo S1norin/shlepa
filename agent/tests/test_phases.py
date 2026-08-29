@@ -31,7 +31,7 @@ from shlepa_agent.tools import AgentDeps
 
 def _state(task="Create hello.txt with the exact content hello", last_messages=None):
     cfg = load_config()
-    deps = AgentDeps(workdir=Path("/tmp"), cfg=cfg)
+    deps = AgentDeps(workdir=Path("/tmp"), cfg=cfg, clock=lambda: 0.0)
     model = SimpleNamespace(last_messages=last_messages if last_messages is not None else [])
     return RunState(task=task, deps=deps, model=model)
 

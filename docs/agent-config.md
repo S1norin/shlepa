@@ -76,3 +76,28 @@ Notes:
   retry count, template wrapper overrides.
 - `[template]` — ordered block list + per-block wrappers for the common
   request template.
+
+## Instrumented tool results
+
+Every tool result sent to the model is wrapped by `format_tool_result`
+(`shlepa_agent/tools/base.py`) in a fixed layout:
+
+```
+[tool] name(arg1=..., arg2=...)
+  spent=0.31s ended_at=42.7s time_left=542.3s
+  NOTE: timeout clamped to 120s (max)      <- optional, e.g. clamped params
+  FAILED: command killed after 120s timeout (exit 124)   <- optional, failure only
+UNTRUSTED TEXT ---------------               <- read/bash only
+<tool output or error>
+END OF UNTRUSTED TEXT-----------
+```
+
+- `spent` — tool wall time; `ended_at` — seconds into the run (the same clock
+  as the global budget); `time_left` — until `budget.hard_time`.
+- `FAILED:` is emitted only on tool failure (e.g. file not found, edit
+  validation error, bash spawn error / timeout kill). Non-zero bash exit codes
+  stay plain output — the model sees `[exit_code]` in the body.
+- The `UNTRUSTED TEXT` block marks environment data (file content, command
+  output) as data, not instructions (anti-prompt-injection). `write`/`edit`
+  return status lines without the block.
+- Long argument values in the header are truncated to 200 chars.

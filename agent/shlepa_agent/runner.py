@@ -365,7 +365,7 @@ async def run_prompt(
         )
         state = RunState(
             task=prompt,
-            deps=AgentDeps(workdir=workdir, cfg=cfg),
+            deps=AgentDeps(workdir=workdir, cfg=cfg, clock=model.elapsed),
             model=model,
         )
         _log_event(
