@@ -1,12 +1,19 @@
 """Contest-faithful dev agent environment for 'shlepa run' (container mode).
 
 The real contest runs the agent INSIDE the task environment container,
-which is built FROM secureintelligent/acp (pydantic-ai, logfire and the
-OpenTelemetry SDK/OTLP exporters are already baked in there). For dev
-runs we build a wrapper image on top of the task environment image:
+which is typically built FROM secureintelligent/acp (pydantic-ai,
+logfire and the OpenTelemetry SDK/OTLP exporters are already baked in
+there). For dev runs we build a wrapper image on top of the task
+environment image:
 
 1. stage the shlepa_agent package (telemetry included) into /agent/
-2. install the OpenInference enrichment package into the acp venv
+2. ensure a working agent runtime in /app/.venv:
+   - acp-based images: the venv already has pydantic-ai + the OTel SDK,
+     only the OpenInference enrichment package is added
+   - images without the acp venv (e.g. CyberGym ARVO): uv is detected
+     on PATH or at /app/.venv/bin/uv, bootstrapped from a pinned
+     static release otherwise, and a fresh /app/.venv with the agent's
+     own dependencies is created
    (build-time only; the runtime stays fully offline)
 
 The agent then runs in the same container via ``docker exec`` with
@@ -17,13 +24,36 @@ collector over host networking (localhost:4318) without internet.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
+import tomllib
 from pathlib import Path
 
 METRICS_MARKER = "SLEPA_AGENT_METRICS_JSON="
 
 #: Version pinned to agent/uv.lock (build-time install in the dev image).
 OPENINFEERENCE_PIN = "openinference-instrumentation-pydantic-ai==0.1.22"
+
+#: uv release used to bootstrap env images that carry neither uv nor the
+#: acp venv (e.g. CyberGym ARVO images). The static musl binary runs on
+#: any glibc.
+UV_BOOTSTRAP_VERSION = "0.11.6"
+
+#: CPython for the agent venv bootstrapped into such images; must match
+#: agent/pyproject.toml (requires-python >= 3.12).
+AGENT_VENV_PYTHON = "3.12"
+
+#: Old-glibc guard for the fresh-venv path. The latest tiktoken only
+#: publishes manylinux_2_28 wheels, so on env images with older glibc
+#: (e.g. CyberGym ARVO: Ubuntu 16.04, glibc 2.23) uv would fall back to
+#: the sdist, which needs a Rust compiler. 0.7.0 is the last release
+#: with manylinux2014 wheels and satisfies pydantic-ai-slim's unpinned
+#: tiktoken requirement.
+TIKTOKEN_OLD_GLIBC_PIN = "tiktoken==0.7.0"
+
+#: In-container home of the agent runtime: dev_run.py is executed with
+#: /app/.venv/bin/python by the run engine.
+AGENT_VENV = "/app/.venv"
 
 #: Source of the dev entrypoint baked into the dev image at /agent/dev_run.py.
 DEV_RUN_SOURCE = r'''"""Dev entrypoint for the shlepa agent running INSIDE the task container.
@@ -197,14 +227,108 @@ def stage_agent(context_dir: Path, agent_dir: Path) -> Path:
     return context_dir / "dev_agent"
 
 
-def write_dev_dockerfile(context_dir: Path, env_image: str) -> Path:
-    """Write the dev wrapper Dockerfile (FROM the task env image)."""
+def read_agent_dependencies(agent_dir: Path) -> list[str]:
+    """In-container agent runtime deps from agent/pyproject.toml.
+
+    Base dependencies plus the telemetry extras (dev images are
+    local-only and telemetry is expected to work in them), minus the
+    OpenInference package which is always installed from
+    OPENINFEERENCE_PIN. Empty list when the pyproject is missing or
+    unreadable.
+    """
+    try:
+        raw = (Path(agent_dir) / "pyproject.toml").read_text(encoding="utf-8")
+        project = tomllib.loads(raw).get("project", {})
+        deps = [str(d) for d in project.get("dependencies", [])]
+        telemetry = project.get("optional-dependencies", {}).get("telemetry", [])
+        deps.extend(
+            str(d) for d in telemetry if not str(d).startswith("openinference")
+        )
+        return deps
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+
+
+def _dev_setup_shell(agent_deps: list[str]) -> str:
+    """POSIX sh that leaves a usable uv and a working agent venv.
+
+    Rendered as a single Dockerfile RUN command. Must stay POSIX sh
+    (no bashisms): some env images only have dash, and the ARVO base
+    images ship neither curl nor wget, so the uv download falls back
+    to python3's urllib. Every physical line is a complete shell
+    statement terminated with ';' — Dockerfile '\'-continuations join
+    lines WITHOUT newlines, so statement separation cannot rely on
+    them.
+    """
+    deps = " ".join(
+        shlex.quote(d) for d in [*agent_deps, TIKTOKEN_OLD_GLIBC_PIN]
+    )
+    lines = [
+        'if command -v uv >/dev/null 2>&1; then',
+        '    uv_bin="$(command -v uv)";',
+        f'elif [ -x {AGENT_VENV}/bin/uv ]; then',
+        f'    uv_bin="{AGENT_VENV}/bin/uv";',
+        'else',
+        '    uv_bin="/tmp/shlepa-uv/uv";',
+        '    mkdir -p /tmp/shlepa-uv;',
+        '    case "$(uname -m)" in',
+        '        x86_64) uv_arch="x86_64";;',
+        '        aarch64) uv_arch="aarch64";;',
+        '        *) echo "shlepa: unsupported arch for uv bootstrap: '
+        '$(uname -m)" >&2; exit 1;;',
+        '    esac;',
+        '    uv_pkg="uv-${uv_arch}-unknown-linux-musl";',
+        f'    uv_url="https://github.com/astral-sh/uv/releases/'
+        f'download/{UV_BOOTSTRAP_VERSION}/${{uv_pkg}}.tar.gz";',
+        '    if command -v curl >/dev/null 2>&1; then',
+        '        curl -fsSL "$uv_url" -o /tmp/shlepa-uv/uv.tar.gz;',
+        '    elif command -v wget >/dev/null 2>&1; then',
+        '        wget -q -O /tmp/shlepa-uv/uv.tar.gz "$uv_url";',
+        '    else',
+        "        python3 -c 'import sys, urllib.request; "
+        "urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' \"$uv_url\" "
+        "/tmp/shlepa-uv/uv.tar.gz;",
+        '    fi;',
+        '    tar xzf /tmp/shlepa-uv/uv.tar.gz -C /tmp/shlepa-uv '
+        '--strip-components=1 "${uv_pkg}/uv";',
+        '    chmod +x "$uv_bin";',
+        'fi;',
+        f'if [ ! -x {AGENT_VENV}/bin/python ]; then',
+        f'    "$uv_bin" python install {AGENT_VENV_PYTHON};',
+        f'    "$uv_bin" venv {AGENT_VENV} --python {AGENT_VENV_PYTHON};',
+    ]
+    if deps:
+        lines.append(
+            f'    "$uv_bin" pip install --python {AGENT_VENV}/bin/python '
+            f"{deps};"
+        )
+    lines.append("fi;")
+    lines.append(
+        f'"$uv_bin" pip install --python {AGENT_VENV}/bin/python '
+        f"{OPENINFEERENCE_PIN}"
+    )
+    return "set -eux; " + " \\\n".join(lines)
+
+
+def write_dev_dockerfile(
+    context_dir: Path,
+    env_image: str,
+    agent_deps: list[str] | None = None,
+) -> Path:
+    """Write the dev wrapper Dockerfile (FROM the task env image).
+
+    ``agent_deps`` are installed only when the env image does not ship
+    the acp venv (see _dev_setup_shell); on acp-based images the venv
+    already carries the agent runtime and only the pinned OpenInference
+    package is added. Telemetry stays out of the agent's base
+    environment — all of this is build-time, inside the local dev
+    image.
+    """
     dockerfile = Path(context_dir) / "Dockerfile"
     dockerfile.write_text(
         f"FROM {env_image}\n"
         "COPY dev_agent/ /agent/\n"
-        f"RUN /app/.venv/bin/uv pip install --python /app/.venv/bin/python "
-        f"{OPENINFEERENCE_PIN}\n"
+        f"RUN {_dev_setup_shell(list(agent_deps or []))}\n"
     )
     return dockerfile
 
@@ -227,7 +351,9 @@ def build_dev_image(
         shutil.rmtree(context)
     context.mkdir(parents=True, exist_ok=True)
     stage_agent(context, agent_dir)
-    write_dev_dockerfile(context, env_image)
+    write_dev_dockerfile(
+        context, env_image, read_agent_dependencies(agent_dir)
+    )
     docker.build(dev_image, context)
     return dev_image
 

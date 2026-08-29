@@ -52,14 +52,76 @@ def test_stage_agent_ignores_pycache(tmp_path: Path) -> None:
 
 
 def test_write_dev_dockerfile(tmp_path: Path) -> None:
-    dev_env.write_dev_dockerfile(tmp_path, "shlepa-task-hello-file:env")
+    dev_env.write_dev_dockerfile(
+        tmp_path,
+        "shlepa-task-hello-file:env",
+        ["pydantic-ai-slim[openai]", "python-dotenv"],
+    )
     text = (tmp_path / "Dockerfile").read_text()
     assert text.startswith("FROM shlepa-task-hello-file:env\n")
     assert "COPY dev_agent/ /agent/" in text
-    # Build-time only: telemetry enrichment package is installed into the
-    # acp venv (which already has pydantic-ai + the OTel SDK).
-    assert "/app/.venv/bin/uv pip install" in text
-    assert "openinference-instrumentation-pydantic-ai" in text
+    # Build-time only: the telemetry enrichment package is pinned and
+    # installed into the acp venv (which already has pydantic-ai + OTel).
+    assert dev_env.OPENINFEERENCE_PIN in text
+    # No-uv fallback: detect uv on PATH, then in the venv, otherwise
+    # bootstrap the pinned static release.
+    assert "command -v uv" in text
+    assert f"{dev_env.AGENT_VENV}/bin/uv" in text
+    assert (
+        f"astral-sh/uv/releases/download/{dev_env.UV_BOOTSTRAP_VERSION}"
+        in text
+    )
+    # No-venv fallback: env images without /app/.venv get a fresh agent
+    # venv (uv-managed CPython) with the agent's own dependencies, extras
+    # shell-quoted so '[' is never globbed.
+    assert f"python install {dev_env.AGENT_VENV_PYTHON}" in text
+    assert (
+        f'venv {dev_env.AGENT_VENV} --python {dev_env.AGENT_VENV_PYTHON}'
+        in text
+    )
+    assert "'pydantic-ai-slim[openai]'" in text
+    assert "python-dotenv" in text
+    # Old-glibc guard: the fresh venv gets a manylinux2014 tiktoken pin so
+    # no Rust toolchain is needed on glibc 2.23 images.
+    assert dev_env.TIKTOKEN_OLD_GLIBC_PIN in text
+
+
+def test_write_dev_dockerfile_uv_download_fallbacks(tmp_path: Path) -> None:
+    text = (tmp_path / "Dockerfile").write_text  # noqa: B018 - placeholder
+    dev_env.write_dev_dockerfile(tmp_path, "shlepa-task-xyz:env", [])
+    text = (tmp_path / "Dockerfile").read_text()
+    # The ARVO base images ship neither curl nor wget: the uv download
+    # falls back to python3's urllib.
+    assert "curl -fsSL" in text
+    assert "wget -q" in text
+    assert "urllib.request.urlretrieve" in text
+    # The pinned pin is still installed even without agent deps.
+    assert dev_env.OPENINFEERENCE_PIN in text
+
+
+def test_read_agent_dependencies(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'dependencies = ["pydantic-ai-slim[openai]", "python-dotenv"]\n'
+        "\n"
+        "[project.optional-dependencies]\n"
+        'telemetry = ['
+        '"opentelemetry-sdk", '
+        '"openinference-instrumentation-pydantic-ai"'
+        "]\n"
+    )
+    deps = dev_env.read_agent_dependencies(tmp_path)
+    # Telemetry extras are included (dev images are local-only) except the
+    # openinference package, which is always installed from the pin.
+    assert deps == [
+        "pydantic-ai-slim[openai]",
+        "python-dotenv",
+        "opentelemetry-sdk",
+    ]
+
+
+def test_read_agent_dependencies_missing_pyproject(tmp_path: Path) -> None:
+    assert dev_env.read_agent_dependencies(tmp_path) == []
 
 
 def test_build_dev_image_builds_on_top_of_env_image(tmp_path: Path) -> None:
