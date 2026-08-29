@@ -1,0 +1,102 @@
+# Shlepa agent v2 configuration.
+#
+# Single source of tuning values: budgets, tools, phases, and the request
+# template. Env-var overrides (SHLEPA_*) take precedence over the values
+# here; see docs/agent-config.md for the full mapping.
+
+[agent]
+# Pipeline: entry phase, emergency phase (phase failure after retries /
+# budget breach), total step guard, model temperature.
+entry = "explore"
+emergency = "commit"
+max_steps = 12
+temp = 0.2
+
+[budget]
+# Global cross-phase budget enforced by the tracked model. The task agent
+# timeout is 600s (closed set): soft fires at ~500s, the commit window is up
+# to 80s, the process is done by ~585s.
+hard_time = 585.0
+soft_time = 500.0
+request_limit = 90
+token_budget = 300000
+# Hard per-request output cap. Without it a single request can loop for
+# tens of thousands of tokens and eat the whole trial before commit.
+max_tokens = 16384
+request_timeout = 180.0
+# Kill a single in-flight request if it runs this long (open -> last chunk).
+request_wall = 240.0
+
+[tools.bash]
+enabled = true
+timeout = 120.0
+max_output = 16000
+
+[tools.read_file]
+enabled = true
+max_output = 16000
+
+[tools.write_file]
+enabled = true
+
+[tools.append_file]
+enabled = true
+
+[tools.apply_diff]
+enabled = true
+
+[phases.explore]
+tools = ["bash", "read_file", "write_file", "append_file", "apply_diff"]
+requests = 90
+time = 500.0
+
+[phases.commit]
+# Emergency / terminal phase: write the deliverable now, verify once, stop.
+tools = ["bash", "read_file", "write_file"]
+requests = 25
+time = 80.0
+reasoning_effort = "low"
+
+[template]
+# Render order of the common request template. "system" and "tools" render
+# into the system message; all other blocks render into the per-phase user
+# message, in this order. A block with empty content is dropped together
+# with its wrappers. "note" is reserved for the future self-note tool.
+blocks = [
+    "system",
+    "tools",
+    "task",
+    "extra",
+    "previous_results",
+    "phase_prompt",
+    "output_schema",
+    "note",
+]
+
+[template.wrappers.tools]
+before = "AVAILABLE TOOLS\n"
+after = "\n"
+
+[template.wrappers.task]
+before = "TASK\n"
+after = "\n"
+
+[template.wrappers.extra]
+before = "ADDITIONAL CONTEXT\n"
+after = "\n"
+
+[template.wrappers.previous_results]
+before = "RESULTS OF PREVIOUS PHASES\n"
+after = "\n"
+
+[template.wrappers.phase_prompt]
+before = "PHASE INSTRUCTIONS\n"
+after = "\n"
+
+[template.wrappers.output_schema]
+before = "OUTPUT FORMAT\n"
+after = "\n"
+
+[template.wrappers.note]
+before = "NOTES\n"
+after = "\n"

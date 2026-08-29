@@ -1,0 +1,73 @@
+# Agent configuration (v2)
+
+The v2 agent reads all tuning values from a single file:
+
+```
+agent/shlepa_agent/config.toml
+```
+
+The file ships inside the package, so the submission zip carries it
+automatically. Environment variables (`SHLEPA_*`) override individual keys
+at runtime; **invalid env values are ignored** (the file value wins).
+
+## Env-var overrides
+
+| Env var | Config key | Type |
+|---|---|---|
+| `SHLEPA_TEMP` | `agent.temp` | float |
+| `SHLEPA_MAX_STEPS` | `agent.max_steps` | int |
+| `SHLEPA_BUDGET_HARD_TIME` | `budget.hard_time` | float |
+| `SHLEPA_BUDGET_SOFT_TIME` | `budget.soft_time` | float |
+| `SHLEPA_BUDGET_REQUEST_LIMIT` | `budget.request_limit` | int |
+| `SHLEPA_BUDGET_TOKEN_BUDGET` | `budget.token_budget` | int |
+| `SHLEPA_BUDGET_MAX_TOKENS` | `budget.max_tokens` | int |
+| `SHLEPA_BUDGET_REQUEST_TIMEOUT` | `budget.request_timeout` | float |
+| `SHLEPA_BUDGET_REQUEST_WALL` | `budget.request_wall` | float |
+| `SHLEPA_BASH_TIMEOUT` | `tools.bash.timeout` | float |
+| `SHLEPA_BASH_MAX_OUTPUT` | `tools.bash.max_output` | int |
+| `SHLEPA_READ_MAX_OUTPUT` | `tools.read_file.max_output` | int |
+| `SHLEPA_COMMIT_TIME` | `phases.commit.time` | float |
+| `SHLEPA_COMMIT_REQUEST_LIMIT` | `phases.commit.requests` | int |
+| `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
+
+Model/endpoint variables are unchanged (set by the harness, not the config):
+`OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
+
+## Migration from the legacy `AGENT_*` env vars (v1)
+
+The v1 `AGENT_*` environment variables were **dropped** with the v2
+architecture. Old name → new location:
+
+| v1 env var (default) | v2 config key in `config.toml` | v2 env override |
+|---|---|---|
+| `AGENT_TEMP` (0.2) | `agent.temp` | `SHLEPA_TEMP` |
+| `AGENT_HARD_TIME` (585.0) | `budget.hard_time` | `SHLEPA_BUDGET_HARD_TIME` |
+| `AGENT_SOFT_TIME` (500.0) | `budget.soft_time` | `SHLEPA_BUDGET_SOFT_TIME` |
+| `AGENT_REQUEST_LIMIT` (90) | `budget.request_limit` | `SHLEPA_BUDGET_REQUEST_LIMIT` |
+| `AGENT_TOKEN_BUDGET` (300000) | `budget.token_budget` | `SHLEPA_BUDGET_TOKEN_BUDGET` |
+| `AGENT_MAX_TOKENS` (16384) | `budget.max_tokens` | `SHLEPA_BUDGET_MAX_TOKENS` |
+| `AGENT_REQUEST_TIMEOUT` (180.0) | `budget.request_timeout` | `SHLEPA_BUDGET_REQUEST_TIMEOUT` |
+| `AGENT_REQUEST_WALL` (240.0) | `budget.request_wall` | `SHLEPA_BUDGET_REQUEST_WALL` |
+| `AGENT_BASH_TIMEOUT` (120.0) | `tools.bash.timeout` | `SHLEPA_BASH_TIMEOUT` |
+| `AGENT_MAX_TOOL_OUTPUT` (16000) | `tools.bash.max_output` (+ `tools.read_file.max_output`) | `SHLEPA_BASH_MAX_OUTPUT` / `SHLEPA_READ_MAX_OUTPUT` |
+| `AGENT_COMMIT_TIME_CAP` (80.0) | `phases.commit.time` | `SHLEPA_COMMIT_TIME` |
+| `AGENT_COMMIT_REQUEST_LIMIT` (25) | `phases.commit.requests` | `SHLEPA_COMMIT_REQUEST_LIMIT` |
+| `AGENT_COMMIT_REASONING_EFFORT` ("low") | `phases.commit.reasoning_effort` | `SHLEPA_COMMIT_REASONING_EFFORT` |
+
+Notes:
+
+- `AGENT_MAX_TOOL_OUTPUT` was a global cap in v1; in v2 it is per-tool
+  (`bash.max_output`, `read_file.max_output`), both defaulting to 16000.
+- Phase request slices live per phase now: `phases.explore.requests` (90)
+  and `phases.commit.requests` (25). The global `budget.request_limit`
+  stays as the cross-phase guard.
+
+## Sections overview
+
+- `[agent]` — pipeline entry, emergency phase, step guard, temperature.
+- `[budget]` — global wall-clock/token/request budgets (TrackedModel).
+- `[tools.*]` — per-tool `enabled`, `timeout`, `max_output`.
+- `[phases.*]` — per-phase toolset, request/time slices, reasoning effort,
+  retry count, template wrapper overrides.
+- `[template]` — ordered block list + per-block wrappers for the common
+  request template.
