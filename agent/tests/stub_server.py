@@ -16,6 +16,8 @@ FINAL_ANSWER = "Created hello.txt with the exact content hello"
 #   script: optional list of response steps; step i answers request i+1.
 #     step {"final": "text"}  -> plain final answer (default FINAL_ANSWER)
 #     step {"tool_call": {"name": "bash", "arguments": {...}}} -> assistant tool call
+#     optional per step: "reasoning": model thinking text, returned as
+#     `reasoning_content` (llama.cpp style) alongside the answer.
 stub_state: dict = {"last_path": None, "last_body": None, "bodies": [], "script": None}
 
 
@@ -68,6 +70,8 @@ class StubHandler(BaseHTTPRequestHandler):
                 finish = "tool_calls"
             else:
                 message = {"role": "assistant", "content": step.get("final", FINAL_ANSWER)}
+                if step.get("reasoning") is not None:
+                    message["reasoning_content"] = step["reasoning"]
                 finish = "stop"
             payload = {
                 **base,
@@ -135,7 +139,23 @@ class StubHandler(BaseHTTPRequestHandler):
                             "finish_reason": None,
                         }
                     ],
-                },
+                }
+            ]
+            if step.get("reasoning") is not None:
+                chunks.append(
+                    {
+                        **base,
+                        "object": "chat.completion.chunk",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning_content": step["reasoning"]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            chunks += [
                 {
                     **base,
                     "object": "chat.completion.chunk",

@@ -14,7 +14,12 @@ import logging
 import sys
 from typing import Any
 
-from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartEndEvent,
+    ThinkingPart,
+)
 from pydantic_ai.run import AgentRunResultEvent
 
 MAX_LOG_VALUE_CHARS = 16000
@@ -58,7 +63,19 @@ def _log_event(event: str, **fields: Any) -> None:
     LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
 
 
+def _log_event_raw(event: str, **fields: Any) -> None:
+    """Emit an event with raw, untruncated values (llm_thinking must be complete)."""
+    _configure_logging()
+    payload = {"event": event}
+    payload.update(fields)
+    LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
+
+
 def _log_stream_event(event: Any) -> str | None:
+    if isinstance(event, PartEndEvent) and isinstance(event.part, ThinkingPart):
+        _log_event_raw("llm_thinking", index=event.index, content=event.part.content)
+        return None
+
     if isinstance(event, FunctionToolCallEvent):
         part = event.part
         fields = {"tool": part.tool_name}
