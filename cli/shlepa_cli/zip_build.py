@@ -1,9 +1,11 @@
 """Build the submission zip from agent/ (flat layout, telemetry excluded).
 
 The zip is what gets handed to the contest runtime: run.sh at the root
-(executable bit preserved via zip attrs), agent.py, and the shlepa_agent
-package. Development-only artifacts (telemetry module, pyproject, lockfile,
-tests, caches) are excluded so the submission cannot ship telemetry.
+(executable bit preserved via zip attrs), agent.py, the shlepa_agent
+package, and the bundled tools/ directory (zero-dependency helper scripts,
+e.g. tools/recon.py, referenced by the agent's system prompt).
+Development-only artifacts (telemetry module, pyproject, lockfile, tests,
+caches) are excluded so the submission cannot ship telemetry.
 """
 
 import os
@@ -16,6 +18,11 @@ MAX_ZIP_BYTES = 10 * 1024 * 1024
 
 #: Package directory copied into the zip root.
 PACKAGE_DIR = "shlepa_agent"
+
+#: Extra top-level directories (besides the package) bundled into the zip
+#: root, so the agent can run e.g. `python3 tools/recon.py <url>` from its
+#: working directory (the unzipped submission root in contest mode).
+BUNDLED_DIRS = ("tools",)
 
 #: Directory names excluded anywhere inside the package.
 EXCLUDED_DIR_NAMES = {"telemetry", "__pycache__"}
@@ -101,6 +108,17 @@ def build_submission_zip(repo_root: Path) -> Path:
             if _is_excluded(rel):
                 continue
             zf.write(path, rel.as_posix())
+        for dir_name in BUNDLED_DIRS:
+            bundled_dir = agent_dir / dir_name
+            if not bundled_dir.is_dir():
+                continue
+            for path in sorted(bundled_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(agent_dir)
+                if _is_excluded(rel):
+                    continue
+                zf.write(path, rel.as_posix())
 
     size = out.stat().st_size
     if size > MAX_ZIP_BYTES:
@@ -117,4 +135,6 @@ __all__ = [
     "ZipBuildError",
     "build_submission_zip",
     "EXEC_MODE",
+    "PACKAGE_DIR",
+    "BUNDLED_DIRS",
 ]

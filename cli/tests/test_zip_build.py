@@ -2,6 +2,7 @@
 
 import ast
 import os
+import shutil
 import stat
 import zipfile
 from pathlib import Path
@@ -24,6 +25,11 @@ def _make_agent_tree(agent_dir: Path) -> None:
     (agent_dir / "shlepa_agent" / "__pycache__" / "core.cpython-312.pyc").write_bytes(b"\x00")
     (agent_dir / "pyproject.toml").write_text("[project]\n")
     (agent_dir / "uv.lock").write_text("")
+    (agent_dir / "tools").mkdir()
+    (agent_dir / "tools" / "recon.py").write_text("print('recon')\n")
+    # Files inside tools/ that must be excluded by the same rules.
+    (agent_dir / "tools" / "__pycache__").mkdir()
+    (agent_dir / "tools" / "__pycache__" / "recon.cpython-312.pyc").write_bytes(b"\x00")
 
 
 def test_build_zip_entries_and_exclusions(tmp_path: Path) -> None:
@@ -41,7 +47,18 @@ def test_build_zip_entries_and_exclusions(tmp_path: Path) -> None:
         "agent.py",
         "shlepa_agent/__init__.py",
         "shlepa_agent/core.py",
+        "tools/recon.py",
     }
+
+
+def test_zip_missing_tools_dir_is_ok(tmp_path: Path) -> None:
+    agent_dir = tmp_path / "agent"
+    _make_agent_tree(agent_dir)
+    shutil.rmtree(agent_dir / "tools")
+    out = build_submission_zip(tmp_path)
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+    assert not any(n.startswith("tools/") for n in names)
 
 
 def test_run_sh_kept_executable_in_zip(tmp_path: Path) -> None:

@@ -176,11 +176,13 @@ if __name__ == "__main__":
 
 
 def stage_agent(context_dir: Path, agent_dir: Path) -> Path:
-    """Copy the shlepa_agent package into ``context_dir/dev_agent/``.
+    """Copy the shlepa_agent package + tools/ into ``context_dir/dev_agent/``.
 
     Telemetry IS included (dev images are local-only; the submission
     zip excludes it). run.sh / agent.py / tests / pyproject are not
-    part of the in-container agent.
+    part of the in-container agent. The tools/ helper scripts (e.g.
+    tools/recon.py) land at /agent/tools/ inside the container, matching
+    the /agent/... path the system prompt falls back to.
     """
     context_dir = Path(context_dir)
     agent_dir = Path(agent_dir)
@@ -192,6 +194,14 @@ def stage_agent(context_dir: Path, agent_dir: Path) -> Path:
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
     )
+    tools_src = agent_dir / "tools"
+    if tools_src.is_dir():
+        shutil.copytree(
+            tools_src,
+            context_dir / "dev_agent" / "tools",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
     (context_dir / "dev_agent" / "dev_run.py").write_text(DEV_RUN_SOURCE)
     return context_dir / "dev_agent"
 
