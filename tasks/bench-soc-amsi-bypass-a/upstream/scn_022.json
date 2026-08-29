@@ -1,0 +1,510 @@
+{
+  "scenario_id": "SCN-022",
+  "title": "AMSI bypass via memory patch before PowerShell execution",
+  "description": "Scenario 22: AMSI bypass via memory patch before PowerShell execution. Generated from template TMPL-EVA-003.",
+  "soc_tier": "tier2",
+  "difficulty": "hard",
+  "attack_duration_minutes": 46,
+  "dwell_time_minutes": 2043,
+  "mitre_techniques": [
+    "T1562.001"
+  ],
+  "primary_skills_tested": [
+    "LA-02",
+    "HG-02",
+    "FP-01"
+  ],
+  "log_sources_present": [
+    "sysmon",
+    "windows_event_logs"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-HR-20",
+    "victim_user": "t.nguyen",
+    "seed": 64
+  },
+  "telemetry": {
+    "windows_event_logs": [
+      {
+        "timestamp": "2026-04-25T09:01:17.000Z",
+        "host": "WS-HR-20",
+        "event_id": 4104,
+        "description": "PowerShell Script Block Logging",
+        "fields": {
+          "ScriptBlockText": "[Ref].Assembly.GetType('System.Management.Automation.AmsiUtils').GetField('amsiInitFailed','NonPublic,Static').SetValue($null,$true)",
+          "Path": "",
+          "MessageNumber": "1"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "AMSI bypass string in PowerShell ScriptBlock \u2014 disabling AMSI before payload execution."
+      },
+      {
+        "timestamp": "2026-04-25T08:03:09.000Z",
+        "host": "WS-IT-05",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "s.garcia",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:19:35.000Z",
+        "host": "WS-HR-03",
+        "event_id": 4634,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "p.adams",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:44:36.000Z",
+        "host": "WS-HR-06",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "k.brown",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:08:31.000Z",
+        "host": "WS-FIN-08",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "r.chen",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:15:59.000Z",
+        "host": "WS-MKT-13",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "a.patel",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:13:54.000Z",
+        "host": "WS-MKT-12",
+        "event_id": 4648,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "a.patel",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:14:53.000Z",
+        "host": "WS-MKT-17",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "j.smith",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:00:31.000Z",
+        "host": "WS-IT-07",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "j.smith",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign"
+      }
+    ],
+    "sysmon": [
+      {
+        "timestamp": "2026-04-25T09:01:50.000Z",
+        "host": "WS-HR-20",
+        "event_id": 10,
+        "description": "Process Access",
+        "fields": {
+          "SourceImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+          "TargetImage": "C:\\Windows\\System32\\amsi.dll",
+          "GrantedAccess": "0x1410"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "PowerShell accessing amsi.dll with write-capable access \u2014 AMSI bypass."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-25T08:18:20.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:19:26.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:27:47.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:33:19.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:01:26.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:45:49.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:01:40.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:00:21.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:54:37.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:53:04.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:58:27.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T11:53:20.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:03:05.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:17:40.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:40:37.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:32:14.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:49:30.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:11:51.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:19:23.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:44:49.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:08:56.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:43:58.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T13:00:06.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:11:00.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:29:04.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:05:03.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:56:02.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:13:51.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:54:30.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T11:06:00.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:16:59.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:26:08.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T09:08:53.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T08:30:35.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:26:25.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T10:06:45.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T11:34:54.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:29:14.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T07:48:01.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T11:18:22.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T11:26:52.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-25T12:33:09.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1562.001: AMSI bypass via memory patch before PowerShell execution"
+    ],
+    "compromised_accounts": [
+      "t.nguyen@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-HR-20"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1562.001"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
