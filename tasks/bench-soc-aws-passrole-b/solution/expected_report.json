@@ -1,0 +1,16 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1098.003",
+  "compromised_hosts": [
+    "WS-ENG-04"
+  ],
+  "compromised_accounts": [
+    "r.chen"
+  ],
+  "key_indicators": [
+    "PassRole",
+    "AdminRole",
+    "91.108.4.22",
+    "arn:aws:iam::123456789012:role/AdminRole"
+  ]
+}
