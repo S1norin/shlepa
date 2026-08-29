@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1574.001",
+  "compromised_hosts": [
+    "WS-IT-18"
+  ],
+  "compromised_accounts": [
+    "t.nguyen"
+  ],
+  "key_indicators": [
+    "C:\\Program Files\\SomeApp\\winmm.dll",
+    "C:\\Program Files\\SomeApp\\app.exe",
+    "SHA256=FE5B44526813446CB02707C831E24F87FE5B44526813446CB02707C831E24F87"
+  ]
+}

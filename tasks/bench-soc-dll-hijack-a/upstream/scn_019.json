@@ -1,0 +1,420 @@
+{
+  "scenario_id": "SCN-019",
+  "title": "DLL hijacking via writable application directory",
+  "description": "Scenario 19: DLL hijacking via writable application directory. Generated from template TMPL-PERS-003.",
+  "soc_tier": "tier3",
+  "difficulty": "hard",
+  "attack_duration_minutes": 30,
+  "dwell_time_minutes": 491,
+  "mitre_techniques": [
+    "T1574.001"
+  ],
+  "primary_skills_tested": [
+    "LA-02",
+    "HG-03",
+    "FP-03"
+  ],
+  "log_sources_present": [
+    "sysmon"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-IT-18",
+    "victim_user": "t.nguyen",
+    "seed": 61
+  },
+  "telemetry": {
+    "sysmon": [
+      {
+        "timestamp": "2026-04-22T09:04:09.000Z",
+        "host": "WS-IT-18",
+        "event_id": 7,
+        "description": "Image Loaded",
+        "fields": {
+          "Image": "C:\\Program Files\\SomeApp\\app.exe",
+          "ImageLoaded": "C:\\Program Files\\SomeApp\\winmm.dll",
+          "Signed": "false",
+          "Hashes": "SHA256=FE5B44526813446CB02707C831E24F87FE5B44526813446CB02707C831E24F87"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Unsigned winmm.dll loaded from application directory \u2014 DLL hijacking."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-22T11:49:25.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:23:40.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:47:54.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:01:44.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:46:52.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:42:51.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:31:08.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:15:02.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:31:01.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:39:01.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:41:33.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:57:42.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:48:47.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:54:07.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:25:37.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:47:51.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:50:32.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:25:52.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:43:37.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T12:10:38.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:45:28.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:32:48.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:38:50.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:40:50.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:17:38.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:50:38.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:11:54.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T07:19:16.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:41:11.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:22:31.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:47:43.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:31:10.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:03:19.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:26:48.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T09:10:32.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:40:57.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:42:28.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T12:35:39.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T12:00:00.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:13:30.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:01:26.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T12:37:30.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T11:39:14.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T08:46:59.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-22T10:38:44.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1574.001: DLL hijacking via writable application directory"
+    ],
+    "compromised_accounts": [
+      "t.nguyen@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-IT-18"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1574.001"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
