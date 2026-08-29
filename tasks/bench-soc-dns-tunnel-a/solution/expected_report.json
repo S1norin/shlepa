@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1071.004",
+  "compromised_hosts": [
+    "WS-MKT-17"
+  ],
+  "compromised_accounts": [
+    "e.taylor"
+  ],
+  "key_indicators": [
+    "cdn-284294b3.cloudsync-net.com",
+    "TXT",
+    "ab2b9b6bc22646ad9e7ad590797f.cdn-284294b3.cloudsync-net.com"
+  ]
+}
