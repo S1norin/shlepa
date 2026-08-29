@@ -145,8 +145,8 @@ def test_log_task_to_mlflow_file_store(tmp_path):
     assert run.data.tags["model"] == "stub-model"
     assert run.data.tags["endpoint_class"] == "main"
     assert run.data.params["final_output"] == "Created hello.txt"
-    # Experiment name == preset name, run name == task slug.
-    assert client.get_experiment(run.info.experiment_id).name == "all"
+    # Experiment name == task family, run name == task slug.
+    assert client.get_experiment(run.info.experiment_id).name == "contest"
     assert run.info.run_name == "contest-hello-file"
 
 
@@ -162,7 +162,24 @@ def test_log_task_unsolved_metrics(tmp_path):
     run = client.get_run(run_id)
     assert run.data.metrics["solved"] == 0.0
     assert run.data.tags["model"] == "env"
-    assert client.get_experiment(run.info.experiment_id).name == "quick"
+    # Family comes from the slug, not the (arbitrary) preset name.
+    assert client.get_experiment(run.info.experiment_id).name == "contest"
+
+
+def test_log_task_experiment_is_task_family(tmp_path):
+    """bench-* slugs land in bench-<x> experiments even under preset 'all'."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "all", "m", _result(tmp_path, slug="bench-soc-ntds-vss-a")
+    )
+
+    run = client.get_run(run_id)
+    assert run.data.tags["preset"] == "all"
+    assert run.data.tags["model"] == "m"
+    assert client.get_experiment(run.info.experiment_id).name == "bench-soc"
 
 
 def test_log_task_logs_error_param(tmp_path):

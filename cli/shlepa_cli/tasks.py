@@ -43,6 +43,23 @@ class Preset:
     agent: dict = field(default_factory=dict)
 
 
+def task_family(slug: str) -> str:
+    """Derive the MLflow experiment family from a task slug.
+
+    ``bench-<x>-...`` -> ``bench-<x>`` (first two components),
+    ``contest-...`` -> ``contest``, anything else -> first dash-separated
+    component (``misc`` when the slug has no dash).
+    """
+    if not slug:
+        return "misc"
+    if slug.startswith("bench"):
+        return "-".join(slug.split("-")[:2])
+    if slug.startswith("contest"):
+        return "contest"
+    parts = slug.split("-")
+    return parts[0] if len(parts) >= 2 else "misc"
+
+
 def discover_tasks(tasks_dir: Path) -> list[Task]:
     """Scan ``tasks_dir/*/task.toml`` and return tasks sorted by slug.
 

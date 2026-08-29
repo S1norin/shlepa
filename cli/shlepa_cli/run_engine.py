@@ -28,7 +28,7 @@ from pathlib import Path
 
 from shlepa_cli import mlflow_compat as compat
 from shlepa_cli.config import Settings
-from shlepa_cli.tasks import Task
+from shlepa_cli.tasks import Task, task_family
 
 DEFAULT_TRACE_EXPERIMENT = "shlepa-traces"
 AGENT_SERVICE = "shlepa-agent"
@@ -298,18 +298,25 @@ def log_task_to_mlflow(
     batch_id: str | None = None,
     batch_started_ms: int | None = None,
     trace_wait_sec: float = 15.0,
+    experiment_name: str | None = None,
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
-    experiment = preset name, run name = task slug. With otel on and a
-    ``batch_id`` given, the run is tagged with ``batch_id`` and (when the
-    trace is found) ``mlflow_trace_id``.
+    experiment = task family (derived from the slug via ``task_family``),
+    run name = task slug. The preset is kept only as a tag so per-bench
+    analysis groups runs by family while preset-scoped filtering still
+    works. ``experiment_name`` overrides the family derivation for callers
+    that log to a fixed experiment (smoke/CI); the preset tag always
+    reflects ``preset_name``. With otel on and a ``batch_id`` given, the
+    run is tagged with ``batch_id`` and (when the trace is found)
+    ``mlflow_trace_id``.
     """
     import shlepa_agent
 
-    experiment = client.get_experiment_by_name(preset_name)
+    family = experiment_name or task_family(result.slug)
+    experiment = client.get_experiment_by_name(family)
     if experiment is None:
-        experiment_id = client.create_experiment(preset_name)
+        experiment_id = client.create_experiment(family)
     else:
         experiment_id = experiment.experiment_id
     tags = {

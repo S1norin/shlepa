@@ -105,8 +105,11 @@ def test_run_preset_logs_mlflow(tmp_path):
         agent_runner=_agent_for(None),
         mlflow_client=client,
     )
-    exp = client.get_experiment_by_name("exp1")
+    # Runs land in the task-family experiment (slug 'ok-task' -> 'ok'),
+    # not the preset-named one; the preset is kept as a tag.
+    exp = client.get_experiment_by_name("ok")
     assert exp is not None
     runs = client.search_runs([exp.experiment_id])
     assert len(runs) == 1
     assert runs[0].data.metrics["solved"] == 1.0
+    assert runs[0].data.tags["preset"] == "exp1"

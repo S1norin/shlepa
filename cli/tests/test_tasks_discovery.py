@@ -1,5 +1,7 @@
 """Task discovery tests (fixture tree)."""
 
+import pytest
+
 from shlepa_cli import tasks
 
 
@@ -128,3 +130,28 @@ def test_discover_name_falls_back_to_directory(tmp_path):
     found = tasks.discover_tasks(root / "tasks")
 
     assert found[0].name == "own-no-name"
+
+
+# --- Task family (MLflow experiment naming) --------------------------------
+
+
+@pytest.mark.parametrize(
+    ("slug", "expected"),
+    [
+        ("bench-soc-ntds-vss-a", "bench-soc"),
+        ("bench-soc-ntds-vss-c", "bench-soc"),
+        ("bench-ctf-whyos", "bench-ctf"),
+        ("bench-cve-2026-1234", "bench-cve"),
+        ("bench-cybergym-0001", "bench-cybergym"),
+        ("bench-seccodebench-176768", "bench-seccodebench"),
+        ("bench-ctf", "bench-ctf"),
+        ("bench", "bench"),
+        ("contest-hello-file", "contest"),
+        ("contest-fix-sqli-search", "contest"),
+        ("weird-slug", "weird"),
+        ("nous", "misc"),
+        ("", "misc"),
+    ],
+)
+def test_task_family(slug, expected):
+    assert tasks.task_family(slug) == expected
