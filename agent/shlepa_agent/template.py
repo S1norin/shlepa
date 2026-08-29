@@ -15,11 +15,21 @@ its own.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from shlepa_agent.config import AgentConfig, BlockWrapper
+
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 #: Blocks rendered into the system message (in config list order); every
 #: other configured block renders into the user message.
 SYSTEM_BLOCKS = ("system", "tools")
+
+
+def load_prompt(name: str) -> str:
+    """Read a prompt file (prompts/*.md), stripped of surrounding whitespace."""
+    return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
+
 
 _EMPTY_WRAPPER = BlockWrapper()
 

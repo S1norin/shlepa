@@ -25,11 +25,9 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
 
@@ -40,15 +38,9 @@ from shlepa_agent.log import (
     _log_stream_event,
 )
 from shlepa_agent.model import BudgetExceeded, TrackedModel
-from shlepa_agent.template import render_system, render_user
+from shlepa_agent.phases.commit import trim_history
+from shlepa_agent.template import load_prompt, render_system, render_user
 from shlepa_agent.tools import AgentDeps, get_tools
-
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-
-
-def load_prompt(name: str) -> str:
-    """Read a prompt file (prompts/*.md), stripped of surrounding whitespace."""
-    return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
 
 
 @dataclass(frozen=True)
@@ -141,26 +133,6 @@ def _resolve_model_name() -> str:
     raise ValueError(
         "Missing required model name: set LOCAL_AGENT_MODEL (preferred) or OPENAI_MODEL"
     )
-
-
-def _trim_history(messages: list[Any]) -> list[Any]:
-    """Build a safe message history for the commit-phase run.
-
-    - Drop the trailing user/retry prompt (the commit prompt replaces it).
-    - Drop a trailing model response with unpaired tool calls (would 400).
-    A trailing tool-return request is kept: it is a valid open state.
-    """
-    msgs = list(messages)
-    if msgs and isinstance(msgs[-1], ModelRequest):
-        has_tool_return = any(isinstance(p, ToolReturnPart) for p in msgs[-1].parts)
-        if not has_tool_return:
-            msgs.pop()
-    while msgs and isinstance(msgs[-1], ModelResponse):
-        if any(isinstance(p, ToolCallPart) for p in msgs[-1].parts):
-            msgs.pop()
-            continue
-        break
-    return msgs
 
 
 def _is_budget_error(exc: BaseException) -> bool:
@@ -267,7 +239,7 @@ async def _run_commit(
             elapsed_s=round(model.elapsed(), 1),
         )
         return
-    history = _trim_history(model.last_messages)
+    history = trim_history(model.last_messages)
     # Commit message: the common template rendered for the emergency phase.
     # The task block is repeated only when there is no history to resume
     # (otherwise the task is already in the conversation).
