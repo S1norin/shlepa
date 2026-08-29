@@ -51,6 +51,13 @@ uv run --project cli python otel/check_trace.py
 `shlepa run` prints an MLflow URL per task; the summary table shows
 solved/duration/tokens. Workspaces land in `tmp/<YYYYMMDD-HHMMSS>-<slug>/`.
 
+Runs are logged into the MLflow experiment named after the **task family**
+derived from the slug — `bench-<x>-*` → `bench-<x>` (e.g. `bench-soc`,
+`bench-ctf`), `contest-*` → `contest`, anything else → first dash component
+(fallback `misc`). The preset is kept as a tag, so you can still filter
+runs by preset. Legacy preset-named experiments (`all`, `ctf`, …) are
+untouched history; `shlepa-ci` and `smoke` keep their fixed experiments.
+
 ## Command reference
 
 All commands run from the repo root via `uv run --project cli shlepa ...`.

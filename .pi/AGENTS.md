@@ -72,12 +72,16 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 
 ## MLflow / OTel overview
 
-- Experiment name = preset name (e.g. `all`); run name = task display
-  name; metrics: `duration_sec`, `tokens_in/out/total`, `tool_calls`,
-  `solved`; tags: `preset`, `model`, `agent_version`, `git_sha`,
-  `endpoint_class`.
-- CI logs to a dedicated experiment **`shlepa-ci`**
-  (`endpoint_class=ci`).
+- Experiment name = task **family** derived from the slug
+  (`bench-<x>-*` → `bench-<x>`, `contest-*` → `contest`, otherwise the
+  first dash component, fallback `misc`); run name = task display name;
+  metrics: `duration_sec`, `tokens_in/out/total`, `tool_calls`, `solved`;
+  tags: `preset`, `model`, `agent_version`, `git_sha`, `endpoint_class`
+  (the preset stays a tag, so preset-scoped filtering still works).
+  Legacy preset-named experiments (`all`, `ctf`, `socbench`, …) are kept
+  untouched as history — only new runs use family naming.
+- CI and smoke log to a dedicated experiment **`shlepa-ci`** / `smoke`
+  (`endpoint_class=ci` for CI) via an explicit experiment override.
 - Registered model **`shlepa`**: one version per submission
   (`shlepa zip --register`), artifacts = submission zip + full agent
   source tarball, tags `git_sha`/`model`.
