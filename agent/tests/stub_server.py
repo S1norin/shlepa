@@ -16,6 +16,7 @@ FINAL_ANSWER = "Created hello.txt with the exact content hello"
 #   script: optional list of response steps; step i answers request i+1.
 #     step {"final": "text"}  -> plain final answer (default FINAL_ANSWER)
 #     step {"tool_call": {"name": "bash", "arguments": {...}}} -> assistant tool call
+#     step {"error": 500}     -> HTTP error response (OpenAI-style error body)
 #     optional per step: "reasoning": model thinking text, returned as
 #     `reasoning_content` (llama.cpp style) alongside the answer.
 stub_state: dict = {"last_path": None, "last_body": None, "bodies": [], "script": None}
@@ -44,6 +45,21 @@ class StubHandler(BaseHTTPRequestHandler):
         stub_state["last_path"] = self.path
         stub_state["last_body"] = body
         step = self._step()
+        if step.get("error") is not None:
+            status = int(step["error"])
+            payload = {
+                "error": {
+                    "message": step.get("error_message", f"stub error {status}"),
+                    "type": "stub_error",
+                }
+            }
+            data = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         tool_call = step.get("tool_call")
         base = {
             "id": "chatcmpl-stub",
