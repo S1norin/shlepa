@@ -109,14 +109,8 @@ def test_trim_history_drops_dangling_tool_call_response():
 # -- config-driven toolsets and limits ----------------------------------------
 def test_phase_toolsets_from_config():
     cfg = load_config()
-    assert CommitPhase().tools(cfg) == ["bash", "read_file", "write_file"]
-    assert ExplorePhase().tools(cfg) == [
-        "bash",
-        "read_file",
-        "write_file",
-        "append_file",
-        "apply_diff",
-    ]
+    assert CommitPhase().tools(cfg) == ["read", "write", "edit", "bash"]
+    assert ExplorePhase().tools(cfg) == ["read", "write", "edit", "bash"]
 
 
 def test_phase_limits_from_config():

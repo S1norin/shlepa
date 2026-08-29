@@ -48,19 +48,26 @@ class BudgetConfig(BaseModel):
 
 
 class ToolConfig(BaseModel):
-    """Per-tool settings (timeout/max_output are used where relevant)."""
+    """Per-tool settings. Fields are used where relevant:
+
+    - ``timeout``: bash default per-call timeout (seconds)
+    - ``max_timeout``: bash hard cap for the per-call timeout (seconds)
+    - ``max_limit``: read max lines per call
+    - ``max_output``: hard char cap on the tool result (read: 4000, bash: 16000)
+    """
 
     enabled: bool = True
     timeout: float | None = None
+    max_timeout: float | None = None
     max_output: int | None = None
+    max_limit: int | None = None
 
 
 class ToolsConfig(BaseModel):
-    bash: ToolConfig = ToolConfig(enabled=True, timeout=120.0, max_output=16000)
-    read_file: ToolConfig = ToolConfig(enabled=True, max_output=16000)
-    write_file: ToolConfig = ToolConfig()
-    append_file: ToolConfig = ToolConfig()
-    apply_diff: ToolConfig = ToolConfig()
+    bash: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_timeout=120.0, max_output=16000)
+    read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
+    write: ToolConfig = ToolConfig()
+    edit: ToolConfig = ToolConfig()
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -126,8 +133,10 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_BUDGET_REQUEST_TIMEOUT": ("budget.request_timeout", float),
     "SHLEPA_BUDGET_REQUEST_WALL": ("budget.request_wall", float),
     "SHLEPA_BASH_TIMEOUT": ("tools.bash.timeout", float),
+    "SHLEPA_BASH_MAX_TIMEOUT": ("tools.bash.max_timeout", float),
     "SHLEPA_BASH_MAX_OUTPUT": ("tools.bash.max_output", int),
-    "SHLEPA_READ_MAX_OUTPUT": ("tools.read_file.max_output", int),
+    "SHLEPA_READ_MAX_LIMIT": ("tools.read.max_limit", int),
+    "SHLEPA_READ_MAX_OUTPUT": ("tools.read.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REQUEST_LIMIT": ("phases.commit.requests", int),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),

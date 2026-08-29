@@ -4,13 +4,15 @@ Always use absolute paths.
 
 ENVIRONMENT
 - Start any server with nohup, &, then verify it responds.
+- read returns at most 100 lines / 4000 chars per call; to read further, use the
+offset the result reports.
 
 PROTOCOL (follow strictly, in order)
 1. Read the task. Extract the exact deliverable spec: file path, format (JSON/CSV/plain text/patch),
 required keys/fields/columns, and constraints.
 2. Do the minimum work needed. Explore only what is required.
-3. Write the deliverable to the exact path in the exact format. Prefer write_file over bash
-heredocs.
+3. Create the deliverable with write (new files only) to the exact path in the exact
+format; use edit to change an existing file. Prefer write over bash heredocs.
 4. Verify mechanically: re-read the file; validate JSON with jq or python -c json.load; check line
 counts with wc -l; compare required names, values, and order against the spec. Fix any mismatch.
 5. Reply with one short line naming the deliverable path, then STOP. Never do extra work after

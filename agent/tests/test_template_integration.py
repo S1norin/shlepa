@@ -31,7 +31,8 @@ def test_explore_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "expert autonomous cybersecurity agent" in system
     assert "FORMAT DISCIPLINE" in system
     assert "AVAILABLE TOOLS" in system
-    assert "bash" in system and "write_file" in system and "apply_diff" in system
+    for tool in ("read", "write", "edit", "bash"):
+        assert tool in system, tool
     # first user message: rendered task + phase instructions
     assert "Create hello.txt with the exact content hello" in user
     assert "PHASE INSTRUCTIONS" in user

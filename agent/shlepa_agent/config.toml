@@ -28,31 +28,36 @@ request_timeout = 180.0
 request_wall = 240.0
 
 [tools.bash]
+# Per-call timeout in seconds: default 30, hard cap 120 (out-of-range values
+# are clamped and announced to the model). max_output caps the result text.
 enabled = true
-timeout = 120.0
+timeout = 30.0
+max_timeout = 120.0
 max_output = 16000
 
-[tools.read_file]
+[tools.read]
+# Paged reads: at most max_limit lines per call (default page when the model
+# omits limit), result capped at max_output chars.
 enabled = true
-max_output = 16000
+max_limit = 100
+max_output = 4000
 
-[tools.write_file]
+[tools.write]
+# New files only (never overwrites).
 enabled = true
 
-[tools.append_file]
-enabled = true
-
-[tools.apply_diff]
+[tools.edit]
+# Precise replacements in existing files (edits[] with optional 0-based line).
 enabled = true
 
 [phases.explore]
-tools = ["bash", "read_file", "write_file", "append_file", "apply_diff"]
+tools = ["read", "write", "edit", "bash"]
 requests = 90
 time = 500.0
 
 [phases.commit]
 # Emergency / terminal phase: write the deliverable now, verify once, stop.
-tools = ["bash", "read_file", "write_file"]
+tools = ["read", "write", "edit", "bash"]
 requests = 25
 time = 80.0
 reasoning_effort = "low"

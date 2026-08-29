@@ -25,13 +25,16 @@ def test_budget_values_match_v1_defaults():
     assert b.request_wall == 240.0
 
 
-def test_tool_values_match_v1_defaults():
+def test_tool_values():
     cfg = load_config()
     assert cfg.tools.bash.enabled is True
-    assert cfg.tools.bash.timeout == 120.0
+    assert cfg.tools.bash.timeout == 30.0
+    assert cfg.tools.bash.max_timeout == 120.0
     assert cfg.tools.bash.max_output == 16000
-    assert cfg.tools.read_file.max_output == 16000
-    for name in ("write_file", "append_file", "apply_diff"):
+    assert cfg.tools.read.enabled is True
+    assert cfg.tools.read.max_limit == 100
+    assert cfg.tools.read.max_output == 4000
+    for name in ("write", "edit"):
         assert cfg.tools.get(name).enabled is True
 
 
@@ -44,12 +47,12 @@ def test_unknown_tool_raises():
 def test_phase_values_match_v1():
     cfg = load_config()
     explore = cfg.phases["explore"]
-    assert set(explore.tools) == {"bash", "read_file", "write_file", "append_file", "apply_diff"}
+    assert set(explore.tools) == {"read", "write", "edit", "bash"}
     assert explore.requests == 90
     assert explore.time == 500.0
 
     commit = cfg.phases["commit"]
-    assert set(commit.tools) == {"bash", "read_file", "write_file"}
+    assert set(commit.tools) == {"read", "write", "edit", "bash"}
     assert commit.requests == 25
     assert commit.time == 80.0
     assert commit.reasoning_effort == "low"

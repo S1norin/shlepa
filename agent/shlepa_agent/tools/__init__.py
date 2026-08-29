@@ -9,21 +9,19 @@ tool is a config change (plus one module here for brand-new tools).
 from __future__ import annotations
 
 from shlepa_agent.config import AgentConfig
-from shlepa_agent.tools.append_file import APPEND_FILE_TOOL
-from shlepa_agent.tools.apply_diff import APPLY_DIFF_TOOL
 from shlepa_agent.tools.base import AgentDeps, Tool, resolve_path
 from shlepa_agent.tools.bash import BASH_TOOL
-from shlepa_agent.tools.read_file import READ_FILE_TOOL
-from shlepa_agent.tools.write_file import WRITE_FILE_TOOL
+from shlepa_agent.tools.edit import EDIT_TOOL
+from shlepa_agent.tools.read import READ_TOOL
+from shlepa_agent.tools.write import WRITE_TOOL
 
 ALL_TOOLS: dict[str, Tool] = {
     tool.name: tool
     for tool in (
+        READ_TOOL,
+        WRITE_TOOL,
+        EDIT_TOOL,
         BASH_TOOL,
-        READ_FILE_TOOL,
-        WRITE_FILE_TOOL,
-        APPEND_FILE_TOOL,
-        APPLY_DIFF_TOOL,
     )
 }
 
