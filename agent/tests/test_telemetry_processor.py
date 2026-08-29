@@ -95,3 +95,120 @@ def test_non_llm_span_does_not_stamp_root():
     attrs = roots[0].attributes
     assert "shlepa.llm.cumulative_prompt_tokens" not in attrs
     assert "shlepa.llm.cumulative_completion_tokens" not in attrs
+
+
+# --- Reasoning enrichment (thinking into span output) ----------------------
+
+
+def _llm_span_with_thinking(provider, thinking="let me reason...", answer="final answer"):
+    tracer = provider.get_tracer("t")
+    with tracer.start_as_current_span("chat model") as child:
+        child.set_attribute("gen_ai.operation.name", "chat")
+        child.set_attribute(
+            "gen_ai.output.messages",
+            __import__("json").dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {"type": "thinking", "content": thinking},
+                            {"type": "text", "content": answer},
+                        ],
+                    }
+                ]
+            ),
+        )
+        child.set_attribute("output.value", answer)
+    return "chat model"
+
+
+def test_llm_span_output_enriched_with_thinking():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            name = _llm_span_with_thinking(provider)
+    finally:
+        provider.shutdown()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == name)
+    out = span.attributes.get("output.value")
+    assert "let me reason..." in out  # reasoning visible in the output
+    assert "final answer" in out  # ... followed by the final answer
+    assert span.attributes.get("mlflow.spanOutputs") == out
+
+
+def test_llm_span_without_thinking_untouched():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("chat model") as child:
+                child.set_attribute("gen_ai.operation.name", "chat")
+                child.set_attribute(
+                    "gen_ai.output.messages",
+                    __import__("json").dumps(
+                        [{"role": "assistant",
+                          "parts": [{"type": "text", "content": "just text"}]}]
+                    ),
+                )
+                child.set_attribute("output.value", "just text")
+    finally:
+        provider.shutdown()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "chat model")
+    assert span.attributes.get("output.value") == "just text"
+    assert "mlflow.spanOutputs" not in span.attributes
+
+
+def test_thinking_enrichment_never_raises_on_malformed_messages():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("chat model") as child:
+                child.set_attribute("gen_ai.output.messages", "{not json")
+                child.set_attribute("output.value", "answer")
+    finally:
+        provider.shutdown()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "chat model")
+    assert span.attributes.get("output.value") == "answer"
+
+
+def test_thinking_tool_call_span_output_has_thinking_and_tool_summary():
+    """Non-final turns (thinking + tool call) have no output.value; the
+    enriched output still shows the reasoning plus which tool was called."""
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("chat model") as child:
+                child.set_attribute(
+                    "gen_ai.output.messages",
+                    __import__("json").dumps(
+                        [
+                            {
+                                "role": "assistant",
+                                "parts": [
+                                    {"type": "thinking", "content": "check first"},
+                                    {"type": "tool_call",
+                                     "id": "c1", "name": "bash",
+                                     "arguments": "{\"cmd\": \"ls\"}"},
+                                ],
+                            }
+                        ]
+                    ),
+                )
+                # No output.value: the instrumentation omits it for
+                # non-final tool-call turns.
+    finally:
+        provider.shutdown()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "chat model")
+    out = span.attributes.get("output.value")
+    assert "check first" in out
+    assert "bash" in out

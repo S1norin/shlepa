@@ -11,6 +11,7 @@ requested, so the baseline stays clean of the otel SDK.
 
 from __future__ import annotations
 
+import json
 import os
 import weakref
 from contextlib import contextmanager
@@ -22,8 +23,9 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace import TracerProvider
 
 try:
-    from opentelemetry.sdk.trace import SpanProcessor
+    from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 except ImportError:  # baseline has no otel SDK; configure() is the only path
+    ReadableSpan = None  # type: ignore[assignment, misc]
     SpanProcessor = object  # type: ignore[assignment, misc]
 
 
@@ -137,6 +139,129 @@ class _ShlepaSpanProcessor(SpanProcessor):
         return None
 
 
+def _thinking_and_answer(messages: Any) -> tuple[list[str], str] | None:
+    """Extract thinking parts (and text parts as a fallback answer) from a
+    ``gen_ai.output.messages`` value.
+
+    Returns ``(thinking_parts, text_answer)`` or ``None`` when there is no
+    thinking (or the value is not a messages list).
+    """
+    if isinstance(messages, str):
+        try:
+            messages = json.loads(messages)
+        except ValueError:
+            return None
+    if not isinstance(messages, (list, tuple)):
+        return None
+    thinking: list[str] = []
+    texts: list[str] = []
+    tool_calls: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for part in message.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            content = str(part.get("content") or "")
+            if part_type == "thinking" and content:
+                thinking.append(content)
+            elif part_type == "text" and content:
+                texts.append(content)
+            elif part_type == "tool_call":
+                name = str(part.get("name") or "tool")
+                args = part.get("arguments")
+                if args is None:
+                    tool_calls.append(f"{name}()")
+                elif isinstance(args, str):
+                    tool_calls.append(f"{name}({args})")
+                else:
+                    try:
+                        tool_calls.append(
+                            f"{name}({json.dumps(args, default=str)})"
+                        )
+                    except ValueError:  # pragma: no cover - defensive
+                        tool_calls.append(f"{name}()")
+    if not thinking:
+        return None
+    if texts:
+        return thinking, "\n".join(texts)
+    if tool_calls:
+        return thinking, "tool_calls: " + ", ".join(tool_calls)
+    return thinking, ""
+
+
+def _enrich_span_output(span: ReadableSpan) -> ReadableSpan:
+    """Return a copy of an LLM span with its reasoning in the span output.
+
+    The MLflow trace UI shows span output from ``output.value`` (the server
+    copies it to ``mlflow.spanOutputs``). The pydantic-ai / OpenInference
+    instrumentation puts reasoning into the ``type: "thinking"`` parts of
+    ``gen_ai.output.messages`` while ``output.value`` carries only the final
+    text, so reasoning looks absent. For spans that do carry thinking parts
+    this returns a span copy with ``output.value`` / ``mlflow.spanOutputs``
+    rewritten to ``<thinking>...</thinking>`` followed by the answer; every
+    other span passes through unchanged.
+    """
+    try:
+        attrs = dict(span.attributes or {})
+        found = _thinking_and_answer(attrs.get("gen_ai.output.messages"))
+        if found is None or ReadableSpan is None:
+            return span
+        thinking, text_answer = found
+        answer = str(attrs.get("output.value") or "") or text_answer
+        if not answer:
+            answer = "(no final text)"
+        enriched = (
+            "<thinking>\n" + "\n".join(thinking) + "\n</thinking>\n\n" + answer
+        )
+        attrs["output.value"] = enriched
+        attrs["mlflow.spanOutputs"] = enriched
+        return ReadableSpan(
+            name=span.name,
+            context=span.context,
+            parent=span.parent,
+            resource=span.resource,
+            attributes=attrs,
+            events=span.events,
+            links=span.links,
+            kind=span.kind,
+            status=span.status,
+            start_time=span.start_time,
+            end_time=span.end_time,
+            instrumentation_scope=span.instrumentation_scope,
+        )
+    except Exception:  # pragma: no cover - defensive, must never raise
+        return span
+
+
+class _ThinkingEnrichingExporter:
+    """Span exporter wrapper that surfaces reasoning in span outputs.
+
+    Runs right before the real exporter (see :func:`configure`), so the
+    enrichment is invisible to span processors and to the agent itself.
+    """
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def export(self, spans: Any) -> Any:
+        return self._delegate.export(
+            [_enrich_span_output(span) for span in spans]
+        )
+
+    def shutdown(self) -> None:
+        shutdown = getattr(self._delegate, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+
+    def force_flush(self, timeout_millis: int | None = None) -> bool:
+        flush = getattr(self._delegate, "force_flush", None)
+        if flush is None:
+            return True
+        return flush(timeout_millis)
+
+
 @contextmanager
 def root_span(provider: TracerProvider, task: str | None = None):
     """Context manager for the per-run 'agent.run' root span.
@@ -209,6 +334,10 @@ def configure(exporter: Any | None = None) -> TracerProvider:
         # (or OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) itself and appends the
         # /v1/traces path; passing endpoint= would skip the path append.
         exporter = OTLPSpanExporter()
+
+    # Rewrite LLM span outputs to include reasoning before export (dev-only;
+    # the submission zip never ships this module).
+    exporter = _ThinkingEnrichingExporter(exporter)
 
     provider = TracerProvider(
         resource=Resource.create(
