@@ -265,9 +265,11 @@ def record_trace_tag(
     timeout_sec: float = 15.0,
 ) -> str | None:
     """Retry the batch trace lookup (the collector exports with a lag)
-    and store the trace id in the run tag ``mlflow_trace_id``.
+    and store the trace id in the run tag ``mlflow_trace_id``, then
+    link the trace to the run so the run UI shows it.
 
-    A missing trace is not an error: warn and omit the tag.
+    A missing trace is not an error: warn and omit the tag. A failed
+    link is not an error either: warn and keep the tag.
     """
     deadline = time.monotonic() + max(timeout_sec, 0.0)
     while True:
@@ -276,6 +278,7 @@ def record_trace_tag(
         )
         if trace_id is not None:
             client.set_tag(run_id, "mlflow_trace_id", trace_id)
+            _link_trace_to_run(client, run_id, trace_id)
             return trace_id
         if time.monotonic() >= deadline:
             break
@@ -286,6 +289,26 @@ def record_trace_tag(
         flush=True,
     )
     return None
+
+
+def _link_trace_to_run(client, run_id: str, trace_id: str) -> None:
+    """Link a found trace to its MLflow run (best effort).
+
+    Uses ``MlflowClient.link_traces_to_run`` when the client has it
+    (mlflow >= 3.15); older clients skip silently. A link failure must
+    never fail the run: warn and continue.
+    """
+    link = getattr(client, "link_traces_to_run", None)
+    if link is None:
+        return
+    try:
+        link(trace_ids=[trace_id], run_id=run_id)
+    except Exception as exc:  # noqa: BLE001 - telemetry must not fail runs
+        print(
+            f"  ! failed to link trace {trace_id} to run {run_id} "
+            f"({type(exc).__name__}: {exc}); mlflow_trace_id tag kept",
+            flush=True,
+        )
 
 
 def log_task_to_mlflow(
