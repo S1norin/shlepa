@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-24T09:02:15.000Z", "host": "WS-MKT-10", "event_id": 8, "description": "CreateRemoteThread", "fields": {"SourceImage": "C:\\Users\\t.nguyen\\AppData\\Roaming\\svchost.exe", "TargetImage": "C:\\Windows\\System32\\svchost.exe", "StartFunction": "LoadLibraryA"}}

@@ -1,0 +1,18 @@
+SOC ticket AL-3021 (opened 2026-04-24 09:15 UTC)
+
+Alert: `remote-thread-injection`
+  Sysmon flagged a CreateRemoteThread from a user-profile binary into a signed system service process on WS-MKT-10.
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+  Host:          WS-MKT-10
+  Host owner:    t.nguyen
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  sysmon.jsonl                 - Sysmon export for the window (one JSON object per event; image-load, process-injection, and process-access events).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.
