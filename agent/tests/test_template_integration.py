@@ -11,14 +11,14 @@ import asyncio
 from stub_server import FINAL_ANSWER, stub_state
 
 
-def _run(monkeypatch, stub_openai, tmp_path, task="Create hello.txt with the exact content hello"):
-    from shlepa_agent.core import run_prompt
+def _run(monkeypatch, stub_openai, tmp_path, task="Create hello.txt with the exact content hello", agent_cfg=None):
+    from shlepa_agent.runner import run_prompt
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
-    return asyncio.run(run_prompt(task))
+    return asyncio.run(run_prompt(task, agent_cfg=agent_cfg))
 
 
 def test_explore_request_uses_template(monkeypatch, stub_openai, tmp_path):
@@ -51,10 +51,13 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
         {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},
         {"final": FINAL_ANSWER},  # the commit request
     ]
-    # request limit 2 -> the third explore request raises UsageLimitExceeded,
-    # routing the run to the commit phase.
-    monkeypatch.setenv("AGENT_REQUEST_LIMIT", "2")
-    _run(monkeypatch, stub_openai, tmp_path)
+    # explore request cap 2 -> the third explore request raises
+    # UsageLimitExceeded, routing the run to the commit phase (v2 config).
+    from shlepa_agent.config import load_config
+
+    cfg = load_config().model_copy(deep=True)
+    cfg.phases["explore"].requests = 2
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     bodies = stub_state["bodies"]
     assert len(bodies) == 3, f"expected explore x2 + commit x1, got {len(bodies)}"
     messages = bodies[2]["messages"]

@@ -25,7 +25,7 @@ def test_spans_captured_with_inmemory_exporter(monkeypatch, stub_openai, tmp_pat
         monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
         monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
 
-        from shlepa_agent.core import run_prompt
+        from shlepa_agent.runner import run_prompt
 
         output = asyncio.run(run_prompt("Create hello.txt", instrument=True))
     finally:

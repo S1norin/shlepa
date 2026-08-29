@@ -90,9 +90,9 @@ def make_batch_id() -> str:
 
 
 class _HostMetricsCapture(logging.Handler):
-    """Collect token/tool metrics from the v1 agent's JSON event log.
+    """Collect token/tool metrics from the agent's JSON event log.
 
-    The v1 core logs a ``usage`` event with cumulative tokens after each
+    The runner logs a ``usage`` event with cumulative tokens after each
     model request and a ``llm_tool_call`` event per tool invocation.
     """
 
@@ -127,15 +127,17 @@ def run_agent_on_host(
     Env vars for the agent come from the process environment (the CLI
     loads .env at startup); LOCAL_AGENT_MODEL and LOCAL_AGENT_WORKDIR
     are overridden for the duration of the run. Works like the
-    in-container path: core.run_prompt runs the budgeted v1 agent (main
-    phase plus the commit phase) and never raises on budget; an outer
+    in-container path: runner.run_prompt runs the budgeted agent (phase
+    graph plus the emergency commit phase) and never raises on budget;
+    an outer
     wait_for timeout still surfaces as TimeoutError.
     """
-    from shlepa_agent import core
+    from shlepa_agent import runner
+    from shlepa_agent.log import LOGGER, _configure_logging
 
     capture = _HostMetricsCapture()
-    core._configure_logging()
-    core.LOGGER.addHandler(capture)
+    _configure_logging()
+    LOGGER.addHandler(capture)
     old_model = os.environ.get("LOCAL_AGENT_MODEL")
     old_workdir = os.environ.get("LOCAL_AGENT_WORKDIR")
     if model:
@@ -145,7 +147,7 @@ def run_agent_on_host(
         try:
             output = asyncio.run(
                 asyncio.wait_for(
-                    core.run_prompt(instruction, instrument=otel_enabled),
+                    runner.run_prompt(instruction, instrument=otel_enabled),
                     timeout=timeout_sec,
                 )
             )
@@ -160,7 +162,7 @@ def run_agent_on_host(
             os.environ.pop("LOCAL_AGENT_WORKDIR", None)
         else:
             os.environ["LOCAL_AGENT_WORKDIR"] = old_workdir
-        core.LOGGER.removeHandler(capture)
+        LOGGER.removeHandler(capture)
 
     return AgentRun(
         final_output=output,

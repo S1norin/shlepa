@@ -33,7 +33,7 @@ def test_baseline_runs_without_otel_sdk(monkeypatch, stub_openai, tmp_path):
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
     try:
-        from shlepa_agent.core import run_prompt
+        from shlepa_agent.runner import run_prompt
 
         output = asyncio.run(
             run_prompt("Create hello.txt with the exact content hello")
