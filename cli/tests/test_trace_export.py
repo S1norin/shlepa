@@ -318,6 +318,117 @@ def test_manifest_carries_tokens_missing_signal(tmp_path):
     assert "tokens_missing" in line["signals"]
 
 
+def _llm_span_with_output_messages(parts):
+    return _Span(
+        span_id="llm-msg",
+        parent_id=None,
+        name="chat model",
+        span_type="LLM",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=0,
+        end_time_ns=1_000_000_000,
+        attributes={
+            "gen_ai.usage.input_tokens": "10",
+            "gen_ai.usage.output_tokens": "2",
+            # OTLP-side shape: a JSON string of typed parts.
+            "gen_ai.output.messages": json.dumps(
+                [{"role": "assistant", "parts": parts}]
+            ),
+        },
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
+def test_manifest_carries_no_thinking_and_digest_count(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-think",
+                [
+                    _agent_span("batch-t", "task-think"),
+                    _llm_span_with_output_messages(
+                        [{"type": "thinking", "content": "think"}]
+                    ),
+                ],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-t", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "no_thinking" not in line["signals"]
+    assert "messages_missing" not in line["signals"]
+    digest = (out / "digests" / "task-think.md").read_text()
+    assert "thinking_parts: 1" in digest
+
+
+def test_manifest_carries_no_thinking_when_messages_present(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-nothink",
+                [
+                    _agent_span("batch-nt", "task-nt"),
+                    _llm_span_with_output_messages(
+                        [{"type": "text", "content": "answer"}]
+                    ),
+                ],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-nt", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "no_thinking" in line["signals"]
+    assert "messages_missing" not in line["signals"]
+    digest = (out / "digests" / "task-nt.md").read_text()
+    assert "thinking_parts: 0" in digest
+
+
+def test_manifest_carries_messages_missing_when_no_messages(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-miss",
+                [
+                    _agent_span("batch-m", "task-m"),
+                    _llm_span_with_output_messages(
+                        [{"type": "text", "content": "a"}]
+                    ),
+                ],
+                tags={"service.name": "shlepa-agent"},
+            ),
+            _Trace(
+                "tr-miss2",
+                [
+                    _agent_span("batch-m", "task-m2"),
+                    _llm_span_no_usage(),  # no usage, no messages
+                ],
+                tags={"service.name": "shlepa-agent"},
+            ),
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-m", out)
+    lines = {
+        json.loads(line)["task"]: json.loads(line)
+        for line in (out / "manifest.jsonl")
+        .read_text()
+        .strip()
+        .splitlines()
+    }
+    m2 = lines["task-m2"]
+    assert "messages_missing" in m2["signals"]
+    assert "no_thinking" not in m2["signals"]
+    digest = (out / "digests" / "task-m2.md").read_text()
+    assert "thinking_parts: n/a" in digest
+
+
 def test_export_batch_raises_when_batch_has_no_traces():
     client = _FakeClient(
         [
