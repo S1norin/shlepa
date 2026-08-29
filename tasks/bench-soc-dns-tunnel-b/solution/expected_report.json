@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1071.004",
+  "compromised_hosts": [
+    "WS-IT-11"
+  ],
+  "compromised_accounts": [
+    "s.garcia"
+  ],
+  "key_indicators": [
+    "cdn-b3c16c14.cloudsync-net.com",
+    "TXT",
+    "a86b9be719b440798b9ecf565487.cdn-b3c16c14.cloudsync-net.com"
+  ]
+}
