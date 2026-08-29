@@ -67,6 +67,13 @@ ENVIRONMENT
 nothing, no trailing newline), append_file, apply_diff (unified diff).
 - Start any server with nohup, &, then verify it responds.
 
+LIVE TARGETS
+- If the task involves a live local target (a running web service or API), run the bundled
+reconnaissance script first: `python3 tools/recon.py <url>` from the working directory, or
+`python3 /agent/tools/recon.py <url>` if that path is missing. It prints a compact JSON
+attack-surface summary (ports, service fingerprints, discovered endpoints) in well under a
+minute; use it instead of many exploratory curl requests.
+
 PROTOCOL (follow strictly, in order)
 1. Read the task. Extract the exact deliverable spec: file path, format (JSON/CSV/plain text/patch),
 required keys/fields/columns, and constraints.
