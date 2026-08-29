@@ -1,0 +1,2 @@
+{"timestamp": "2026-04-26T09:03:27.000Z", "eventSource": "iam.amazonaws.com", "eventName": "PassRole", "sourceIPAddress": "45.33.32.156", "userAgent": "python-requests/2.28.0", "requestParameters": {"roleName": "AdminRole"}}
+{"timestamp": "2026-04-26T09:05:07.000Z", "eventSource": "lambda.amazonaws.com", "eventName": "CreateFunction20150331", "sourceIPAddress": "45.33.32.156", "userAgent": "python-requests/2.28.0", "requestParameters": {"functionName": "util-8afc2c04", "role": "arn:aws:iam::123456789012:role/AdminRole"}}
