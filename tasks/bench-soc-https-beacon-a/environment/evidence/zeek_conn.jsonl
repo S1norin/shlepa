@@ -1,0 +1,17 @@
+{"timestamp": "2026-04-18T09:00:16.000Z", "src_ip": "10.10.9.116", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 71.834, "bytes_sent": 1377, "bytes_recv": 780, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:05:12.000Z", "src_ip": "10.10.6.153", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 79.339, "bytes_sent": 1401, "bytes_recv": 345, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:10:06.000Z", "src_ip": "10.10.2.116", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 55.753, "bytes_sent": 901, "bytes_recv": 345, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:15:35.000Z", "src_ip": "10.10.9.219", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 48.688, "bytes_sent": 703, "bytes_recv": 596, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:20:46.000Z", "src_ip": "10.10.2.77", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 108.565, "bytes_sent": 1980, "bytes_recv": 581, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:25:25.000Z", "src_ip": "10.10.2.65", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 32.742, "bytes_sent": 1010, "bytes_recv": 450, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:30:14.000Z", "src_ip": "10.10.8.170", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 102.28, "bytes_sent": 1937, "bytes_recv": 536, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:35:37.000Z", "src_ip": "10.10.9.142", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 67.51, "bytes_sent": 1022, "bytes_recv": 287, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:40:23.000Z", "src_ip": "10.10.7.243", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 88.52, "bytes_sent": 1057, "bytes_recv": 357, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:45:30.000Z", "src_ip": "10.10.8.59", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 54.975, "bytes_sent": 880, "bytes_recv": 611, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:49:50.000Z", "src_ip": "10.10.7.134", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 99.365, "bytes_sent": 1029, "bytes_recv": 776, "conn_state": "SF"}
+{"timestamp": "2026-04-18T09:54:44.000Z", "src_ip": "10.10.9.156", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 64.273, "bytes_sent": 663, "bytes_recv": 652, "conn_state": "SF"}
+{"timestamp": "2026-04-18T10:00:17.000Z", "src_ip": "10.10.2.186", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 62.758, "bytes_sent": 926, "bytes_recv": 227, "conn_state": "SF"}
+{"timestamp": "2026-04-18T10:05:48.000Z", "src_ip": "10.10.7.107", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 92.802, "bytes_sent": 1002, "bytes_recv": 464, "conn_state": "SF"}
+{"timestamp": "2026-04-18T10:09:57.000Z", "src_ip": "10.10.5.39", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 79.248, "bytes_sent": 618, "bytes_recv": 711, "conn_state": "SF"}
+{"timestamp": "2026-04-18T10:15:36.000Z", "src_ip": "10.10.4.245", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 84.725, "bytes_sent": 1625, "bytes_recv": 551, "conn_state": "SF"}
+{"timestamp": "2026-04-18T10:19:46.000Z", "src_ip": "10.10.3.203", "dst_ip": "198.51.100.47", "dst_port": 443, "proto": "tcp", "duration": 115.247, "bytes_sent": 1638, "bytes_recv": 265, "conn_state": "SF"}

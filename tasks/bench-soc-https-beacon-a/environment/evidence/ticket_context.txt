@@ -1,0 +1,18 @@
+SOC ticket AL-3027 (opened 2026-04-18 09:15 UTC)
+
+Alert: `https-beacon-pattern`
+  Network detection flagged periodic, fixed-interval outbound HTTPS connections to a single external endpoint across the internal segment during the window (beacon-pattern rule).
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+  Host:          WS-HR-04
+  Host owner:    p.adams
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  zeek_conn.jsonl              - Zeek connection log for the window (one JSON object per line).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.

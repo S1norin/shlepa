@@ -1,0 +1,36 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/soc-https-beacon-a"
+description = "Triage periodic outbound HTTPS beaconing to a single external endpoint."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "bench", "forensics", "soc", "log-analysis"]
+source = "Abhiro0p/SOCBench"
+url = "https://github.com/Abhiro0p/SOCBench/blob/4d96147/benchmark/scenarios/scn_027.json"
+synced_at = "2026-08-29"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]
