@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1021.001",
+  "compromised_hosts": [
+    "FS-FINANCE-02"
+  ],
+  "compromised_accounts": [
+    "k.brown"
+  ],
+  "key_indicators": [
+    "10.10.7.100",
+    "10.10.4.124",
+    "3389"
+  ]
+}

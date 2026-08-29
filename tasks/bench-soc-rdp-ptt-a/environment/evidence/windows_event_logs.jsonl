@@ -1,0 +1,6 @@
+{"timestamp": "2026-04-19T09:05:14.000Z", "host": "FS-FINANCE-02", "event_id": 4624, "description": "Account Logon", "fields": {"TargetUserName": "k.brown", "LogonType": "10", "WorkstationName": "WS-IT-07", "IpAddress": "10.10.7.100", "AuthenticationPackageName": "Kerberos"}}
+{"timestamp": "2026-04-19T10:25:06.000Z", "host": "WS-MKT-20", "event_id": 4634, "description": "Account Logon", "fields": {"TargetUserName": "a.patel", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T10:36:58.000Z", "host": "WS-HR-16", "event_id": 4624, "description": "Account Logon", "fields": {"TargetUserName": "t.nguyen", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T10:15:57.000Z", "host": "WS-ENG-13", "event_id": 4648, "description": "Account Logon", "fields": {"TargetUserName": "d.wilson", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T08:11:32.000Z", "host": "WS-IT-10", "event_id": 4624, "description": "Account Logon", "fields": {"TargetUserName": "j.doe", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
+{"timestamp": "2026-04-19T10:36:24.000Z", "host": "WS-IT-20", "event_id": 4648, "description": "Account Logon", "fields": {"TargetUserName": "e.taylor", "LogonType": "2", "AuthenticationPackageName": "Negotiate"}}
