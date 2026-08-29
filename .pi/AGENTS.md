@@ -60,6 +60,8 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 - **No direct pushes to `main`** except the one-time documented
   bootstrap (already done). Feature branch + PR; branches
   `feature/<slug>`, `fix/<slug>`, `docs/<slug>`, `chore/<slug>`.
+  PRs target **`dev`** by default (`dev` is the integration branch;
+  `main` only when a change must land there directly).
 - Small commits, one logical change, **Conventional Commits**
   (`feat(agent): …`, `fix(cli): …`, `docs: …`, `test(tasks): …`, `chore: …`).
 - Before a PR: `shlepa smoke` and `shlepa zip` must pass locally.

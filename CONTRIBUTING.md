@@ -4,6 +4,8 @@
 
 - **No direct pushes to `main`.** Work on a branch, open a PR.
   Exception: the initial bootstrap import of this repository (already done).
+- **PRs target `dev` by default** — `dev` is the integration branch.
+  Target `main` only when a change must land there directly.
 - **Small commits, one logical change per commit.**
 - **Conventional Commits:** `feat:`, `fix:`, `docs:`, `test:`, `chore:`
   with an optional scope, e.g. `feat(cli): add doctor command`.
