@@ -1,0 +1,293 @@
+{
+  "scenario_id": "SCN-041",
+  "title": "Process hollowing: svchost.exe hollowed with Cobalt Strike beacon",
+  "description": "Scenario 41: Process hollowing: svchost.exe hollowed with Cobalt Strike beacon. Generated from template TMPL-EVA-002.",
+  "soc_tier": "tier3",
+  "difficulty": "hard",
+  "attack_duration_minutes": 22,
+  "dwell_time_minutes": 562,
+  "mitre_techniques": [
+    "T1055.012"
+  ],
+  "primary_skills_tested": [
+    "LA-02",
+    "HG-04",
+    "EC-01"
+  ],
+  "log_sources_present": [
+    "sysmon"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-MKT-03",
+    "victim_user": "t.nguyen",
+    "seed": 83
+  },
+  "telemetry": {
+    "sysmon": [
+      {
+        "timestamp": "2026-04-20T09:02:12.000Z",
+        "host": "WS-MKT-03",
+        "event_id": 8,
+        "description": "CreateRemoteThread",
+        "fields": {
+          "SourceImage": "C:\\Users\\t.nguyen\\AppData\\Roaming\\svchost.exe",
+          "TargetImage": "C:\\Windows\\System32\\svchost.exe",
+          "StartFunction": "LoadLibraryA"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "CreateRemoteThread into legitimate svchost \u2014 process hollowing."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-20T07:18:01.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:51:39.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:07:18.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T11:56:10.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:07:32.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:26:46.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:44:10.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:23:19.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:07:13.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:39:19.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:56:49.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:52:52.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:53:18.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:28:12.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:37:22.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:24:58.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:28:39.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:36:56.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T12:13:43.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:21:25.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T09:22:41.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:51:35.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:45:15.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T08:21:46.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T12:43:16.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T07:17:24.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-20T10:22:57.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1055.012: Process hollowing: svchost.exe hollowed with Cobalt Strike beacon"
+    ],
+    "compromised_accounts": [
+      "t.nguyen@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-MKT-03"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1055.012"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
