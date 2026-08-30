@@ -7,9 +7,11 @@ from shlepa_agent.config import load_config
 
 def test_agent_section_defaults():
     cfg = load_config()
-    assert cfg.agent.entry == "explore"
-    assert cfg.agent.emergency == "commit"
-    assert cfg.agent.max_steps >= 8
+    assert cfg.agent.entry == "plan"
+    assert cfg.agent.emergency == "emergency"
+    assert cfg.agent.max_cycles == 2
+    assert cfg.agent.commit_deadline == 520.0
+    assert cfg.agent.max_steps >= 6
     assert cfg.agent.temp == 0.2
 
 
@@ -44,19 +46,41 @@ def test_unknown_tool_raises():
         cfg.tools.get("nope")
 
 
-def test_phase_values_match_v1():
+def test_phase_values_4_phase_pipeline():
     cfg = load_config()
-    explore = cfg.phases["explore"]
-    assert set(explore.tools) == {"read", "write", "edit", "bash"}
-    assert explore.requests == 90
-    assert explore.time == 500.0
+    assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
+
+    plan = cfg.phases["plan"]
+    assert set(plan.tools) == {"read", "write", "edit", "bash"}
+    assert plan.requests == 25
+    assert plan.time == 60.0  # hard cap
+    assert plan.soft_time == 45.0  # advisory
+    assert plan.soft_tokens == 15000  # advisory
+    assert plan.max_retries == 1
+
+    work = cfg.phases["work"]
+    assert set(work.tools) == {"read", "write", "edit", "bash"}
+    assert work.requests == 100
+    assert work.time == 180.0  # hard cap
+    assert work.soft_time == 150.0  # advisory
+    assert work.soft_tokens == 80000  # advisory
+    assert work.max_retries == 1
 
     commit = cfg.phases["commit"]
     assert set(commit.tools) == {"read", "write", "edit", "bash"}
-    assert commit.requests == 25
-    assert commit.time == 80.0
+    assert commit.requests == 20
+    assert commit.time is None  # runs until the global hard_time
+    assert commit.soft_time == 45.0
+    assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
-    assert commit.max_retries == 2
+    assert commit.max_retries == 0
+
+    emergency = cfg.phases["emergency"]
+    assert set(emergency.tools) == {"read", "write", "edit", "bash"}
+    assert emergency.requests == 20
+    assert emergency.time is None  # runs until the global hard_time
+    assert emergency.reasoning_effort == "low"
+    assert emergency.max_retries == 0
 
 
 def test_template_blocks():
@@ -74,10 +98,14 @@ def test_env_override_wins(monkeypatch):
     monkeypatch.setenv("SHLEPA_BUDGET_HARD_TIME", "600")
     monkeypatch.setenv("SHLEPA_BASH_TIMEOUT", "90")
     monkeypatch.setenv("SHLEPA_TEMP", "0.1")
+    monkeypatch.setenv("SHLEPA_COMMIT_DEADLINE", "500")
+    monkeypatch.setenv("SHLEPA_MAX_CYCLES", "3")
     cfg = load_config()
     assert cfg.budget.hard_time == 600.0
     assert cfg.tools.bash.timeout == 90.0
     assert cfg.agent.temp == 0.1
+    assert cfg.agent.commit_deadline == 500.0
+    assert cfg.agent.max_cycles == 3
 
 
 def test_invalid_env_override_ignored(monkeypatch):

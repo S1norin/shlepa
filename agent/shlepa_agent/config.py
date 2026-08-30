@@ -21,19 +21,28 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 class AgentSection(BaseModel):
-    """Run-level settings: pipeline entry, emergency phase, model temperature."""
+    """Run-level settings: pipeline entry, emergency phase, cycle cap, deadline."""
 
-    entry: str = "explore"
-    emergency: str = "commit"
-    max_steps: int = Field(default=12, ge=1)
+    entry: str = "plan"
+    emergency: str = "emergency"
+    # Max plan->work cycles; after the cap a replan request is forced into
+    # commit.
+    max_cycles: int = Field(default=2, ge=1)
+    # Commit deadline: if the clock has passed this point at a phase boundary
+    # and the next phase is not commit, the emergency phase runs instead.
+    commit_deadline: float = 520.0
+    # Total phase-run guard (plan/work cycles + terminal phase).
+    max_steps: int = Field(default=8, ge=1)
     temp: float = 0.2
 
 
 class BudgetConfig(BaseModel):
     """Global (cross-phase) budget enforced by TrackedModel."""
 
-    # Task agent timeout is 600s (closed set). Budgets stay under it with
-    # margin: soft fires at ~500s, commit window up to 80s, done by ~585s.
+    # Task agent timeout is 600s (closed set). hard_time is the final
+    # backstop (~585s); the commit deadline lives in agent.commit_deadline.
+    # soft_time is ADVISORY ONLY (rendered into prompts/status, never
+    # enforced by the model).
     hard_time: float = 585.0
     soft_time: float = 500.0
     request_limit: int = 90
@@ -84,14 +93,21 @@ class BlockWrapper(BaseModel):
 
 
 class PhaseConfig(BaseModel):
-    """One phase of the pipeline: toolset, slices, template overrides."""
+    """One phase of the pipeline: toolset, hard/advisory limits, template
+    overrides.
+
+    - ``time``: hard wall-clock cap for the phase run. ``None`` (omitted) means
+      "until the global hard_time" — used by the terminal phases (commit,
+      emergency) which take the remainder of the trial.
+    - ``soft_time`` / ``soft_tokens``: advisory only. Rendered into the phase
+      prompt and status lines; they never cut the phase.
+    """
 
     tools: list[str] = Field(min_length=1)
     requests: int = Field(ge=1)
-    # Wall-clock window for this phase. For regular phases it is a soft
-    # window (breach routes to the emergency phase); for the emergency phase
-    # it is a hard cap (breach aborts the run).
-    time: float = Field(gt=0)
+    time: float | None = Field(default=None, gt=0)
+    soft_time: float | None = Field(default=None, gt=0)
+    soft_tokens: int | None = Field(default=None, gt=0)
     reasoning_effort: str | None = None
     max_retries: int = Field(default=2, ge=0)
     # Per-phase template wrapper overrides: block name -> before/after.
@@ -125,6 +141,8 @@ class AgentConfig(BaseModel):
 ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_TEMP": ("agent.temp", float),
     "SHLEPA_MAX_STEPS": ("agent.max_steps", int),
+    "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
+    "SHLEPA_COMMIT_DEADLINE": ("agent.commit_deadline", float),
     "SHLEPA_BUDGET_HARD_TIME": ("budget.hard_time", float),
     "SHLEPA_BUDGET_SOFT_TIME": ("budget.soft_time", float),
     "SHLEPA_BUDGET_REQUEST_LIMIT": ("budget.request_limit", int),

@@ -2,8 +2,8 @@
 
 TrackedModel wraps OpenAIChatModel with:
 - per-request usage logging (``usage`` events),
-- soft/hard wall-clock budgeting (the soft budget raises BudgetExceeded,
-  routing the run into the commit phase),
+- hard wall-clock budgeting (breach raises BudgetExceeded; the soft time is
+  advisory only — rendered into prompts/status, never enforced here),
 - a per-request wall-clock cap on stream consumption (_WallCappedStream),
 - one retry for transient network errors,
 - context-overflow detection mapped to BudgetExceeded.
@@ -37,7 +37,8 @@ CONTEXT_ERROR_MARKERS = (
 
 
 class BudgetExceeded(Exception):
-    """Raised inside the model when the agent must stop exploring and commit."""
+    """Raised inside the model when the global budget is exceeded (hard time,
+    context overflow). The runner routes the current phase out on it."""
 
 
 def _looks_like_context_error(text: str) -> bool:
@@ -97,7 +98,6 @@ class TrackedModel(OpenAIChatModel):
         self.cfg = agent_cfg.budget
         self.t0 = time.monotonic()
         self.last_messages: list[Any] = []
-        self.enable_soft_check = True
         self._pending_stream: Any = None
         self._request_no = 0
         self._cum_input = 0
@@ -113,9 +113,6 @@ class TrackedModel(OpenAIChatModel):
 
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
-
-    def _soft_expired(self) -> bool:
-        return self.enable_soft_check and self.elapsed() > self.cfg.soft_time
 
     def _hard_expired(self) -> bool:
         return self.elapsed() > self.cfg.hard_time
@@ -158,10 +155,6 @@ class TrackedModel(OpenAIChatModel):
         for attempt in (1, 2):
             if self._hard_expired():
                 raise BudgetExceeded(f"hard time limit {self.cfg.hard_time:.0f}s exceeded")
-            if self._soft_expired():
-                raise BudgetExceeded(
-                    f"soft time limit {self.cfg.soft_time:.0f}s exceeded before request"
-                )
             try:
                 async with asyncio.timeout(self.cfg.request_timeout):
                     cm = super(TrackedModel, self).request_stream(
@@ -240,10 +233,6 @@ class TrackedModel(OpenAIChatModel):
         for attempt in (1, 2):
             if self._hard_expired():
                 raise BudgetExceeded(f"hard time limit {self.cfg.hard_time:.0f}s exceeded")
-            if self._soft_expired():
-                raise BudgetExceeded(
-                    f"soft time limit {self.cfg.soft_time:.0f}s exceeded before request"
-                )
             try:
                 async with asyncio.timeout(self.cfg.request_timeout):
                     return await super(TrackedModel, self).request(
