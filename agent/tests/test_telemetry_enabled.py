@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 
 from shlepa_agent import telemetry  # noqa: E402
-from stub_server import FINAL_ANSWER  # noqa: E402
+from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, stub_state  # noqa: E402
 
 
 def test_spans_captured_with_inmemory_exporter(monkeypatch, stub_openai, tmp_path):
@@ -27,6 +27,7 @@ def test_spans_captured_with_inmemory_exporter(monkeypatch, stub_openai, tmp_pat
 
         from shlepa_agent.runner import run_prompt
 
+        stub_state["script"] = list(PIPELINE_SCRIPT)
         output = asyncio.run(run_prompt("Create hello.txt", instrument=True))
     finally:
         provider.shutdown()
@@ -57,6 +58,7 @@ def test_root_span_carries_task_attribute(monkeypatch, stub_openai, tmp_path):
         monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
         monkeypatch.setenv("SLEPA_TASK_SLUG", "contest-hello-file")
         monkeypatch.setattr(sys, "argv", ["shlepa_agent", "Create hello.txt"])
+        stub_state["script"] = list(PIPELINE_SCRIPT)
 
         from shlepa_agent import __main__ as agent_main
 

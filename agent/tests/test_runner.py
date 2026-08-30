@@ -144,7 +144,23 @@ def _work_step(decision="commit"):
                 "summary": "wrote hello.txt and verified it",
                 "findings": "",
                 "deliverable": "/app/hello.txt",
+                "confidence": 1.0,
+                "next_hints": [] if decision == "commit" else ["re-examine the target"],
                 "decision": decision,
+            },
+        }
+    }
+
+
+def _commit_step(status="ok"):
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "status": status,
+                "artifact": "/app/hello.txt",
+                "checks": ["re-read the file -> content matches"],
+                "notes": "wrote hello.txt",
             },
         }
     }
@@ -181,7 +197,7 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
 
     from shlepa_agent.config import load_config
     from shlepa_agent.model import TrackedModel
-    from shlepa_agent.outputs import PlanResult
+    from shlepa_agent.outputs import CommitResult, PlanResult
     from shlepa_agent.phases import get_phase
     from shlepa_agent.runner import build_phase_agent
 
@@ -194,10 +210,9 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     plain = build_phase_agent(model, cfg, plan, "some task", instrument=False)
     assert instrumented.instrument is True
     assert not plain.instrument  # untouched default is None
-    # plan is a typed-output phase
+    # plan and commit are typed-output phases
     assert plan.output_type is PlanResult
-    # commit stays free text
-    assert get_phase("commit").output_type is None
+    assert get_phase("commit").output_type is CommitResult
 
 
 # -- pipeline graph ---------------------------------------------------------
@@ -205,10 +220,10 @@ def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
         _plan_step("work"),
         _work_step("commit"),
-        {"final": "wrote hello.txt"},
+        _commit_step(),
     ]
     output = _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert output == "wrote hello.txt"
+    assert output == "wrote hello.txt"  # CommitResult.notes
     assert _status(events) == "done"
     starts = [(e["id"], e["cycle"]) for e in events if e.get("event") == "phase" and e.get("start")]
     assert [i for i, _ in starts] == ["plan", "work", "commit"]
@@ -220,7 +235,7 @@ def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
 
 
 def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [_plan_step("commit"), {"final": "wrote hello.txt"}]
+    stub_state["script"] = [_plan_step("commit"), _commit_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
     assert not _phase_starts(events, "work")  # work was skipped
@@ -234,7 +249,7 @@ def test_replan_allowed_then_cycle_cap_forces_commit(monkeypatch, stub_openai, t
         _work_step("replan"),    # work: replan (cycles 1 < 2 -> allowed)
         _plan_step("work"),      # plan, cycle 2
         _work_step("replan"),    # work: replan (cap reached -> forced commit)
-        {"final": "final best effort"},
+        _commit_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "budget"  # forced commit after the cycle cap
@@ -259,7 +274,7 @@ def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tm
         {"delay": 2.5, "final": "too slow — plan timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
         _work_step("commit"),
-        {"final": "committed"},
+        _commit_step(),
     ]
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0, hard=60.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
@@ -296,7 +311,7 @@ def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, 
         _plan_step("work"),
         {"delay": 2.5, "final": "too slow — work timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
-        {"final": "committed"},
+        _commit_step(),
     ]
     cfg = _cfg(tmp_path, work_time=1.0, hard=60.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
@@ -351,7 +366,7 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
     stub_state["script"] = [
         _plan_step("work"),  # attempt 2 (attempt 1 dies before the request)
         _work_step("commit"),
-        {"final": "ok"},
+        _commit_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), phase_factory=factory)
     assert _status(events) == "done"
@@ -368,7 +383,7 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         {"tool_call": {"name": "bash", "arguments": {"command": "echo hi"}}},
         _plan_step("work"),
         _work_step("commit"),
-        {"final": FINAL_ANSWER},
+        _commit_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     names = {e.get("event") for e in events}
@@ -391,6 +406,9 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "token_budget",
     ):
         assert field in start, f"agent_start lost stable field {field}"
+    # adaptive budget details are additive (unknown to the CLI, but logged)
+    assert start["hard_time"] == pytest.approx(585.0)  # derived from T=600
+    assert {"t", "t_source", "plan_cap", "work_cap", "reserve", "bash_cap"} <= set(start)
     usage = next(e for e in events if e.get("event") == "usage")
     for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
         assert field in usage

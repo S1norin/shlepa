@@ -19,8 +19,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+from shlepa_agent.budget import derive_budget
 from shlepa_agent.config import load_config
-from shlepa_agent.outputs import PlanResult, WorkResult
+from shlepa_agent.outputs import CommitResult, PlanResult, WorkResult
 from shlepa_agent.phases import (
     CommitPhase,
     EmergencyPhase,
@@ -36,8 +37,16 @@ from shlepa_agent.tools import AgentDeps
 
 def _state(task="Create hello.txt with the exact content hello", last_messages=None):
     cfg = load_config()
-    deps = AgentDeps(workdir=Path("/tmp"), cfg=cfg, clock=lambda: 0.0)
-    model = SimpleNamespace(last_messages=last_messages if last_messages is not None else [])
+    deps = AgentDeps(
+        workdir=Path("/tmp"),
+        cfg=cfg,
+        clock=lambda: 0.0,
+        budget=derive_budget(600.0),
+    )
+    model = SimpleNamespace(
+        last_messages=last_messages if last_messages is not None else [],
+        elapsed=lambda: 0.0,
+    )
     return RunState(task=task, deps=deps, model=model)
 
 
@@ -75,7 +84,9 @@ def test_run_state_holds_one_result_per_phase_and_cycles():
 # -- registry ------------------------------------------------------------------
 def test_registry_resolves_all_four_phase_ids():
     cfg = load_config()
-    assert isinstance(get_phase(cfg.agent.entry), PlanPhase)
+    # packaged config derives the entry from the budget (empty entry)
+    assert cfg.agent.entry == ""
+    assert isinstance(get_phase("plan"), PlanPhase)
     assert isinstance(get_phase("work"), WorkPhase)
     assert isinstance(get_phase("commit"), CommitPhase)
     assert isinstance(get_phase(cfg.agent.emergency), EmergencyPhase)
@@ -98,7 +109,7 @@ def test_terminal_flags():
 def test_output_types():
     assert PlanPhase.output_type is PlanResult
     assert WorkPhase.output_type is WorkResult
-    assert CommitPhase.output_type is None
+    assert CommitPhase.output_type is CommitResult
     assert EmergencyPhase.output_type is None
 
 
@@ -158,14 +169,14 @@ def test_phase_limits_from_config():
     cfg = load_config()
     plan = PlanPhase().limits(cfg)
     assert plan.requests == 25
-    assert plan.time == 60.0
+    assert plan.time is None  # derived from the adaptive budget
     assert plan.soft_time == 45.0
     assert plan.soft_tokens == 15000
     assert plan.reasoning_effort is None
 
     work = WorkPhase().limits(cfg)
     assert work.requests == 100
-    assert work.time == 180.0
+    assert work.time is None  # derived from the adaptive budget
     assert work.soft_time == 150.0
     assert work.soft_tokens == 80000
 
@@ -182,14 +193,27 @@ def test_phase_limits_from_config():
     assert emergency.reasoning_effort == "low"
 
 
-def test_limits_note_rendered_advisory_values_only():
-    cfg = load_config()
-    plan_note = PlanPhase().limits_note(cfg)
-    assert "60s" in plan_note
-    assert "45s" in plan_note
+def test_limits_note_rendered_budget_values():
+    state = _state()
+    plan_note = PlanPhase().limits_note(state)
+    # budget-derived caps (T=600: plan 60s) + advisory token budget
+    assert "T=600s" in plan_note
+    assert "hard-capped at 60s" in plan_note
     assert "15000" in plan_note
-    # commit has no hard phase time (takes the remainder)
-    assert "hard-capped" not in CommitPhase().limits_note(cfg)
+    commit_note = CommitPhase().limits_note(state)
+    # commit gets its derived cap (120s at T=600)
+    assert "hard-capped at 120s" in commit_note
+
+
+def test_limits_note_legacy_without_budget():
+    cfg = load_config()
+    deps = AgentDeps(workdir=Path("/tmp"), cfg=cfg, clock=lambda: 0.0)
+    model = SimpleNamespace(last_messages=[])
+    state = RunState(task="t", deps=deps, model=model)
+    note = PlanPhase().limits_note(state)
+    # without a budget and with no static phase time, only advisories render
+    assert "hard-capped" not in note
+    assert "45s" in note
 
 
 def test_max_retries_from_config():

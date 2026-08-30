@@ -2,7 +2,7 @@
 
 import asyncio
 
-from stub_server import FINAL_ANSWER, stub_state
+from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, stub_state
 
 
 def test_baseline_completes_against_stub(monkeypatch, stub_openai, tmp_path):
@@ -13,6 +13,7 @@ def test_baseline_completes_against_stub(monkeypatch, stub_openai, tmp_path):
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
 
+    stub_state["script"] = list(PIPELINE_SCRIPT)
     output = asyncio.run(run_prompt("Create hello.txt with the exact content hello"))
 
     assert output == FINAL_ANSWER

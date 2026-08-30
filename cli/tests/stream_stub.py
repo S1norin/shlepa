@@ -8,8 +8,10 @@ FINAL_ANSWER = "Done: the file was created."
 
 # The 4-phase pipeline: plan -> work -> commit. The stub is pipeline-aware:
 # the plan request (user message with "PLAN PHASE") gets a final_result tool
-# call with decision="commit" (trivial task shortcut), everything else gets
-# the plain FINAL_ANSWER text (commit/emergency are free-text phases).
+# call with decision="commit" (trivial task shortcut), the commit request
+# ("COMMIT PHASE") gets a typed final_result(CommitResult) with
+# notes=FINAL_ANSWER, everything else (emergency) gets the plain FINAL_ANSWER
+# text.
 PLAN_RESULT_ARGS = {
     "goal": "write the requested file",
     "findings": "",
@@ -17,10 +19,24 @@ PLAN_RESULT_ARGS = {
     "decision": "commit",
 }
 
+COMMIT_RESULT_ARGS = {
+    "status": "ok",
+    "artifact": "hello.txt",
+    "checks": ["re-read the file -> content matches"],
+    "notes": FINAL_ANSWER,
+}
+
 
 def _is_plan_request(body: dict) -> bool:
     for m in body.get("messages", []):
         if m.get("role") == "user" and "PLAN PHASE" in (m.get("content") or ""):
+            return True
+    return False
+
+
+def _is_commit_request(body: dict) -> bool:
+    for m in body.get("messages", []):
+        if m.get("role") == "user" and "COMMIT PHASE" in (m.get("content") or ""):
             return True
     return False
 
@@ -50,6 +66,22 @@ class StreamStubHandler(BaseHTTPRequestHandler):
                             "function": {
                                 "name": "final_result",
                                 "arguments": json.dumps(PLAN_RESULT_ARGS),
+                            },
+                        }
+                    ],
+                }
+                finish = "tool_calls"
+            elif _is_commit_request(body):
+                message = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_stub",
+                            "type": "function",
+                            "function": {
+                                "name": "final_result",
+                                "arguments": json.dumps(COMMIT_RESULT_ARGS),
                             },
                         }
                     ],
@@ -94,6 +126,10 @@ class StreamStubHandler(BaseHTTPRequestHandler):
             }
         ]
         if _is_plan_request(body):
+            args = PLAN_RESULT_ARGS
+        elif _is_commit_request(body):
+            args = COMMIT_RESULT_ARGS
+        if _is_plan_request(body) or _is_commit_request(body):
             chunks.append(
                 {
                     **base,
@@ -109,7 +145,7 @@ class StreamStubHandler(BaseHTTPRequestHandler):
                                         "type": "function",
                                         "function": {
                                             "name": "final_result",
-                                            "arguments": json.dumps(PLAN_RESULT_ARGS),
+                                            "arguments": json.dumps(args),
                                         },
                                     }
                                 ]

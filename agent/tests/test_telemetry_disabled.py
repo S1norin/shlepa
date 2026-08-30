@@ -34,13 +34,15 @@ def test_baseline_runs_without_otel_sdk(monkeypatch, stub_openai, tmp_path):
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
     try:
         from shlepa_agent.runner import run_prompt
+        from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, stub_state
 
+        stub_state["script"] = list(PIPELINE_SCRIPT)
         output = asyncio.run(
             run_prompt("Create hello.txt with the exact content hello")
         )
     finally:
         sys.meta_path.remove(blocker)
 
-    assert output
+    assert output == FINAL_ANSWER  # noqa: F821 (imported inside try)
     leaked = {m for m in sys.modules if _blocked(m)} - before
     assert not leaked, f"otel SDK modules imported by baseline: {leaked}"

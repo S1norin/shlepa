@@ -34,7 +34,17 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
                 },
             }
         },
-        {"final": FINAL_ANSWER},
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "status": "ok",
+                    "artifact": "hello.txt",
+                    "checks": ["re-read -> matches"],
+                    "notes": "wrote hello.txt",
+                },
+            }
+        },
     ]
     _run(monkeypatch, stub_openai, tmp_path)
     first = stub_state["bodies"][0]
@@ -81,7 +91,17 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
                 },
             }
         },  # work req 2
-        {"final": FINAL_ANSWER},  # the commit request
+        {
+            "tool_call": {  # the commit request (typed CommitResult)
+                "name": "final_result",
+                "arguments": {
+                    "status": "ok",
+                    "artifact": "/app/hello.txt",
+                    "checks": ["re-read -> matches"],
+                    "notes": "wrote hello.txt",
+                },
+            }
+        },
     ]
     # plan request cap 2 -> the third plan request raises UsageLimitExceeded
     # (blocked before it is sent): final_ask, then work, then commit. The

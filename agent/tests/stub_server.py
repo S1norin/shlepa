@@ -11,6 +11,44 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FINAL_ANSWER = "Created hello.txt with the exact content hello"
 
+# A full plan -> work -> commit script for end-to-end tests of the typed
+# pipeline (the default single free-text final cannot complete plan/work).
+PIPELINE_SCRIPT = [
+    {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "goal": "write hello.txt with the exact content hello",
+                "findings": "",
+                "steps": ["write the file", "verify it"],
+                "decision": "work",
+            },
+        }
+    },
+    {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": "wrote hello.txt and verified it",
+                "findings": "",
+                "deliverable": "hello.txt",
+                "decision": "commit",
+            },
+        }
+    },
+    {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "status": "ok",
+                "artifact": "hello.txt",
+                "checks": ["re-read the file -> content matches"],
+                "notes": FINAL_ANSWER,
+            },
+        }
+    },
+]
+
 # Captured request state (filled by the stub handler).
 #   last_path / last_body: the most recent request
 #   bodies: every request body, in order

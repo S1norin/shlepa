@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from stub_server import FINAL_ANSWER, start_stub_server
+from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, start_stub_server, stub_state
 
 REPO_AGENT_DIR = Path(__file__).resolve().parent.parent
 VENV_BIN = REPO_AGENT_DIR / ".venv" / "bin"
@@ -13,6 +13,7 @@ VENV_BIN = REPO_AGENT_DIR / ".venv" / "bin"
 def test_run_sh_entrypoint(tmp_path):
     server, stub_url = start_stub_server()
     try:
+        stub_state["script"] = list(PIPELINE_SCRIPT)
         # The agent runs in an environment that already has the dependencies:
         # the uv venv in dev, the secureintelligent/acp image in the contest.
         env = {
