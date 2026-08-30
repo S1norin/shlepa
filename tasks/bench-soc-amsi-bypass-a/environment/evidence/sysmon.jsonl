@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-25T09:01:50.000Z", "host": "WS-HR-20", "event_id": 10, "description": "Process Access", "fields": {"SourceImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "TargetImage": "C:\\Windows\\System32\\amsi.dll", "GrantedAccess": "0x1410"}}

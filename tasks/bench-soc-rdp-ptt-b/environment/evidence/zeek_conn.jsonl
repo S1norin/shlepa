@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-15T09:05:10.000Z", "src_ip": "10.10.9.150", "dst_ip": "10.10.5.41", "dst_port": 3389, "proto": "tcp", "duration": 2517.09, "bytes_sent": 314259, "conn_state": "SF"}

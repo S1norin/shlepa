@@ -1,0 +1,19 @@
+SOC ticket AL-3043 (opened 2026-04-22 09:15 UTC)
+
+Alert: `cloudtrail-iam-anomaly`
+  CloudTrail flagged privileged-role manipulation (PassRole) and a Lambda function creation in AWS account 123456789012, both from an external source IP.
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+  Host:          WS-ENG-04
+  Host owner:    r.chen
+  AWS account:   123456789012
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  aws_cloudtrail.jsonl         - AWS CloudTrail export for the window (one JSON object per event).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.

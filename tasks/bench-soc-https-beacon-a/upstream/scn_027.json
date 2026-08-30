@@ -1,0 +1,517 @@
+{
+  "scenario_id": "SCN-027",
+  "title": "Cobalt Strike HTTPS beacon with JA3 fingerprint match",
+  "description": "Scenario 27: Cobalt Strike HTTPS beacon with JA3 fingerprint match. Generated from template TMPL-NET-002.",
+  "soc_tier": "tier2",
+  "difficulty": "hard",
+  "attack_duration_minutes": 23,
+  "dwell_time_minutes": 3981,
+  "mitre_techniques": [
+    "T1071.001",
+    "T1573.002"
+  ],
+  "primary_skills_tested": [
+    "LA-03",
+    "HG-01",
+    "DE-01"
+  ],
+  "log_sources_present": [
+    "zeek_conn"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-HR-04",
+    "victim_user": "p.adams",
+    "seed": 69
+  },
+  "telemetry": {
+    "zeek_conn": [
+      {
+        "timestamp": "2026-04-18T09:00:16.000Z",
+        "src_ip": "10.10.9.116",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 71.834,
+        "bytes_sent": 1377,
+        "bytes_recv": 780,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:05:12.000Z",
+        "src_ip": "10.10.6.153",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 79.339,
+        "bytes_sent": 1401,
+        "bytes_recv": 345,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:10:06.000Z",
+        "src_ip": "10.10.2.116",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 55.753,
+        "bytes_sent": 901,
+        "bytes_recv": 345,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:15:35.000Z",
+        "src_ip": "10.10.9.219",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 48.688,
+        "bytes_sent": 703,
+        "bytes_recv": 596,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:20:46.000Z",
+        "src_ip": "10.10.2.77",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 108.565,
+        "bytes_sent": 1980,
+        "bytes_recv": 581,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:25:25.000Z",
+        "src_ip": "10.10.2.65",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 32.742,
+        "bytes_sent": 1010,
+        "bytes_recv": 450,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:30:14.000Z",
+        "src_ip": "10.10.8.170",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 102.28,
+        "bytes_sent": 1937,
+        "bytes_recv": 536,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:35:37.000Z",
+        "src_ip": "10.10.9.142",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 67.51,
+        "bytes_sent": 1022,
+        "bytes_recv": 287,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:40:23.000Z",
+        "src_ip": "10.10.7.243",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 88.52,
+        "bytes_sent": 1057,
+        "bytes_recv": 357,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:45:30.000Z",
+        "src_ip": "10.10.8.59",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 54.975,
+        "bytes_sent": 880,
+        "bytes_recv": 611,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:49:50.000Z",
+        "src_ip": "10.10.7.134",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 99.365,
+        "bytes_sent": 1029,
+        "bytes_recv": 776,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T09:54:44.000Z",
+        "src_ip": "10.10.9.156",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 64.273,
+        "bytes_sent": 663,
+        "bytes_recv": 652,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T10:00:17.000Z",
+        "src_ip": "10.10.2.186",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 62.758,
+        "bytes_sent": 926,
+        "bytes_recv": 227,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T10:05:48.000Z",
+        "src_ip": "10.10.7.107",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 92.802,
+        "bytes_sent": 1002,
+        "bytes_recv": 464,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T10:09:57.000Z",
+        "src_ip": "10.10.5.39",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 79.248,
+        "bytes_sent": 618,
+        "bytes_recv": 711,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T10:15:36.000Z",
+        "src_ip": "10.10.4.245",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 84.725,
+        "bytes_sent": 1625,
+        "bytes_recv": 551,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      },
+      {
+        "timestamp": "2026-04-18T10:19:46.000Z",
+        "src_ip": "10.10.3.203",
+        "dst_ip": "198.51.100.47",
+        "dst_port": 443,
+        "proto": "tcp",
+        "duration": 115.247,
+        "bytes_sent": 1638,
+        "bytes_recv": 265,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Regular beacon interval to external C2."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-18T12:40:42.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:55:11.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:17:21.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T08:26:43.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T12:39:34.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T08:08:00.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T10:31:13.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T10:25:31.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T08:45:38.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:52:35.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T12:55:57.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T12:18:38.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:45:25.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:24:16.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:10:53.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:01:49.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T07:51:44.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:56:47.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T11:39:25.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T12:24:11.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T10:57:51.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T10:08:20.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T08:46:24.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:39:23.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T09:59:27.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T08:23:26.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T07:48:05.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T11:49:52.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-18T12:39:11.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1071.001: Cobalt Strike HTTPS beacon with JA3 fingerprint match",
+      "T1573.002: Cobalt Strike HTTPS beacon with JA3 fingerprint match"
+    ],
+    "compromised_accounts": [
+      "p.adams@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-HR-04"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1071.001"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}

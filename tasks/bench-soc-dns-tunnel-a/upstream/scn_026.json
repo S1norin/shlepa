@@ -1,0 +1,1681 @@
+{
+  "scenario_id": "SCN-026",
+  "title": "DNS tunneling C2 with low-volume high-entropy queries",
+  "description": "Scenario 26: DNS tunneling C2 with low-volume high-entropy queries. Generated from template TMPL-NET-001.",
+  "soc_tier": "tier2",
+  "difficulty": "hard",
+  "attack_duration_minutes": 16,
+  "dwell_time_minutes": 2930,
+  "mitre_techniques": [
+    "T1071.004"
+  ],
+  "primary_skills_tested": [
+    "LA-03",
+    "HG-03",
+    "FP-02",
+    "DE-01"
+  ],
+  "log_sources_present": [
+    "zeek_dns"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-MKT-17",
+    "victim_user": "e.taylor",
+    "seed": 68
+  },
+  "telemetry": {
+    "zeek_dns": [
+      {
+        "timestamp": "2026-04-17T09:00:29.000Z",
+        "src_ip": "10.10.5.194",
+        "query": "ab2b9b6bc22646ad9e7ad590797f.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2368516a9d5d4c889ebf4ad5650272fd",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:02:36.000Z",
+        "src_ip": "10.10.6.52",
+        "query": "91ff100928c3495598c0d9923f0e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e15a5c6af7f3448a86382349142ba8ed",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:05:11.000Z",
+        "src_ip": "10.10.2.20",
+        "query": "964a96702c5047458a1429116158.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=8049aa2ddb3d49cca9e65d0bf57c8556",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:06:55.000Z",
+        "src_ip": "10.10.6.24",
+        "query": "987a5c332cc444fca57461161df2.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:08:42.000Z",
+        "src_ip": "10.10.4.11",
+        "query": "db0019edcb794465b1b1c1483d9b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=bee51c2326d148ecb2c56dc17f0e48b9",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:10:42.000Z",
+        "src_ip": "10.10.7.144",
+        "query": "58c8ba881e7645149577dff5f1f3.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4d9da8afb0fe437791bc63a17b28173c",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:12:57.000Z",
+        "src_ip": "10.10.1.160",
+        "query": "26bba574e49d4722b474e23558b1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=cc2b8b5396054846bd8b436d61d6f740",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:14:26.000Z",
+        "src_ip": "10.10.6.46",
+        "query": "cf2de259717746a59c717a16cbad.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=bbfa0d5cf8a64c97a62d581086f54e7d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:16:37.000Z",
+        "src_ip": "10.10.8.107",
+        "query": "65d268fdb0a6487ba6552c596a7b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a28edac32146440598aa2a06a3063f79",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:18:43.000Z",
+        "src_ip": "10.10.4.118",
+        "query": "05899837349d475a973ac7250811.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=38147515969746c3b736cc772d65fd5b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:20:52.000Z",
+        "src_ip": "10.10.5.116",
+        "query": "aaf051bbf6364e708198d68c8cbe.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=3342ad5f8b7748fda66cc2c91fd0f00a",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:22:48.000Z",
+        "src_ip": "10.10.7.108",
+        "query": "e9543e4bff8c40d8bb297aec8599.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=220f92274ce24b7d95f26f25eb130615",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:24:47.000Z",
+        "src_ip": "10.10.6.192",
+        "query": "e5997c1907f44a99a306bcfe83d8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4f5a406e01ab4440887996608bcfe203",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:27:24.000Z",
+        "src_ip": "10.10.5.234",
+        "query": "9bd566f0ff9748e7a253f2798a80.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=23398363d7cb429abc6d9fc739e88909",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:29:05.000Z",
+        "src_ip": "10.10.8.106",
+        "query": "5d0003b80ca44a81aea594988591.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=586512e0084b4501819a0fd32c850494",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:31:05.000Z",
+        "src_ip": "10.10.8.107",
+        "query": "b593ae8f51274db399abf03bcd6e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=5088beea91a04dadb292864b09152853",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:32:17.000Z",
+        "src_ip": "10.10.1.181",
+        "query": "e21412f46a574b57a0453c434cf6.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=61b11ba739ef4b95b998c092ffe0a745",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:34:33.000Z",
+        "src_ip": "10.10.4.156",
+        "query": "4f77dfd8f8c44de1acce2839ee29.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=14c3f3d168ad474eb5950c8f3f01abe0",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:36:41.000Z",
+        "src_ip": "10.10.6.130",
+        "query": "d4a9e0fd88b847a4adecbc392dfe.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f3d572e5544b46ec806bf461ed7a7f50",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:39:05.000Z",
+        "src_ip": "10.10.2.27",
+        "query": "1ede81c3f4fa4d54b55b3cf0136c.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4503b055d279432ca357fd4ca03c7080",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:40:39.000Z",
+        "src_ip": "10.10.6.16",
+        "query": "fc9bf8c82b38443d82df010d9761.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=5c3d41600e994520adea04f2960c9685",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:42:48.000Z",
+        "src_ip": "10.10.9.235",
+        "query": "f4c33008571d4595ba2abf132efd.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=af06fdefdb684d9a837c9282080ced53",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:44:55.000Z",
+        "src_ip": "10.10.5.175",
+        "query": "5dc884fcb76c4090b2471ded90e5.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b0acb986d7954a4e90824a5925060b6b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:46:27.000Z",
+        "src_ip": "10.10.3.62",
+        "query": "42c7b0d142c94a409aa81613f4ff.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2510b47d8dee49e29eb473ae0581a4bc",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:48:53.000Z",
+        "src_ip": "10.10.4.166",
+        "query": "61d4f46b42f14f139000a97c25b6.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=9ff07237d9ea42f1bb1073056424fa9b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:51:15.000Z",
+        "src_ip": "10.10.6.119",
+        "query": "86386915822443a2b97743ea3f9d.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7c24a15ba11d45e3a60cd6245390ebfb",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:53:05.000Z",
+        "src_ip": "10.10.8.14",
+        "query": "19fc420378d24f73a14bc80bc334.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=051f17c4c9d64f0680b69e39026ef25d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:54:26.000Z",
+        "src_ip": "10.10.6.81",
+        "query": "302cda7acf0f4c79b5ff6fbb5ff0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c118408828ad477ca093365fb28dc002",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:56:07.000Z",
+        "src_ip": "10.10.8.206",
+        "query": "fa18eaa9aa644af082ab25c653df.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=56b705568a1b499496d2b144b722659b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T09:58:38.000Z",
+        "src_ip": "10.10.5.235",
+        "query": "467f9bfb4aec44779d302726946a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=0b66daaaa87e4f5bad90c476964b7ba5",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:01:03.000Z",
+        "src_ip": "10.10.7.233",
+        "query": "c31d0fbc43bb46fea5090bacf0f7.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:02:11.000Z",
+        "src_ip": "10.10.8.38",
+        "query": "603cbb6fd5c74492b5aa135b25b8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=15792774adc74aa98abd89c7e02ec89f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:04:43.000Z",
+        "src_ip": "10.10.2.57",
+        "query": "5e4871e975f54d50b6106a8021db.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=3fae0bfda02642e597dfa2ce9dc0ae0c",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:07:05.000Z",
+        "src_ip": "10.10.7.37",
+        "query": "478d5a9f1b5f40e9aeea9b9e267a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:08:37.000Z",
+        "src_ip": "10.10.8.96",
+        "query": "e682693f62f440468aec00728562.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=6efb8a7a3c4749b4b2ee09880975b632",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:10:12.000Z",
+        "src_ip": "10.10.6.194",
+        "query": "fdf3d3531da74252ab73e9619f0c.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e6eb6c54bf634593b666caba52845a90",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:13:10.000Z",
+        "src_ip": "10.10.6.50",
+        "query": "6a14c7905cb0435abe8c4514634e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=669e7c4e591c43b582c3d35f94d2f92f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:15:05.000Z",
+        "src_ip": "10.10.5.27",
+        "query": "86122adddd5243b1b379ead91520.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=0869b94de327492f8f6da6edb139cf34",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:17:07.000Z",
+        "src_ip": "10.10.3.29",
+        "query": "01a77acc92b2418699d05e65f535.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=633ee52273274f38ad9a53b5cba15120",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:18:46.000Z",
+        "src_ip": "10.10.4.217",
+        "query": "c4f3445af0464e238edfe21286cd.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=89c5192432a445b7b73f1cfddf575838",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:20:14.000Z",
+        "src_ip": "10.10.4.172",
+        "query": "4207007f9a3d4fe68e50aac77349.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=40c0f5fb76cf4d338d2bcaf1bc0742ea",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:22:14.000Z",
+        "src_ip": "10.10.4.145",
+        "query": "8974dfa0b27c4fb0b8fa22ba26c5.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=d195898866ae478abfd142196c74f089",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:24:36.000Z",
+        "src_ip": "10.10.2.100",
+        "query": "e06092372c9842299b4fd615f93b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f9274e8a520143f5a4d8ffe26ba8a840",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:26:51.000Z",
+        "src_ip": "10.10.1.142",
+        "query": "1d81fe79803d4f15af41cb1844d2.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=5f0b9d7ba5fe4533b7a951c6b1e50534",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:28:37.000Z",
+        "src_ip": "10.10.8.223",
+        "query": "867eb6edbd624596bcfc76f93a1c.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=cfe341a56856404aa6345eeb796717ae",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:30:46.000Z",
+        "src_ip": "10.10.5.91",
+        "query": "9557efd4fce046d88a104528977f.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:32:06.000Z",
+        "src_ip": "10.10.6.162",
+        "query": "a6c7f23ed34b4bdba4a8e1453964.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7df3a025d9f44bfda33e431e27fa8724",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:34:33.000Z",
+        "src_ip": "10.10.3.171",
+        "query": "c2164081403a49efbaf525ba3855.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=0426a08242dc4349b3105a54ae3163a3",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:36:33.000Z",
+        "src_ip": "10.10.4.30",
+        "query": "2f7273624f614df7884a2e6dbe37.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:38:53.000Z",
+        "src_ip": "10.10.2.122",
+        "query": "dee6a739f3d14278a21ae1541ea2.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=d59289815a4140d4a4ddfa41f46806cd",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:41:12.000Z",
+        "src_ip": "10.10.4.219",
+        "query": "a3793df904b0496dbf044c5382d8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=03d86bca2dc44e35856d4faa1cae4e19",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:43:02.000Z",
+        "src_ip": "10.10.5.76",
+        "query": "1645062d0f114b869fd21c756188.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=05284ff601704e9db7717197106bc193",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:45:03.000Z",
+        "src_ip": "10.10.2.113",
+        "query": "a94b4ea363cd4968a8df85ef2217.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=8bd247bf1b0146cdaf35a0e6030d3fc3",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:46:15.000Z",
+        "src_ip": "10.10.3.29",
+        "query": "b368cc23115b4a34a12a666f4ec5.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a12108d3ab4547c682c052f830eda558",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:48:29.000Z",
+        "src_ip": "10.10.5.167",
+        "query": "fade1bc9a3e846c88780ac6f1c13.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b0e94a3a28a3466abeb2086fbafe7200",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:50:36.000Z",
+        "src_ip": "10.10.8.64",
+        "query": "f0963128215a4b43969dfbdbc3a2.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:53:05.000Z",
+        "src_ip": "10.10.3.182",
+        "query": "a9dd1340658c4bb5b34bfdb96aee.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=dbd0e8d10a1b410ab5bced8af9c3631f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:54:30.000Z",
+        "src_ip": "10.10.2.149",
+        "query": "a0b3420c74a74b5e91c9272164c8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f10825d16f7f4ba19887ae7d9c0b196d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:56:50.000Z",
+        "src_ip": "10.10.2.84",
+        "query": "ef34ac88945849eaad33be2ff616.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c0803ee4d93c458395cc20f95a04f7f1",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T10:58:41.000Z",
+        "src_ip": "10.10.8.150",
+        "query": "ddb3468e175f4602aec95f9394c0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=99f0fc21a9a2414dab7ce889faab4c7c",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:00:39.000Z",
+        "src_ip": "10.10.7.15",
+        "query": "786fb6695e1c47119cfa32a23b2e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=d8e09d4d899941189ab16024d64771f4",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:02:35.000Z",
+        "src_ip": "10.10.3.181",
+        "query": "c139cff278d04a1e988d965d6084.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7e30207ac1214b578165a60c930d6a40",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:04:37.000Z",
+        "src_ip": "10.10.8.71",
+        "query": "c1849a78cb1247d091c1262827e1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=654dcaea3ca3474e84641fef7371ca99",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:07:00.000Z",
+        "src_ip": "10.10.8.58",
+        "query": "939ab2cb30f440508e73d73d7ab1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=9cc54d388ea34371b5241e6af7b03d77",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:09:11.000Z",
+        "src_ip": "10.10.8.236",
+        "query": "3a0fcd2fc0e7455a8b3a2cc7b1fe.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=ba1823c3eae048c8a9f0b04c1fb10b34",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:11:08.000Z",
+        "src_ip": "10.10.9.172",
+        "query": "5ca9ff47bfeb43faa4a7da95311e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a6340cd121ff4a0492094e5d2d299795",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:12:35.000Z",
+        "src_ip": "10.10.1.29",
+        "query": "588508bb71584deaa03928e85adf.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c3bb7bb020d84554929a388241cf0a15",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:14:22.000Z",
+        "src_ip": "10.10.3.108",
+        "query": "09b13c61274741e3907f9b358ec0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c9c674fcf4334de7bc6205d3cb05f701",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:16:30.000Z",
+        "src_ip": "10.10.1.79",
+        "query": "b9d927948598423f915b2164ecd5.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=3d469ad7f53c47daa60d65658ecfe1e0",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:18:35.000Z",
+        "src_ip": "10.10.8.69",
+        "query": "74dafaf034d34dc8b00dc1ff8f27.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:20:23.000Z",
+        "src_ip": "10.10.1.218",
+        "query": "aed9d49585234cc08638d0d836cc.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=186b5d954ebd47bf8ec6ef1882efd18f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:23:00.000Z",
+        "src_ip": "10.10.6.47",
+        "query": "38c97b908a294b03ade9638c867b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=8536d05da30f4bc189a42e74a0ae310d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:24:20.000Z",
+        "src_ip": "10.10.4.101",
+        "query": "0e0cff3f432b4e78ab6c4343a313.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a45e54b12eb946e4beb8e1c8cc28263c",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:27:17.000Z",
+        "src_ip": "10.10.4.67",
+        "query": "81048897f87c4917b69a1c0fe3cb.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=57d114014731497dbef88e0daa283772",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:29:13.000Z",
+        "src_ip": "10.10.8.52",
+        "query": "2c7587d2e8f6465eb47ac7b334b2.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7b60e0e54b8c4fa1a80c03d7d5fd0674",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:30:08.000Z",
+        "src_ip": "10.10.9.96",
+        "query": "31fbeb9842d74be99b19ac0cd4ad.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4edc8d0b8f44461d8fd3f81c935ee0cd",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:33:00.000Z",
+        "src_ip": "10.10.8.137",
+        "query": "743bea83392a4ff2b11bd2e9b0c9.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=446168610b274f4b93668f471185ccec",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:34:58.000Z",
+        "src_ip": "10.10.3.146",
+        "query": "7d50a2bb34c84c99b7eee7476df0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=48b39941ff74495aa7e20d7dbd248a16",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:36:44.000Z",
+        "src_ip": "10.10.9.121",
+        "query": "56309e961441428ca51fc570ba1a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b063553886c04ae1bb2692a0e3343579",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:38:41.000Z",
+        "src_ip": "10.10.1.149",
+        "query": "fc403be6f1434b6197beac77c6df.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2201e6108aed42b58165f73b1637fe43",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:41:20.000Z",
+        "src_ip": "10.10.8.108",
+        "query": "b376a4da425340fa9435052e28f0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:42:44.000Z",
+        "src_ip": "10.10.5.155",
+        "query": "5baee2904b1c4ede837cd4b05f3a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=fd16d9b0d1d140cc8f4fdbae4590de46",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:45:03.000Z",
+        "src_ip": "10.10.4.42",
+        "query": "f61d61b4b9e7491c9f8dcdb46f86.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2d122ac763814b37a64865876a4b135b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:46:38.000Z",
+        "src_ip": "10.10.1.45",
+        "query": "ae3b3075774b4c408b77291198e8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:48:39.000Z",
+        "src_ip": "10.10.1.76",
+        "query": "6a40e8da485b4252868cc91362ad.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2ea10c1448c74159b18fe8e8e0071103",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:50:40.000Z",
+        "src_ip": "10.10.2.118",
+        "query": "841944d9e5f449c6921d840cdaea.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f22fec2750364122bfc01111021b409d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:52:46.000Z",
+        "src_ip": "10.10.1.32",
+        "query": "7f642c6a18234220b9eee71271b7.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=0f1aab296c094b4193be622ce523091b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:54:28.000Z",
+        "src_ip": "10.10.3.104",
+        "query": "a18d104e8bb44485855db44c97e8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a9479b29a80c47fa8174fb916c7b3382",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:56:44.000Z",
+        "src_ip": "10.10.2.195",
+        "query": "7647c58c57f74a4eae20228f0a76.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T11:59:05.000Z",
+        "src_ip": "10.10.3.14",
+        "query": "c4d75844ae7441f59e9952426a85.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=d675965baeee433a82532cc0511c977b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:01:08.000Z",
+        "src_ip": "10.10.8.236",
+        "query": "c14571db84644ed78b4019681ea0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=248324418b2548e58fe730ceb943d34f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:02:16.000Z",
+        "src_ip": "10.10.5.26",
+        "query": "c03811af7c764d9ca91b206a8f24.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=fdb74b51105c4a0c84741c5514094263",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:04:19.000Z",
+        "src_ip": "10.10.9.202",
+        "query": "0929601178574368b485ae9e3a56.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4ab11df8dd1b4e63a81fe5db5cd4a25f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:06:05.000Z",
+        "src_ip": "10.10.6.249",
+        "query": "33a118c03ce14145b320b0ccf774.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=beba5cbe608748cbbec3a17e02e55482",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:08:24.000Z",
+        "src_ip": "10.10.7.87",
+        "query": "e2795e16f6f54fe0ae14aeeb5e6f.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=52e7cee2b1a841dbb66549de65762089",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:10:41.000Z",
+        "src_ip": "10.10.5.24",
+        "query": "f402a5c6a983450aa90db04bc513.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=534711bddc0b462d804fd41d2aa7f0af",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:13:06.000Z",
+        "src_ip": "10.10.2.151",
+        "query": "5f513d9bbd6e46538fc95ea65976.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=dff8222fe7e049a69221095f192a9e8d",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:14:52.000Z",
+        "src_ip": "10.10.3.225",
+        "query": "2f6e6204dd8444e1bfd2351557ed.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=500e39b050ed45448cae90469f710c13",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:16:10.000Z",
+        "src_ip": "10.10.3.242",
+        "query": "2dd5f13157744e4ba4ce3fa3c6b7.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e7ebca015c724402ab4c63f6ff7dceb4",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:19:17.000Z",
+        "src_ip": "10.10.8.247",
+        "query": "204da02eb04044f6b69c019ba995.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=78dd9f0eff66437baf559cb0b089b4e0",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:20:49.000Z",
+        "src_ip": "10.10.5.126",
+        "query": "d4614293e77b4abe9d08e61018ee.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:22:30.000Z",
+        "src_ip": "10.10.1.18",
+        "query": "eb686da86edd4c36bf69647387d4.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f9e96e2941f04ff3b727cd562ff6ea39",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:24:43.000Z",
+        "src_ip": "10.10.2.53",
+        "query": "99f435da86ed4457b8c7dcf68e80.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e6e6552440e74d61a1b208a07af5140c",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:26:59.000Z",
+        "src_ip": "10.10.4.187",
+        "query": "ce08cc62f89d4e028d400b765781.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=fb8168139a72471e95f39b34e262cf8b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:28:45.000Z",
+        "src_ip": "10.10.3.14",
+        "query": "e032c3db6eea47259ccee599b010.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=53f7adb8db834d2e85f1d7d1ef610890",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:31:08.000Z",
+        "src_ip": "10.10.2.66",
+        "query": "2f39e80374834f928077a8041cd9.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:33:04.000Z",
+        "src_ip": "10.10.1.141",
+        "query": "c4d45ad825544883b1012c09cb6b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=1a3852864d8a48398a4fb5ef57a006d6",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:35:11.000Z",
+        "src_ip": "10.10.5.113",
+        "query": "e6e438236fa44a8686926419a273.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c840eb92744f4bcbb355c0d2f45fa0cd",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:36:34.000Z",
+        "src_ip": "10.10.4.131",
+        "query": "b983be55a8194dd6bea349df4e14.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a4f45c925d71457bb9cd61eb2b74f5cf",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:38:57.000Z",
+        "src_ip": "10.10.3.186",
+        "query": "f24906f019544321817a51394bdc.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:40:53.000Z",
+        "src_ip": "10.10.5.85",
+        "query": "d5da970339fd46f48f2cfbe58a7b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b9341011cdcf4fbfbf2efa455b36c635",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:42:33.000Z",
+        "src_ip": "10.10.9.83",
+        "query": "9787dc7739e5481e87a407f1adaa.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4e1cbf84d75644c2ad4e54ca8c09280f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:44:53.000Z",
+        "src_ip": "10.10.8.222",
+        "query": "8adc49fa797e43698419e631d73f.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=724787f914a14d8883bdfae510ec21ec",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:46:40.000Z",
+        "src_ip": "10.10.8.24",
+        "query": "2a8c71c3ae9344c9bafcefa1af3e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=847d9486b4714ce9a3ba2235aa8c601a",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:48:58.000Z",
+        "src_ip": "10.10.4.14",
+        "query": "5783bff99ea84077b943a394f1e1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=fb8e9391a3d349a9b3a7632739e30ae1",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:51:01.000Z",
+        "src_ip": "10.10.4.106",
+        "query": "2f5fc5de45134bde87beac44c7a3.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=265ec635f4da442e8bf934660d384333",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:52:51.000Z",
+        "src_ip": "10.10.5.23",
+        "query": "0da93daf0438459bacf0f8bb3726.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=f77a35a0c3c64824beb73c47696c053b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:55:05.000Z",
+        "src_ip": "10.10.6.164",
+        "query": "52062cf4395341ed9880ea8f5c92.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=23d2db5c166d4c70af34c4bc69c3517a",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:56:37.000Z",
+        "src_ip": "10.10.9.15",
+        "query": "966777418cb7494c9be4af4061a5.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=38d497f4033a4dfea18ad8846277d924",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T12:58:59.000Z",
+        "src_ip": "10.10.5.100",
+        "query": "564cc07895c0477db61730ea2e55.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=bfa4fa8443ce4177899056841a8b093f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:00:46.000Z",
+        "src_ip": "10.10.7.111",
+        "query": "a23608443d6846d5b993bcdd534a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=aff283b1a4e64520bcb697fa87c586f1",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:02:57.000Z",
+        "src_ip": "10.10.5.91",
+        "query": "a1a2384b9f494e78880edc24be2b.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=ceea7c0a23754dccb50ff04db281ac97",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:05:05.000Z",
+        "src_ip": "10.10.8.158",
+        "query": "d3a86d1f55e94993a87eb11fff36.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=c7d3f0e54ff84a51b2a2f48595ecd946",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:06:42.000Z",
+        "src_ip": "10.10.4.218",
+        "query": "234ba77fca6d49e78a01b135a9d0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=586a870ae75b4a7ab67a712f07082a56",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:09:09.000Z",
+        "src_ip": "10.10.3.16",
+        "query": "578d9b1894584952b16603ef4eae.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=eb759b7cf12e46dd8615530c56e8a5f6",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:11:10.000Z",
+        "src_ip": "10.10.2.240",
+        "query": "991ee3d1f0c84560841e692dedc1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=0eace605e1a643829fc9601d42c4c4e2",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:12:21.000Z",
+        "src_ip": "10.10.7.50",
+        "query": "dddfb8e4b207477393c65650da2a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e7a50e5ac5b346cca813527919e984cf",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:15:16.000Z",
+        "src_ip": "10.10.2.13",
+        "query": "06217030683b4dc98892d4926f59.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=aa90f153b9a04d90aa803532a49f2754",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:16:13.000Z",
+        "src_ip": "10.10.3.42",
+        "query": "904c353469e34bcb9adf28e14a90.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=3ea47ec8b72142e5a30443ef41e99a97",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:18:39.000Z",
+        "src_ip": "10.10.7.218",
+        "query": "2ce9f8ccf99e4faababdce093db6.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:20:22.000Z",
+        "src_ip": "10.10.9.94",
+        "query": "94458b0cce4945538d9a2406c81e.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=60279da4fe1147b7b9c5e7402e722faa",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:22:23.000Z",
+        "src_ip": "10.10.2.212",
+        "query": "4b28c027d08a41e0aa2e0a0a4c28.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b3fdd0e013d84531a2e03f1b2db00d7e",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:24:53.000Z",
+        "src_ip": "10.10.8.190",
+        "query": "1b260a999c11460a8bb54f35ae05.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7d38c118fb6341e1b236cadca18d6d13",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:26:16.000Z",
+        "src_ip": "10.10.6.238",
+        "query": "618f965b1b8b4758aedb054598b4.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2ab4462a20bb441caaf94c97e20e8e0f",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:28:06.000Z",
+        "src_ip": "10.10.9.73",
+        "query": "9858a461f33e402ea3bb5169999a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=4cc66fd5dbe04e5d930b58cd1b86e547",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:30:20.000Z",
+        "src_ip": "10.10.3.40",
+        "query": "3cf336a51e0145848b50f2681f48.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=5a56b83fee474594bf9eebe4b235a344",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:32:42.000Z",
+        "src_ip": "10.10.7.245",
+        "query": "faa60f1c68204305a1f96e585fe0.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b20f9a5f2f90426b8adc2a19e6a3c916",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:34:45.000Z",
+        "src_ip": "10.10.6.163",
+        "query": "985f6a401cb1451fbdd3dd797948.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=d78988c81e79494596e85e4824265b40",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:36:28.000Z",
+        "src_ip": "10.10.3.114",
+        "query": "0160b47cbb3944efb5bb24f50871.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=2e3c6f2910c7413abd418210c07ee886",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:38:33.000Z",
+        "src_ip": "10.10.4.248",
+        "query": "b216452a5ca848288e46c7575ec1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:40:30.000Z",
+        "src_ip": "10.10.1.34",
+        "query": "827b7dea34c248faaa11463afc8d.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:42:17.000Z",
+        "src_ip": "10.10.9.187",
+        "query": "4166d4851f8f40948f333441a3c8.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a0c3f77b918345f0913c5a846e5b26d1",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:44:54.000Z",
+        "src_ip": "10.10.1.157",
+        "query": "3cc736b7b7ad43158065afebc013.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=142d8be6b92a4ab399e9c74c2a57b835",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:46:49.000Z",
+        "src_ip": "10.10.1.65",
+        "query": "61343232e4df4e60bf1b832b6595.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=b8b06548c6344301b4fd3ebcdf2591b9",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:49:21.000Z",
+        "src_ip": "10.10.1.107",
+        "query": "66701d2b883a4418ac40a700c557.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=6e686d432566468a9e81d4e956eda332",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:50:18.000Z",
+        "src_ip": "10.10.4.42",
+        "query": "a5ab6cb5ffaa4b6e8299dd12c35a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=8705e7c7fa6a48258aadaf816f3408c2",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:52:54.000Z",
+        "src_ip": "10.10.5.195",
+        "query": "8a8da633234445f2909de9dd6f71.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=a0b8bee0310749298fec037f74e5820a",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:54:40.000Z",
+        "src_ip": "10.10.8.140",
+        "query": "3a63e0364ba34452a6fafd205066.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:57:15.000Z",
+        "src_ip": "10.10.1.127",
+        "query": "cea8be2f21a3409e95098ec779f1.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=93a57d73864942609336cd8fd61d1a26",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T13:59:07.000Z",
+        "src_ip": "10.10.8.50",
+        "query": "44a203845d4f4dc981f5fd153126.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=7ab89ab85124466d93fd5ea2497313cc",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T14:00:42.000Z",
+        "src_ip": "10.10.2.228",
+        "query": "f4b1031837af400aa971bc29cbec.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "NXDOMAIN",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T14:02:57.000Z",
+        "src_ip": "10.10.3.156",
+        "query": "c14a0139b19a4f4dbbff34a1e457.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=244f1c4c8acd4350a5abfd5774fd4daa",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T14:05:01.000Z",
+        "src_ip": "10.10.5.78",
+        "query": "bb4f7b345e65482bbf3a9ab62f0a.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=e56a708040a54cc0888bd7b64436c06b",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      },
+      {
+        "timestamp": "2026-04-17T14:06:42.000Z",
+        "src_ip": "10.10.9.130",
+        "query": "e305ff4e8aba42d9979256c8a576.cdn-284294b3.cloudsync-net.com",
+        "qtype": "TXT",
+        "answer": "v=66c289ab42b949d8950981ca76dbbd52",
+        "ground_truth_label": "malicious",
+        "analyst_note": "High-entropy 28-char subdomain TXT query to cdn-284294b3.cloudsync-net.com \u2014 DNS tunneling C2 channel."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-17T07:54:34.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T12:43:03.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T09:45:54.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T10:27:49.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:24:38.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T12:01:12.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T09:29:37.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T09:13:44.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T08:08:24.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:51:20.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T10:37:31.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T10:26:40.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:00:12.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T09:34:36.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:45:33.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:59:20.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T08:11:11.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-19",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T11:05:56.000Z",
+        "type": "dns_query",
+        "host": "WS-HR-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T08:33:25.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T10:31:43.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T09:45:16.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:03:44.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:15:53.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T08:47:54.000Z",
+        "type": "app_logon",
+        "host": "WS-MKT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:13:43.000Z",
+        "type": "av_scan",
+        "host": "WS-HR-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T12:33:13.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T12:48:19.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T07:16:04.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-17T10:53:51.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-11",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1071.004: DNS tunneling C2 with low-volume high-entropy queries"
+    ],
+    "compromised_accounts": [
+      "e.taylor@corp.local"
+    ],
+    "compromised_hosts": [
+      "WS-MKT-17"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1071.004"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}

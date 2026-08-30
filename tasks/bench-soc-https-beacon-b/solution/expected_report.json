@@ -1,0 +1,14 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1071.001",
+  "compromised_hosts": [
+    "WS-ENG-09"
+  ],
+  "compromised_accounts": [
+    "m.jones"
+  ],
+  "key_indicators": [
+    "198.51.100.47",
+    "443"
+  ]
+}

@@ -1,0 +1,18 @@
+SOC ticket AL-3026 (opened 2026-04-17 09:15 UTC)
+
+Alert: `dns-entropy-volume`
+  The DNS monitoring rule flagged sustained TXT query volume with long high-entropy labels toward an external domain during the window (source endpoint per the asset inventory).
+
+Environment (from the asset inventory):
+  Domain:        corp.local
+  Domain DC:     DC01.corp.local
+  Host:          WS-MKT-17
+  Host owner:    e.taylor
+
+Artifacts in /app/evidence/:
+  ticket_context.txt           - The alert context.
+  zeek_dns.jsonl               - Zeek DNS log for the window (one JSON object per line).
+  background_activity.jsonl    - Routine background activity feed for the same window (for context; not every entry is security-relevant).
+
+Investigate and produce the structured report described in the task
+instructions.

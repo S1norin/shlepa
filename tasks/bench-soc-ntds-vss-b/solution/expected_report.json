@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1003.003",
+  "compromised_hosts": [
+    "DC01"
+  ],
+  "compromised_accounts": [
+    "l.martin"
+  ],
+  "key_indicators": [
+    "vssadmin create shadow /for=C:",
+    "\\Device\\HarddiskVolumeShadowCopy1\\Windows\\NTDS\\NTDS.dit",
+    "4663"
+  ]
+}

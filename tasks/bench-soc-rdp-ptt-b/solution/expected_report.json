@@ -1,0 +1,15 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1021.001",
+  "compromised_hosts": [
+    "DB-SRV-01"
+  ],
+  "compromised_accounts": [
+    "r.chen"
+  ],
+  "key_indicators": [
+    "10.10.3.236",
+    "10.10.5.41",
+    "3389"
+  ]
+}

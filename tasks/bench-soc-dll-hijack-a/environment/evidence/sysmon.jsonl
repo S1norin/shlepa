@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-22T09:04:09.000Z", "host": "WS-IT-18", "event_id": 7, "description": "Image Loaded", "fields": {"Image": "C:\\Program Files\\SomeApp\\app.exe", "ImageLoaded": "C:\\Program Files\\SomeApp\\winmm.dll", "Signed": "false", "Hashes": "SHA256=FE5B44526813446CB02707C831E24F87FE5B44526813446CB02707C831E24F87"}}

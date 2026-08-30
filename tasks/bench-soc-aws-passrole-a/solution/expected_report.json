@@ -1,0 +1,16 @@
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1098.003",
+  "compromised_hosts": [
+    "WS-FIN-10"
+  ],
+  "compromised_accounts": [
+    "s.garcia"
+  ],
+  "key_indicators": [
+    "PassRole",
+    "AdminRole",
+    "45.33.32.156",
+    "arn:aws:iam::123456789012:role/AdminRole"
+  ]
+}

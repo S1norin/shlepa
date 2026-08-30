@@ -1,0 +1,1 @@
+{"timestamp": "2026-04-18T09:04:12.000Z", "host": "WS-MKT-11", "event_id": 7, "description": "Image Loaded", "fields": {"Image": "C:\\Program Files\\SomeApp\\app.exe", "ImageLoaded": "C:\\Program Files\\SomeApp\\dwmapi.dll", "Signed": "false", "Hashes": "SHA256=1C1D3B05DF944EFF9BAB28DFEF7C78F41C1D3B05DF944EFF9BAB28DFEF7C78F4"}}
