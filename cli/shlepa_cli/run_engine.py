@@ -28,7 +28,7 @@ from pathlib import Path
 
 from shlepa_cli import mlflow_compat as compat
 from shlepa_cli.config import Settings
-from shlepa_cli.tasks import Task
+from shlepa_cli.tasks import Task, task_family
 
 DEFAULT_TRACE_EXPERIMENT = "shlepa-traces"
 AGENT_SERVICE = "shlepa-agent"
@@ -265,9 +265,11 @@ def record_trace_tag(
     timeout_sec: float = 15.0,
 ) -> str | None:
     """Retry the batch trace lookup (the collector exports with a lag)
-    and store the trace id in the run tag ``mlflow_trace_id``.
+    and store the trace id in the run tag ``mlflow_trace_id``, then
+    link the trace to the run so the run UI shows it.
 
-    A missing trace is not an error: warn and omit the tag.
+    A missing trace is not an error: warn and omit the tag. A failed
+    link is not an error either: warn and keep the tag.
     """
     deadline = time.monotonic() + max(timeout_sec, 0.0)
     while True:
@@ -276,6 +278,7 @@ def record_trace_tag(
         )
         if trace_id is not None:
             client.set_tag(run_id, "mlflow_trace_id", trace_id)
+            _link_trace_to_run(client, run_id, trace_id)
             return trace_id
         if time.monotonic() >= deadline:
             break
@@ -288,6 +291,26 @@ def record_trace_tag(
     return None
 
 
+def _link_trace_to_run(client, run_id: str, trace_id: str) -> None:
+    """Link a found trace to its MLflow run (best effort).
+
+    Uses ``MlflowClient.link_traces_to_run`` when the client has it
+    (mlflow >= 3.15); older clients skip silently. A link failure must
+    never fail the run: warn and continue.
+    """
+    link = getattr(client, "link_traces_to_run", None)
+    if link is None:
+        return
+    try:
+        link(trace_ids=[trace_id], run_id=run_id)
+    except Exception as exc:  # noqa: BLE001 - telemetry must not fail runs
+        print(
+            f"  ! failed to link trace {trace_id} to run {run_id} "
+            f"({type(exc).__name__}: {exc}); mlflow_trace_id tag kept",
+            flush=True,
+        )
+
+
 def log_task_to_mlflow(
     client,
     settings: Settings,
@@ -298,18 +321,25 @@ def log_task_to_mlflow(
     batch_id: str | None = None,
     batch_started_ms: int | None = None,
     trace_wait_sec: float = 15.0,
+    experiment_name: str | None = None,
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
-    experiment = preset name, run name = task slug. With otel on and a
-    ``batch_id`` given, the run is tagged with ``batch_id`` and (when the
-    trace is found) ``mlflow_trace_id``.
+    experiment = task family (derived from the slug via ``task_family``),
+    run name = task slug. The preset is kept only as a tag so per-bench
+    analysis groups runs by family while preset-scoped filtering still
+    works. ``experiment_name`` overrides the family derivation for callers
+    that log to a fixed experiment (smoke/CI); the preset tag always
+    reflects ``preset_name``. With otel on and a ``batch_id`` given, the
+    run is tagged with ``batch_id`` and (when the trace is found)
+    ``mlflow_trace_id``.
     """
     import shlepa_agent
 
-    experiment = client.get_experiment_by_name(preset_name)
+    family = experiment_name or task_family(result.slug)
+    experiment = client.get_experiment_by_name(family)
     if experiment is None:
-        experiment_id = client.create_experiment(preset_name)
+        experiment_id = client.create_experiment(family)
     else:
         experiment_id = experiment.experiment_id
     tags = {

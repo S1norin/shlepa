@@ -1,7 +1,8 @@
 """Compact Markdown digest of one agent trace for LLM analysis.
 
 Built from the trace_to_dict JSON shape (see trace_export): a header
-with run-level numbers, a per-span timeline, and a deterministic
+with run-level numbers (incl. thinking_parts, counted from typed
+output messages), a per-span timeline, and a deterministic
 failure-signals section (loop detection, tool errors, peak context,
 repeated tool results). Pure function: dict in, Markdown out.
 
@@ -18,6 +19,7 @@ import json
 __all__ = [
     "build_digest",
     "detect_loops",
+    "thinking_parts_count",
     "tool_signature",
     "trace_signals",
 ]
@@ -34,6 +36,9 @@ _COMPLETION_KEYS = (
     "llm.token_count.completion",
     "gen_ai.usage.output_tokens",
 )
+#: OpenInference serializes LLM output messages (with typed parts, incl.
+#: type:thinking) under this key; pre-v1 traces carry it not at all.
+_OUTPUT_MESSAGES_KEY = "gen_ai.output.messages"
 _TOOL_NAME_KEY = "tool.name"
 _TOOL_ARGS_KEY = "tool.call.arguments"
 _TOOL_RESULT_KEY = "tool.call.result"
@@ -70,6 +75,51 @@ def span_prompt_tokens(span: dict) -> int:
 
 def span_completion_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
+
+
+def _output_messages(span: dict):
+    """Parsed gen_ai.output.messages, or None when absent/malformed.
+
+    Accepts the OTLP-side JSON string and the server-side already-parsed
+    list; anything else is treated as missing (never raises).
+    """
+    value = (span.get("attributes") or {}).get(_OUTPUT_MESSAGES_KEY)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value if isinstance(value, (list, tuple)) else None
+
+
+def _span_has_output_messages(span: dict) -> bool:
+    return _output_messages(span) is not None
+
+
+def thinking_parts_count(span: dict) -> int:
+    """Number of non-empty type:thinking parts in the span's output.
+
+    Legacy flat llm.output_messages.* keys carry no part types, so they
+    cannot be counted; such spans report 0 (their absence from the
+    typed key is flagged by the messages_missing signal instead).
+    """
+    messages = _output_messages(span)
+    if messages is None:
+        return 0
+    count = 0
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for part in message.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "thinking" and str(
+                part.get("content") or ""
+            ).strip():
+                count += 1
+    return count
 
 
 def _is_error(status) -> bool:
@@ -152,7 +202,8 @@ def trace_signals(trace: dict) -> list[str]:
     """Short machine-readable signal tags for one trace dict.
 
     Used in manifest.jsonl: 'loop:<tool>:<count>', 'tool_errors:<n>',
-    'repeated_results:<n>'.
+    'repeated_results:<n>', 'tokens_missing', 'no_thinking',
+    'messages_missing'.
     """
     tools = _tool_spans(trace)
     signals: list[str] = []
@@ -178,6 +229,17 @@ def trace_signals(trace: dict) -> list[str]:
     )
     if llm_spans and not has_usage:
         signals.append("tokens_missing")
+    # Reasoning capture: typed output messages present -> count thinking
+    # parts (0 => the model really did not reason); absent => the trace
+    # predates message capture and "no thinking" is unknowable, so the
+    # two signals are mutually exclusive.
+    if llm_spans:
+        has_messages = any(_span_has_output_messages(s) for s in llm_spans)
+        if has_messages:
+            if sum(thinking_parts_count(s) for s in llm_spans) == 0:
+                signals.append("no_thinking")
+        else:
+            signals.append("messages_missing")
     return signals
 
 
@@ -228,6 +290,12 @@ def build_digest(trace: dict) -> str:
         f"(total {prompt_tokens + completion_tokens})"
     )
     lines.append(f"- llm_calls: {len(llm)}")
+    if llm:
+        if any(_span_has_output_messages(s) for s in llm):
+            thinking = sum(thinking_parts_count(s) for s in llm)
+            lines.append(f"- thinking_parts: {thinking}")
+        else:
+            lines.append("- thinking_parts: n/a (no output messages)")
     lines.append(f"- tool_calls: {len(tools)}")
     lines.append(f"- tool_errors: {len(tool_errors)}")
     lines.append(f"- peak context: {peak_context} tokens (max LLM prompt)")

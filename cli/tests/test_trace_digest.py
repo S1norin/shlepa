@@ -217,3 +217,79 @@ def test_digest_loop_line_contains_args_excerpt():
     ]
     assert lines, digest
     assert "ls -la /tmp" in lines[0]
+
+
+# --- thinking-part signals (issue #41) -------------------------------------
+
+
+def _llm_span_with_messages(i, parts):
+    span = _llm_span(i, 10, 2)
+    span["attributes"]["gen_ai.output.messages"] = json.dumps(
+        [{"role": "assistant", "parts": parts}]
+    )
+    return span
+
+
+def test_thinking_parts_counted_in_digest_header():
+    spans = [
+        _llm_span_with_messages(
+            1,
+            [
+                {"type": "thinking", "content": "plan the approach"},
+                {"type": "text", "content": "answer"},
+            ],
+        ),
+        _llm_span_with_messages(
+            2,
+            [
+                {"type": "thinking", "content": "step two"},
+                {"type": "tool_call", "id": "c", "name": "bash",
+                 "arguments": "{}"},
+            ],
+        ),
+    ]
+    digest = trace_digest.build_digest(_trace(spans))
+    assert "thinking_parts: 2" in digest
+    assert "n/a" not in digest
+
+
+def test_no_thinking_signal_when_messages_present_but_zero_thinking():
+    spans = [
+        _llm_span_with_messages(1, [{"type": "text", "content": "answer"}]),
+        _llm_span_with_messages(
+            2, [{"type": "tool_call", "id": "c", "name": "bash",
+                 "arguments": "{}"}]
+        ),
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert "no_thinking" in signals
+    assert "messages_missing" not in signals
+
+
+def test_messages_missing_signal_when_no_output_messages():
+    spans = [_llm_span(1, 10, 2)]  # carries usage but no messages
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert "messages_missing" in signals
+    assert "no_thinking" not in signals
+    digest = trace_digest.build_digest(_trace(spans))
+    assert "thinking_parts: n/a" in digest
+
+
+def test_malformed_output_messages_treated_as_missing_not_no_thinking():
+    span = _llm_span(1, 10, 2)
+    span["attributes"]["gen_ai.output.messages"] = "{not json"
+    signals = trace_digest.trace_signals(_trace([span]))
+    assert "messages_missing" in signals
+    assert "no_thinking" not in signals
+
+
+def test_thinking_signals_absent_without_llm_spans():
+    signals = trace_digest.trace_signals(_trace([_tool_span(1)]))
+    assert "no_thinking" not in signals
+    assert "messages_missing" not in signals
+
+
+def test_real_fixture_thinking_parts():
+    """Golden fixture: the real span (tr-a5420d2d) has a thinking part."""
+    span = json.loads((FIXTURES / "llm_span_real.json").read_text())
+    assert trace_digest.thinking_parts_count(span) >= 1

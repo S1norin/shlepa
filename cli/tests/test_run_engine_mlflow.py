@@ -145,8 +145,8 @@ def test_log_task_to_mlflow_file_store(tmp_path):
     assert run.data.tags["model"] == "stub-model"
     assert run.data.tags["endpoint_class"] == "main"
     assert run.data.params["final_output"] == "Created hello.txt"
-    # Experiment name == preset name, run name == task slug.
-    assert client.get_experiment(run.info.experiment_id).name == "all"
+    # Experiment name == task family, run name == task slug.
+    assert client.get_experiment(run.info.experiment_id).name == "contest"
     assert run.info.run_name == "contest-hello-file"
 
 
@@ -162,7 +162,24 @@ def test_log_task_unsolved_metrics(tmp_path):
     run = client.get_run(run_id)
     assert run.data.metrics["solved"] == 0.0
     assert run.data.tags["model"] == "env"
-    assert client.get_experiment(run.info.experiment_id).name == "quick"
+    # Family comes from the slug, not the (arbitrary) preset name.
+    assert client.get_experiment(run.info.experiment_id).name == "contest"
+
+
+def test_log_task_experiment_is_task_family(tmp_path):
+    """bench-* slugs land in bench-<x> experiments even under preset 'all'."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "all", "m", _result(tmp_path, slug="bench-soc-ntds-vss-a")
+    )
+
+    run = client.get_run(run_id)
+    assert run.data.tags["preset"] == "all"
+    assert run.data.tags["model"] == "m"
+    assert client.get_experiment(run.info.experiment_id).name == "bench-soc"
 
 
 def test_log_task_logs_error_param(tmp_path):
@@ -266,6 +283,10 @@ class _FakeTraceClient:
         self.traces = traces
         self.tags = {}
         self.errors = []
+        self.links = []
+
+    def link_traces_to_run(self, trace_ids, run_id):
+        self.links.append((run_id, list(trace_ids)))
 
     def get_experiment_by_name(self, name):
         if name == "shlepa-traces":
@@ -399,6 +420,48 @@ def test_log_task_records_trace_tag(tmp_path):
     )
     assert client.tags.get((run_id, "mlflow_trace_id")) == "tr-match"
     assert created_tags.get("batch_id") == "batch-2"
+
+
+def test_log_task_links_trace_to_run(tmp_path):
+    client = _FakeTraceClient(
+        [_agent_trace("tr-match", "batch-2", "contest-hello-file")]
+    )
+    _install_run_logging(client)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        _otel_settings(tmp_path),
+        "all",
+        "m",
+        _result(tmp_path),
+        batch_id="batch-2",
+    )
+    assert client.links == [(run_id, ["tr-match"])]
+
+
+def test_log_task_link_failure_never_fails_the_run(tmp_path, capsys):
+    client = _FakeTraceClient(
+        [_agent_trace("tr-match", "batch-2", "contest-hello-file")]
+    )
+    _install_run_logging(client)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("link endpoint down")
+
+    client.link_traces_to_run = boom
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        _otel_settings(tmp_path),
+        "all",
+        "m",
+        _result(tmp_path),
+        batch_id="batch-2",
+    )
+    # Run still logged + tagged; the link failure only warns.
+    assert run_id == "run-1"
+    assert client.tags.get((run_id, "mlflow_trace_id")) == "tr-match"
+    assert "link" in capsys.readouterr().out.lower()
 
 
 def test_log_task_missing_trace_warns_and_still_logs(tmp_path, capsys):

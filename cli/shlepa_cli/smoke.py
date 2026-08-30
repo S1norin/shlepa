@@ -104,6 +104,7 @@ def run_smoke(
             effective.local_agent_model,
             task_result,
             endpoint_class=endpoint_class,
+            experiment_name=experiment,
         )
         run = mlflow_client.get_run(run_id)
         if run.info.status != "FINISHED":
