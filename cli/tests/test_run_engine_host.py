@@ -52,8 +52,9 @@ def test_run_agent_on_host_against_stub(monkeypatch, tmp_path):
         server.server_close()
 
     assert run.final_output == FINAL_ANSWER
-    assert run.tokens_in == 10
-    assert run.tokens_out == 5
+    # plan (final_result, decision=commit) + commit: two model requests
+    assert run.tokens_in == 20
+    assert run.tokens_out == 10
     assert run.tool_calls == 0
 
 
@@ -81,8 +82,9 @@ def test_run_task_end_to_end_stub_llm(monkeypatch, tmp_path):
     assert result.ok
     assert not result.solved
     assert result.final_output == FINAL_ANSWER
-    assert result.tokens_in == 10
-    assert result.tokens_out == 5
+    # plan (final_result, decision=commit) + commit: two model requests
+    assert result.tokens_in == 20
+    assert result.tokens_out == 10
     assert result.error is None
 
 
