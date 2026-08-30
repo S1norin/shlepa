@@ -128,8 +128,8 @@ async def edit(ctx: "RunContext[AgentDeps]", path: str, edits: list[EditItem]) -
 
 EDIT_TOOL = Tool(
     name="edit",
-    note="edit: precise replacements in an existing file (edits[] of "
+    note="edit: replace exact fragments in an existing file. edits[] of "
     "{oldText, newText, line?}; oldText must be unique in the file, or within "
-    "the given 0-based line).",
+    "the given 0-based line; all edits apply to the original file version.",
     run=edit,
 )

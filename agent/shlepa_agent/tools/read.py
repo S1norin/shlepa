@@ -97,7 +97,8 @@ async def read(
 
 READ_TOOL = Tool(
     name="read",
-    note="read: paged file reads (100 lines per page by default, output capped "
-    "at 4000 chars; 0-based offset; the result tells you where to continue).",
+    note="read: read a text file page by page. 0-based offset; 100 lines per "
+    "page by default; output capped at 4000 chars; the result reports the "
+    "offset to continue from.",
     run=read,
 )

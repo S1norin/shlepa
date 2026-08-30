@@ -32,7 +32,8 @@ async def write(ctx: "RunContext[AgentDeps]", path: str, text: str) -> str:
 
 WRITE_TOOL = Tool(
     name="write",
-    note="write: create a NEW file with exact content (never overwrites; "
-    "parent dirs created; no trailing newline added).",
+    note="write: write exact content to a NEW file. The path must not exist "
+    "(use edit for existing files); parent dirs are created; no trailing "
+    "newline is added.",
     run=write,
 )

@@ -103,8 +103,9 @@ async def bash(
 BASH_TOOL = Tool(
     name="bash",
     note=(
-        "bash — run a shell command (per-call timeout in seconds, default 30, "
-        "max 120); use absolute paths; start servers with nohup + & then verify"
+        "bash: run a shell command in the working directory. Per-call timeout "
+        "in seconds (default 30, max 120); use absolute paths; start servers "
+        "with nohup + & and verify they respond."
     ),
     run=bash,
 )
