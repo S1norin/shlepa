@@ -6,9 +6,13 @@ TrackedModel wraps OpenAIChatModel with:
   advisory only — rendered into prompts/status, never enforced here),
 - a per-request wall-clock cap on stream consumption (_WallCappedStream),
 - one retry for transient network errors,
-- context-overflow detection mapped to BudgetExceeded.
+- context-overflow detection mapped to BudgetExceeded,
+- an adaptive per-run budget (``budget.Budget``): when passed, the hard stop,
+  the per-request timeout/wall and the request-start gate are derived from
+  the task time limit T instead of the static [budget] reference values.
 
-All budget values come from the v2 agent config ([budget] section).
+The static [budget] section always provides the global caps: request_limit
+(the anti-loop guard), max_tokens, request_timeout, request_wall.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+from shlepa_agent.budget import Budget
 from shlepa_agent.config import AgentConfig
 from shlepa_agent.log import _log_event
 
@@ -93,15 +98,66 @@ class _WallCappedStream:
 class TrackedModel(OpenAIChatModel):
     """OpenAIChatModel with wall-clock/token budgeting and per-request usage logs."""
 
-    def __init__(self, model_name: str, provider: OpenAIProvider, agent_cfg: AgentConfig):
+    def __init__(
+        self,
+        model_name: str,
+        provider: OpenAIProvider,
+        agent_cfg: AgentConfig,
+        budget: Budget | None = None,
+    ):
         super().__init__(model_name, provider=provider)
         self.cfg = agent_cfg.budget
+        self.budget = budget
+        if budget is not None:
+            self.hard = budget.hard
+            self.gate_min: float | None = budget.gate_min
+            self.token_budget = budget.token_budget
+        else:
+            self.hard = agent_cfg.budget.hard_time
+            self.gate_min = None
+            self.token_budget = agent_cfg.budget.token_budget
         self.t0 = time.monotonic()
         self.last_messages: list[Any] = []
         self._pending_stream: Any = None
         self._request_no = 0
         self._cum_input = 0
         self._cum_output = 0
+
+    # -- dynamic budget helpers ------------------------------------------
+    def _time_left(self) -> float:
+        return max(0.0, self.hard - self.elapsed())
+
+    def _margin(self) -> float:
+        """Safety margin reserved for the finalize tail (0 in legacy mode)."""
+        return self.budget.margin if self.budget is not None else 0.0
+
+    def _request_timeout(self) -> float:
+        """Per-request open timeout: static cap, shrunk by remaining time.
+
+        v4: ``min(request_timeout, time_left - margin)`` so a slow request
+        can never eat into the finalize tail.
+        """
+        return max(
+            5.0, min(self.cfg.request_timeout, self._time_left() - self._margin())
+        )
+
+    def _request_wall(self) -> float:
+        """Per-request wall (open -> last chunk): static cap, shrunk by remaining time."""
+        return max(
+            5.0, min(self.cfg.request_wall, self._time_left() - self._margin())
+        )
+
+    def _gate_blocked(self) -> bool:
+        """True when not enough time remains for a new request to be useful."""
+        return self.gate_min is not None and self._time_left() < self.gate_min
+
+    def _request_limit_reached(self) -> bool:
+        return self._request_no >= self.cfg.request_limit
+
+    def _token_budget_exhausted(self) -> bool:
+        """Global (per-task) token budget; pydantic-ai's UsageLimits only
+        cover a single phase run, so the cross-phase ceiling is enforced here."""
+        return self._cum_input + self._cum_output >= self.token_budget
 
     # -- helpers ----------------------------------------------------------
     def _capped_settings(self, model_settings: Any) -> dict:
@@ -115,7 +171,7 @@ class TrackedModel(OpenAIChatModel):
         return time.monotonic() - self.t0
 
     def _hard_expired(self) -> bool:
-        return self.elapsed() > self.cfg.hard_time
+        return self.elapsed() > self.hard
 
     def log_pending_usage(self) -> None:
         """Log the usage of the previous (now-finalized) streamed response."""
@@ -150,13 +206,30 @@ class TrackedModel(OpenAIChatModel):
 
         Returns (streamed_response, context_manager); the caller must close the CM.
         """
+        if self._request_limit_reached():
+            raise BudgetExceeded(f"global request limit {self.cfg.request_limit} reached")
+        if self._token_budget_exhausted():
+            raise BudgetExceeded(
+                f"global token budget {self.token_budget} exhausted "
+                f"({self._cum_input + self._cum_output} used)"
+            )
+        if self._gate_blocked():
+            raise BudgetExceeded(
+                f"request gate: {self._time_left():.0f}s left < "
+                f"{self.gate_min:.0f}s — not enough time for a request"
+            )
         cm: Any = None
         last_err: Exception | None = None
         for attempt in (1, 2):
             if self._hard_expired():
-                raise BudgetExceeded(f"hard time limit {self.cfg.hard_time:.0f}s exceeded")
+                raise BudgetExceeded(f"hard time limit {self.hard:.0f}s exceeded")
+            if self._gate_blocked():
+                raise BudgetExceeded(
+                    f"request gate: {self._time_left():.0f}s left < "
+                    f"{self.gate_min:.0f}s — not enough time for a request"
+                )
             try:
-                async with asyncio.timeout(self.cfg.request_timeout):
+                async with asyncio.timeout(self._request_timeout()):
                     cm = super(TrackedModel, self).request_stream(
                         messages, model_settings, model_request_parameters, run_context
                     )
@@ -211,9 +284,10 @@ class TrackedModel(OpenAIChatModel):
         self._pending_stream = sr
         # Consumption happens in pydantic-ai's drain loop, outside any timeout
         # we set in _open_stream; enforce the request wall around the stream.
-        wall_deadline = time.monotonic() + self.cfg.request_wall
+        wall = self._request_wall()
+        wall_deadline = time.monotonic() + wall
         try:
-            yield _WallCappedStream(sr, wall_deadline, self.model_name, self.cfg.request_wall)
+            yield _WallCappedStream(sr, wall_deadline, self.model_name, wall)
         finally:
             try:
                 await cm.__aexit__(None, None, None)
@@ -229,12 +303,29 @@ class TrackedModel(OpenAIChatModel):
         self.log_pending_usage()
         self.last_messages = list(messages)
         model_settings = self._capped_settings(model_settings)
+        if self._request_limit_reached():
+            raise BudgetExceeded(f"global request limit {self.cfg.request_limit} reached")
+        if self._token_budget_exhausted():
+            raise BudgetExceeded(
+                f"global token budget {self.token_budget} exhausted "
+                f"({self._cum_input + self._cum_output} used)"
+            )
+        if self._gate_blocked():
+            raise BudgetExceeded(
+                f"request gate: {self._time_left():.0f}s left < "
+                f"{self.gate_min:.0f}s — not enough time for a request"
+            )
         last_err: Exception | None = None
         for attempt in (1, 2):
             if self._hard_expired():
-                raise BudgetExceeded(f"hard time limit {self.cfg.hard_time:.0f}s exceeded")
+                raise BudgetExceeded(f"hard time limit {self.hard:.0f}s exceeded")
+            if self._gate_blocked():
+                raise BudgetExceeded(
+                    f"request gate: {self._time_left():.0f}s left < "
+                    f"{self.gate_min:.0f}s — not enough time for a request"
+                )
             try:
-                async with asyncio.timeout(self.cfg.request_timeout):
+                async with asyncio.timeout(self._request_timeout()):
                     return await super(TrackedModel, self).request(
                         messages, model_settings, model_request_parameters
                     )

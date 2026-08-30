@@ -1,8 +1,9 @@
 """Structured phase outputs for the 4-phase pipeline.
 
-The plan and work phases end with a typed result (pydantic-ai output tool
+Every pipeline phase ends with a typed result (pydantic-ai output tool
 ``final_result``); these models are the machine-readable hand-off between
-phases. Commit and emergency stay free text — they write the deliverable.
+phases (and the structured contract of the run). Emergency stays free text —
+it is the last-resort rescue, not a contract phase.
 """
 
 from __future__ import annotations
@@ -31,9 +32,17 @@ class PlanResult(BaseModel):
     )
     steps: list[str] = Field(
         description=(
-            "Ordered concrete actions for the work phase (commands, file "
-            "operations, checks). Specific enough to execute without "
-            "inventing new approaches."
+            "Ordered concrete actions for the work phase. Format each step as "
+            "'action; verify: how to check it worked'. Specific enough to "
+            "execute without inventing new approaches."
+        ),
+    )
+    risks: str = Field(
+        default="",
+        description=(
+            "Main risks that could break this plan (wrong assumption, missing "
+            "information, time) and how the work phase should handle them. "
+            "Empty if none."
         ),
     )
     decision: Literal["work", "commit"] = Field(
@@ -61,11 +70,55 @@ class WorkResult(BaseModel):
             "written)."
         ),
     )
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "How sure you are (0-1) that the deliverable is complete and "
+            "correct. Be honest: 1.0 only after a passing mechanical check."
+        ),
+    )
+    next_hints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "For decision='replan' only: concrete hints for the next plan — "
+            "what was wrong and what must change. Ignored for 'commit'."
+        ),
+    )
     decision: Literal["commit", "replan"] = Field(
         description=(
             "'commit' — the deliverable is ready (or best-effort ready); "
             "'replan' — the plan itself was wrong or incomplete."
         )
+    )
+
+
+class CommitResult(BaseModel):
+    """Structured output of the terminal commit phase."""
+
+    status: Literal["ok", "partial", "unverified"] = Field(
+        description=(
+            "'ok' — the deliverable exists and ALL mechanical checks passed; "
+            "'partial' — best-effort written, some checks failed or missing; "
+            "'unverified' — written, but not checked."
+        )
+    )
+    artifact: str = Field(
+        description="Absolute path of the deliverable file."
+    )
+    checks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Each mechanical check run and its outcome, e.g. "
+            "'jq . /app/out.json -> valid'. Empty if nothing was checked."
+        ),
+    )
+    notes: str = Field(
+        default="",
+        description=(
+            "One line: what the deliverable is (empty if self-evident)."
+        ),
     )
 
 

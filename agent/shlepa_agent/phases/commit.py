@@ -3,9 +3,9 @@
 Continues the CURRENT conversation (trimmed message history) so the model
 keeps its full context (the work run, or the plan run on the trivial
 plan->commit shortcut). The user message asks to finalize and verify the
-deliverable now. Free text output; takes the remainder of the trial
-(``time`` omitted in config -> the runner caps it at the global hard_time).
-Never retried.
+deliverable now. Typed output (``CommitResult``: status/artifact/checks/notes)
+via the final_result tool; hard-capped by the budget commit cap (the runner
+caps it, ``time`` omitted in config). Never retried.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
+from shlepa_agent.outputs import CommitResult, output_schema_note
 from shlepa_agent.phases.base import Phase, RunState
 from shlepa_agent.template import load_prompt, render_user
 
@@ -40,6 +41,7 @@ def trim_history(messages: list[Any]) -> list[Any]:
 
 class CommitPhase(Phase):
     id = "commit"
+    output_type = CommitResult
     terminal = True
 
     def history(self, state: RunState) -> list[Any] | None:
@@ -47,7 +49,14 @@ class CommitPhase(Phase):
 
     def prompt(self, state: RunState) -> str:
         # The task is already in the system message (and in the resumed
-        # history), so the user message carries only the phase instructions.
+        # history), so the user message carries the phase instructions, the
+        # budget note and the CommitResult schema.
         return render_user(
-            state.cfg, self.id, {"phase_prompt": load_prompt(f"{self.id}.md")}
+            state.cfg,
+            self.id,
+            {
+                "phase_prompt": load_prompt(f"{self.id}.md"),
+                "extra": self.limits_note(state),
+                "output_schema": output_schema_note(CommitResult),
+            },
         )

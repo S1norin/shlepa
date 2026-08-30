@@ -17,36 +17,64 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from shlepa_agent.budget import (
+    TOKEN_FALLBACK,
+    Budget,
+    _coerce_form,
+    derive_budget,
+    extract_time_limit,
+    extract_token_limit,
+)
+
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 class AgentSection(BaseModel):
-    """Run-level settings: pipeline entry, emergency phase, cycle cap, deadline."""
+    """Run-level settings: pipeline entry, emergency phase, cycle cap, deadline.
 
-    entry: str = "plan"
+    Zero/empty values mean "derive from the adaptive task budget" (see
+    ``budget.build_budget``); explicit positive values are overrides.
+    """
+
+    #: Entry phase. Empty = derived: "plan" when the budget allows a plan
+    #: phase, otherwise "work".
+    entry: str = ""
     emergency: str = "emergency"
     # Max plan->work cycles; after the cap a replan request is forced into
-    # commit.
-    max_cycles: int = Field(default=2, ge=1)
+    # commit. 0 = derived from the budget.
+    max_cycles: int = Field(default=0, ge=0)
     # Commit deadline: if the clock has passed this point at a phase boundary
     # and the next phase is not commit, the emergency phase runs instead.
-    commit_deadline: float = 520.0
+    # 0 = derived (plan + work + commit cap, capped by hard - reserve).
+    commit_deadline: float = 0.0
     # Total phase-run guard (plan/work cycles + terminal phase).
-    max_steps: int = Field(default=8, ge=1)
+    # 0 = derived (2 * max_cycles + 2).
+    max_steps: int = Field(default=0, ge=0)
     temp: float = 0.2
 
 
 class BudgetConfig(BaseModel):
-    """Global (cross-phase) budget enforced by TrackedModel."""
+    """Global budget: static reference values + adaptive form.
 
-    # Task agent timeout is 600s (closed set). hard_time is the final
-    # backstop (~585s); the commit deadline lives in agent.commit_deadline.
-    # soft_time is ADVISORY ONLY (rendered into prompts/status, never
-    # enforced by the model).
+    The runtime budget is DERIVED per run from the task time limit T via
+    ``build_budget`` (env / task.toml / instruction text / ``t_fallback``).
+    ``hard_time`` / ``soft_time`` / ``token_budget`` are reference values for
+    the default 600s task (kept for logging/back-compat and for legacy
+    runs without a derived budget); ``request_limit``, ``max_tokens``,
+    ``request_timeout`` and ``request_wall`` are always-enforced global caps.
+    ``form`` overrides the derivation knobs (see ``budget.BudgetForm``).
+    """
+
     hard_time: float = 585.0
     soft_time: float = 500.0
+    #: Task limit T used when no limit is detected from env / task.toml /
+    #: instruction text.
+    t_fallback: float = 600.0
     request_limit: int = 90
     token_budget: int = 300_000
+    #: Derivation-form overrides (BudgetForm fields); unknown keys are
+    #: ignored, omitted keys keep their defaults.
+    form: dict = Field(default_factory=dict)
     # Hard per-request output cap; without it a single request can loop for
     # tens of thousands of tokens and eat the whole trial before commit.
     max_tokens: int = 16_384
@@ -145,6 +173,7 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_COMMIT_DEADLINE": ("agent.commit_deadline", float),
     "SHLEPA_BUDGET_HARD_TIME": ("budget.hard_time", float),
     "SHLEPA_BUDGET_SOFT_TIME": ("budget.soft_time", float),
+    "SHLEPA_BUDGET_T_FALLBACK": ("budget.t_fallback", float),
     "SHLEPA_BUDGET_REQUEST_LIMIT": ("budget.request_limit", int),
     "SHLEPA_BUDGET_TOKEN_BUDGET": ("budget.token_budget", int),
     "SHLEPA_BUDGET_MAX_TOKENS": ("budget.max_tokens", int),
@@ -191,3 +220,29 @@ def load_config(path: Path | str | None = None) -> AgentConfig:
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
     return cfg
+
+
+def build_budget(cfg: AgentConfig, instruction: str = "") -> Budget:
+    """Derive the per-run adaptive budget from the config + task instruction.
+
+    T resolution: env (``SLEPA_AGENT_TIMEOUT`` first) -> task.toml probe ->
+    instruction text -> ``budget.t_fallback``. Token limit: env -> text ->
+    the form fallback (95% of it becomes the run token budget).
+    """
+    form = _coerce_form(cfg.budget.form)
+    t, source = extract_time_limit(instruction)
+    if source == "fallback" and cfg.budget.t_fallback != form.t_fallback:
+        t, source = cfg.budget.t_fallback, "config:default"
+    elif source == "fallback":
+        source = "config:default"
+    token_limit, token_source = extract_token_limit(instruction)
+    if token_source == "fallback" and form.token_fallback != TOKEN_FALLBACK:
+        token_limit, token_source = form.token_fallback, "config:default"
+    return derive_budget(
+        t,
+        token_limit=token_limit,
+        source=source,
+        token_source=token_source,
+        request_limit=cfg.budget.request_limit,
+        form=form,
+    )

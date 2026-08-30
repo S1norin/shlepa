@@ -17,5 +17,9 @@ Finish via the final_result tool:
 - decision="replan" — only if the PLAN ITSELF was wrong or incomplete (wrong
   target, wrong format, missing information you cannot recover). Explain what
   was wrong in summary.
+- confidence: how sure you are (0-1) that the deliverable is complete and
+  correct. Be honest: 1.0 only after a passing mechanical check.
+- next_hints: for decision="replan" only — concrete hints for the next plan
+  (what was wrong, what must change); empty list for "commit".
 - summary: what was done and how it was verified; deliverable: the path of
   the file written; findings: new facts not known at planning time.

@@ -8,23 +8,32 @@
 # Pipeline: plan -> work -> (commit | replan). Entry phase, emergency phase,
 # plan->work cycle cap, commit deadline, total step guard, temperature.
 #
+# All zero/empty values are DERIVED per run from the task time limit T via
+# the adaptive budget (budget.py / budget.build_budget). Explicit positive
+# values act as overrides (mainly for dev/testing).
+#
 # commit_deadline: if the clock has passed this point at a phase boundary and
 # the next phase is not commit, the emergency phase runs instead (until
-# hard_time). During commit the deadline never fires.
-entry = "plan"
+# hard). Derived value: plan + work + commit cap, capped by hard - reserve.
+entry = ""
 emergency = "emergency"
-max_cycles = 2
-commit_deadline = 520.0
-max_steps = 8
+max_cycles = 0
+commit_deadline = 0.0
+max_steps = 0
 temp = 0.2
 
 [budget]
-# Global cross-phase budget enforced by the tracked model. The task agent
-# timeout is 600s (closed set): the commit deadline (agent.commit_deadline)
-# is at 520s, the process is done by ~585s (hard_time). soft_time is
-# advisory only — displayed, never enforced.
+# Global cross-phase budget enforced by the tracked model. The runtime
+# budget is DERIVED per run from the task time limit T (env
+# SLEPA_AGENT_TIMEOUT/TASK_TIMEOUT_SEC -> task.toml probe -> instruction
+# text -> t_fallback); hard_time/soft_time/token_budget below are reference
+# values for the default 600s task (logging + legacy backstop). request_limit
+# is the global anti-loop guard on LLM requests; max_tokens/request_timeout/
+# request_wall are always-enforced per-request caps. [budget.form] overrides
+# the derivation knobs (defaults in budget.BudgetForm) — empty here.
 hard_time = 585.0
 soft_time = 500.0
+t_fallback = 600.0
 request_limit = 90
 token_budget = 300000
 # Hard per-request output cap. Without it a single request can loop for
@@ -33,6 +42,22 @@ max_tokens = 16384
 request_timeout = 180.0
 # Kill a single in-flight request if it runs this long (open -> last chunk).
 request_wall = 240.0
+
+# [budget.form] — derivation-form overrides (all optional, defaults match
+# the approved v4 regime table; see docs/adaptive-budget.md).
+[budget.form]
+# t_min = 60.0          # minimum supported task limit
+# t_fallback = 600.0    # used when budget.t_fallback is at its default
+# token_fallback = 300000.0
+# token_fraction = 0.95
+# margin_frac = 0.03;  margin_min = 5.0;  margin_max = 15.0
+# reserve_frac = 0.10; reserve_cap = 90.0; reserve_min = 20.0
+# plan_min_core = 90.0; plan_step_1 = [30.0, 200.0]; plan_step_2 = [45.0, 300.0]; plan_max = 60.0; plan_floor = 60.0
+# work_max = 180.0; work_floor = 30.0
+# commit_frac = 0.20;  commit_min = 45.0;  commit_max = 120.0;  commit_floor = 30.0
+# bash_frac = 0.20;    bash_min = 10.0;    bash_max = 240.0
+# finalize_frac = 0.05; finalize_min = 5.0; finalize_max = 20.0
+# gate_extra = 5.0
 
 [tools.bash]
 # Per-call timeout in seconds: default 30, hard cap 120 (out-of-range values
@@ -59,21 +84,22 @@ enabled = true
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
-# structured plan. Hard cap 60s; soft values are advisory (rendered into the
-# prompt).
+# structured plan. Hard cap is DERIVED from the budget (plan = 30/45/60s by
+# T, 0 = phase disabled). An explicit `time` value would override the
+# derived cap (dev knob; omitted here). Soft values are advisory (rendered
+# into the prompt).
 tools = ["read", "write", "edit", "bash"]
 requests = 25
-time = 60.0
 soft_time = 45.0
 soft_tokens = 15000
 max_retries = 1
 
 [phases.work]
 # Execute the plan, do not invent new approaches, self-review the result,
-# decide: commit or replan. Hard cap 180s per cycle.
+# decide: commit or replan. Hard cap per cycle is DERIVED from the budget
+# (work = min(180, ...); an explicit `time` would override it).
 tools = ["read", "write", "edit", "bash"]
 requests = 100
-time = 180.0
 soft_time = 150.0
 soft_tokens = 80000
 max_retries = 1
@@ -90,7 +116,8 @@ max_retries = 0
 
 [phases.emergency]
 # Terminal rescue: time is almost over, write whatever exists now. Runs only
-# when the commit deadline (520s) is passed before commit started.
+# when the (derived) commit deadline is passed before commit started, or
+# when <30s remain for commit.
 tools = ["read", "write", "edit", "bash"]
 requests = 20
 soft_tokens = 20000

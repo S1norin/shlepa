@@ -13,8 +13,11 @@ Then produce the plan via the final_result tool:
 - goal: the exact deliverable spec (path, format, required fields/values,
   constraints).
 - findings: the key facts about the environment/target your plan relies on.
-- steps: ordered concrete actions for the work phase. Be specific enough that
-  the work phase does not need to invent new approaches.
+- steps: ordered concrete actions for the work phase. Format each step as
+  "action; verify: how to check it worked". Be specific enough that the work
+  phase does not need to invent new approaches.
+- risks: the main things that could break this plan (wrong assumption, missing
+  information) and how the work phase should handle them; empty if none.
 - decision: "work" in almost all cases; "commit" only if the answer is already
   fully known and trivial to write.
 

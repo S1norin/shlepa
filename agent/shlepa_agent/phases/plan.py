@@ -24,7 +24,7 @@ class PlanPhase(Phase):
         cfg = state.cfg
         contents: dict[str, str] = {
             "phase_prompt": load_prompt("plan.md"),
-            "extra": self.limits_note(cfg),
+            "extra": self.limits_note(state),
             "output_schema": output_schema_note(PlanResult),
         }
         prev = state.results.get("work")

@@ -24,6 +24,10 @@ from shlepa_agent.config import AgentConfig
 from shlepa_agent.model import TrackedModel
 from shlepa_agent.tools import AgentDeps
 
+#: Minimum useful commit window (seconds): below this, the commit phase is
+#: not worth running and the emergency rescue takes over instead.
+COMMIT_MIN_S = 30.0
+
 
 class PhaseResult(BaseModel):
     """Structured, JSON-serializable outcome of one phase run.
@@ -103,14 +107,33 @@ class Phase(ABC):
             reasoning_effort=p.reasoning_effort,
         )
 
-    def limits_note(self, cfg: AgentConfig) -> str:
-        """Advisory time-budget line rendered into the phase prompt."""
+    def limits_note(self, state: RunState) -> str:
+        """Time-budget line rendered into the phase prompt.
+
+        With an adaptive budget (``state.deps.budget``) the caps are derived
+        from the task limit T; without one (legacy/test context) the static
+        phase config values are used.
+        """
+        cfg = state.cfg
+        b = state.deps.budget
         l = self.limits(cfg)
         parts: list[str] = []
-        if l.time is not None:
-            parts.append(f"this phase is hard-capped at {l.time:.0f}s")
-        if l.soft_time is not None:
-            parts.append(f"aim to finish within {l.soft_time:.0f}s")
+        if b is not None:
+            parts.append(f"task time limit T={b.T:.0f}s")
+            if self.id == "plan":
+                parts.append(f"this phase is hard-capped at {b.plan:.0f}s")
+                parts.append(f"aim to finish within {max(10.0, b.plan - 10.0):.0f}s")
+            elif self.id == "work":
+                parts.append(f"this cycle is hard-capped at {b.work:.0f}s")
+                parts.append(f"this is cycle {state.cycles + 1} of at most {b.max_cycles}")
+            elif self.id == "commit":
+                cap = min(b.commit_cap, max(0.0, b.hard - state.model.elapsed()))
+                parts.append(f"this phase is hard-capped at {max(cap, 1.0):.0f}s")
+        else:
+            if l.time is not None:
+                parts.append(f"this phase is hard-capped at {l.time:.0f}s")
+            if l.soft_time is not None:
+                parts.append(f"aim to finish within {l.soft_time:.0f}s")
         if l.soft_tokens is not None:
             parts.append(f"keep the output lean (soft budget ~{l.soft_tokens} tokens)")
         return "; ".join(parts)

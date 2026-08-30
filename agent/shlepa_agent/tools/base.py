@@ -12,6 +12,8 @@ if TYPE_CHECKING:
 
     from shlepa_agent.config import AgentConfig
 
+from shlepa_agent.budget import Budget
+
 
 @dataclass(frozen=True)
 class AgentDeps:
@@ -22,6 +24,9 @@ class AgentDeps:
     #: Wall-clock elapsed seconds since the run started (same clock as the
     #: global budget, i.e. ``TrackedModel.elapsed``).
     clock: Callable[[], float]
+    #: Adaptive per-run budget (derived from the task time limit T). None in
+    #: legacy/test contexts — code must fall back to ``cfg.budget`` values.
+    budget: "Budget | None" = None
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.
@@ -63,7 +68,8 @@ def format_tool_result(
     """
     spent = time.monotonic() - started
     ended = ctx.deps.clock()
-    time_left = max(0.0, ctx.deps.cfg.budget.hard_time - ended)
+    hard = ctx.deps.budget.hard if ctx.deps.budget is not None else ctx.deps.cfg.budget.hard_time
+    time_left = max(0.0, hard - ended)
     argstr = ", ".join(f"{k}={_short(v)}" for k, v in (args or {}).items())
     lines = [
         f"[tool] {name}({argstr})",
