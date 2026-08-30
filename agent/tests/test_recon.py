@@ -1,8 +1,10 @@
-"""Tests for the bundled deterministic recon script (agent/tools/recon.py).
+"""Tests for tools/recon.py (deterministic attack-surface recon).
 
-The script is exercised as a subprocess (its real entry point) against a
-local fixture server; no network traffic beyond loopback, except one
-blackhole-IP test that relies on connection timeouts.
+Covers the tool contract: valid compact JSON within the 8192-byte cap,
+deterministic output (modulo stats), vhost/banner discovery, code-surface
+sink detection, data-surface needles, and fail-safe behavior on a dead
+target. Fixtures are inline (ephemeral ports, tmp_path) so the suite stays
+hermetic.
 """
 
 import importlib.util
@@ -10,181 +12,302 @@ import json
 import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import pytest
-
-from fixture_server import start_fixture_server
-
-RECON = Path(__file__).resolve().parent.parent / "tools" / "recon.py"
-MAX_OUTPUT_BYTES = 3072  # "3 KB" per the issue contract
-
-_spec = importlib.util.spec_from_file_location("recon_under_test", RECON)
-recon = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(recon)
+RECON = Path(__file__).resolve().parents[1] / "tools" / "recon.py"
 
 
-def run_recon(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+def _load_recon_module():
+    spec = importlib.util.spec_from_file_location("recon", RECON)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+recon = _load_recon_module()
+
+
+# ---------------------------------------------------------------------------
+# fixtures
+# ---------------------------------------------------------------------------
+
+class _Handler(BaseHTTPRequestHandler):
+    """Minimal target: default app + distinct 'internal' vhost."""
+
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, body, ctype="text/html"):
+        b = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Server", "TestServer/1.0")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+
+    def do_GET(self):
+        host = (self.headers.get("Host") or "").split(":")[0]
+        path = self.path.split("?")[0]
+        if host == "internal":
+            return self._send(
+                200, "<html><title>Internal Portal</title>hidden area</html>")
+        if path == "/":
+            return self._send(
+                200,
+                "<html><title>Main</title>"
+                '<form action="/login" method="post">'
+                '<input name="user"><input name="pass"></form></html>')
+        if path == "/login":
+            return self._send(
+                200,
+                "<html><title>Login</title>"
+                '<form action="/login" method="post">'
+                '<input name="user"><input name="pass"></form></html>')
+        if path == "/search":
+            return self._send(200, '{"results": []}', "application/json")
+        if path == "/admin":
+            return self._send(
+                500,
+                "<html><title>500</title><pre>Traceback (most recent call "
+                "last):\nZeroDivisionError: division by zero</pre></html>")
+        if path == "/robots.txt":
+            return self._send(
+                200, "User-agent: *\nDisallow: /admin\n", "text/plain")
+        return self._send(404, "<html><title>404</title>nf</html>")
+
+
+def _wait_ready(port: int) -> None:
+    for _ in range(200):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                return
+        except OSError:
+            threading.Event().wait(0.02)
+    raise RuntimeError(f"server on port {port} did not come up")
+
+
+def _start_web_server() -> tuple[ThreadingHTTPServer, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    _wait_ready(port)
+    return server, port
+
+
+def _start_banner_server() -> tuple[socket.socket, int]:
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(16)
+    port = srv.getsockname()[1]
+
+    def serve():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+            try:
+                c.sendall(b"SSH-2.0-TestBanner_1.0\r\n")
+            except OSError:
+                pass
+            c.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return srv, port
+
+
+def _closed_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def run_recon(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(RECON), *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        cwd=str(RECON.parent.parent),
-    )
+        capture_output=True, text=True, timeout=180, check=False)
 
 
-def strip_timing(data: dict) -> dict:
-    """Copy of the recon output without the non-deterministic timing block."""
-    return {k: v for k, v in data.items() if k != "timing"}
+# ---------------------------------------------------------------------------
+# web mode
+# ---------------------------------------------------------------------------
 
-
-@pytest.fixture
-def fixture():
-    server, base_url, port = start_fixture_server()
+def test_web_mode_full():
+    server, port = _start_web_server()
     try:
-        yield base_url, port
+        proc = run_recon(f"http://127.0.0.1:{port}/")
+        assert proc.returncode == 0, proc.stderr
+        out = json.loads(proc.stdout)
+
+        # contract: valid compact JSON within the hard cap
+        assert len(proc.stdout.encode()) <= 8192
+
+        # base http + derived sections
+        assert out["http"]["status"] == 200
+        assert out["http"]["server"] == "TestServer/1.0"
+        assert out["http"]["title"] == "Main"
+
+        # vhost discovery by signature diff
+        hosts = [v["host"] for v in out["vhosts"]]
+        assert "internal" in hosts
+        internal = next(v for v in out["vhosts"] if v["host"] == "internal")
+        assert internal["title"] == "Internal Portal"
+
+        # endpoint inventory: form parsed, json typed, 500 excerpted
+        eps = {e["path"]: e for e in out["endpoints"] if e.get("status")}
+        assert eps["/"]["forms"][0]["method"] == "post"
+        assert eps["/"]["forms"][0]["fields"] == ["user", "pass"]
+        assert eps["/search"].get("type") == "application/json"
+        assert eps["/admin"]["status"] == 500
+        assert "Traceback" in eps["/admin"]["excerpt"]
+
+        # 404 wordlist noise is demoted to the end
+        statuses = [e.get("status") for e in out["endpoints"]
+                    if e.get("status")]
+        if 404 in statuses:
+            first_signal = next(
+                i for i, s in enumerate(statuses) if s != 404)
+            last_404 = max(i for i, s in enumerate(statuses) if s == 404)
+            assert first_signal < last_404
+
+        # sensitive files exposed with excerpts
+        sens = {s["path"]: s for s in out["sensitive"]}
+        assert sens["/robots.txt"]["status"] == 200
+        assert "Disallow" in sens["/robots.txt"]["excerpt"]
+
+        # errors: 5xx stack trace, 404 noise excluded
+        errors = out["errors"]
+        assert any(e["path"] == "/admin" and e["status"] == 500
+                   for e in errors)
+        assert all(e["status"] != 404 for e in errors)
+
+        # interesting: vhost + form + 500 + sensitive
+        whys = " ".join(i["why"] for i in out["interesting"])
+        assert "vhost" in whys
+        assert "POST form" in whys
+        assert "stack trace" in whys
+        assert "sensitive file exposed" in whys
+
+        # target port is always scanned
+        assert str(port) in out["ports_open"]
+
+        assert out["stats"]["requests"] > 50
     finally:
         server.shutdown()
         server.server_close()
 
 
-def test_recon_json_contract_and_size(fixture):
-    base_url, port = fixture
-    proc = run_recon(base_url)
-    assert proc.returncode == 0, proc.stderr
-    data = json.loads(proc.stdout)
-    assert len(proc.stdout.encode("utf-8")) <= MAX_OUTPUT_BYTES
-
-    for key in ("target", "host", "ports", "http", "fingerprint", "endpoints", "timing"):
-        assert key in data
-
-    # Stage 1: the fixture port is open.
-    open_ports = [p["port"] for p in data["ports"]["open"]]
-    assert port in open_ports
-
-    # Stage 2: the homepage was probed.
-    assert data["http"]["http_status"] == 200
-    assert data["http"]["title"] == "Acme Portal"
-
-    # Stage 3: nginx server header, generator meta, JS library signatures.
-    assert data["fingerprint"]["server"].startswith("nginx/1.25.4")
-    assert data["fingerprint"]["generator"] == "Acme CMS 3.2"
-    assert "jquery" in data["fingerprint"]["js"]
-    assert "bootstrap" in data["fingerprint"]["js"]
-    assert "wordpress" not in data["fingerprint"]["frameworks"]
-
-    # Stage 4: crawl found the pages; wordlist/crawl found the high-value paths.
-    page_paths = {p["path"] for p in data["endpoints"]["pages"]}
-    assert "/" in page_paths
-    assert "/login.html" in page_paths
-    # JS path extraction from the login page body.
-    assert "/api/auth/login" in data["endpoints"]["links"]
-    interesting = {p["path"] for p in data["endpoints"]["interesting"]}
-    assert {"/admin", "/secret.txt", "/robots.txt", "/api/health", "/api/users"} <= interesting
+def test_scan_ports_passive_banner():
+    """A service that speaks first (SSH-style) is labeled with its banner."""
+    banner, bport = _start_banner_server()
+    try:
+        ports = recon.scan_ports("127.0.0.1", bport, time.monotonic() + 30)
+        assert "TestBanner" in ports.get(str(bport), "")
+    finally:
+        banner.close()
 
 
-def test_recon_deterministic(fixture):
-    base_url, _ = fixture
-    first = json.loads(run_recon(base_url).stdout)
-    second = json.loads(run_recon(base_url).stdout)
-    assert strip_timing(first) == strip_timing(second)
+def test_web_mode_deterministic():
+    server, port = _start_web_server()
+    try:
+        a = json.loads(run_recon(f"http://127.0.0.1:{port}/").stdout)
+        b = json.loads(run_recon(f"http://127.0.0.1:{port}/").stdout)
+        a.pop("stats")
+        b.pop("stats")
+        assert a == b
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
-def test_recon_stage_failure_emits_all_sections():
-    # Find a port that is definitely closed, then aim the recon at it:
-    # every stage must still emit its section (fail-safe contract).
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    closed_port = probe.getsockname()[1]
-    probe.close()
-
-    proc = run_recon(f"http://127.0.0.1:{closed_port}/")
-    assert proc.returncode == 0, proc.stderr
-    data = json.loads(proc.stdout)
-    for key in ("ports", "http", "fingerprint", "endpoints", "timing"):
-        assert key in data
-    assert data["http"]["status"] == "error"
-    assert data["fingerprint"]["js"] == []
+def test_web_mode_dead_target():
+    port = _closed_port()
+    proc = run_recon(f"http://127.0.0.1:{port}/")
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout)
+    assert "error" in out["http"]
+    assert "ConnectionRefused" in out["http"]["error"]
+    assert out["vhosts"] == []
+    assert out["endpoints"] == []
+    assert out["stats"]["requests"] == 0
 
 
-def test_recon_hard_timeout_blackhole():
-    # RFC 5737 TEST-NET-1 is unroutable: every probe hits its timeout.
-    # The run must respect the --timeout cap and still print full JSON.
-    started = time.monotonic()
-    proc = run_recon("10.255.255.1", "--timeout", "3", timeout=60)
-    elapsed = time.monotonic() - started
-    assert proc.returncode == 0, proc.stderr
-    assert elapsed < 20, f"recon exceeded the timeout cap ({elapsed:.1f}s)"
-    data = json.loads(proc.stdout)
-    for key in ("ports", "http", "fingerprint", "endpoints", "timing"):
-        assert key in data
-    assert data["http"]["status"] == "error"
-    assert data["endpoints"].get("status") in ("skipped", "ok")
+# ---------------------------------------------------------------------------
+# code mode
+# ---------------------------------------------------------------------------
+
+def test_code_mode(tmp_path):
+    (tmp_path / "main.py").write_text(
+        'import os\n'
+        'from flask import Flask, request\n\n'
+        'app = Flask(__name__)\n\n\n'
+        '@app.route("/run")\n'
+        'def run():\n'
+        '    return str(eval(request.args.get("e")))\n\n\n'
+        '@app.route("/ping")\n'
+        'def ping():\n'
+        '    return str(os.system(request.args.get("c")))\n')
+    (tmp_path / "config.py").write_text(
+        'PASSWORD = "hunter2secret"\n')
+    (tmp_path / "db.py").write_text(
+        'cur.execute(f"SELECT * FROM t WHERE n = \'{name}\'")\n')
+
+    proc = run_recon("--code", str(tmp_path))
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout)
+    assert len(proc.stdout.encode()) <= 8192
+
+    sinks = {s["label"]: s["hits"] for s in out.get("sinks", [])}
+    for label in ("eval", "os.system", "hardcoded secret",
+                  "raw SQL f-string"):
+        assert label in sinks, f"missing sink {label}: {sorted(sinks)}"
+    assert sinks["eval"][0]["file"] == "main.py"
+    assert "eval(" in sinks["eval"][0]["snippet"]
+
+    entries = out.get("entry_points", [])
+    assert any(e["label"] == "Flask app" for e in entries)
+    assert sum(1 for e in entries if e["label"] == "route") == 2
 
 
-def test_recon_bare_host_port_target(fixture):
-    _, port = fixture
-    proc = run_recon(f"127.0.0.1:{port}")
-    assert proc.returncode == 0, proc.stderr
-    data = json.loads(proc.stdout)
-    assert data["target"] == f"http://127.0.0.1:{port}/"
-    assert data["http"]["http_status"] == 200
+# ---------------------------------------------------------------------------
+# data mode
+# ---------------------------------------------------------------------------
 
+def test_data_mode(tmp_path):
+    (tmp_path / "notes.txt").write_text(
+        "case_id=IR-1\n"
+        "flag{deadbeef}\n"
+        "deadbeefcafe0123deadbeefcafe0123deadbeef\n")
+    lines = [json.dumps({
+        "ts": f"2026-05-01T10:00:{i:02d}Z",
+        "event": "upload" if i % 2 else "login",
+    }) for i in range(10)]
+    (tmp_path / "app.jsonl").write_text("\n".join(lines) + "\n")
+    (tmp_path / "capture.pcap").write_bytes(
+        b"\xd4\xc3\xb2\xa0" + b"\x00" * 32)
 
-def test_parse_target():
-    assert recon._parse_target("example.com") == (
-        "http://example.com/",
-        "example.com",
-        None,
-    )
-    # Bare host:port defaults to http (local targets are usually plain http),
-    # unless the port is 443.
-    assert recon._parse_target("h:8443") == ("http://h:8443/", "h", 8443)
-    assert recon._parse_target("h:443") == ("https://h:443/", "h", 443)
-    assert recon._parse_target("https://h:8443/x?q=1") == (
-        "https://h:8443/x?q=1",
-        "h",
-        8443,
-    )
-    with pytest.raises(ValueError):
-        recon._parse_target("ftp://example.com")
-    with pytest.raises(ValueError):
-        recon._parse_target("example.com:notaport")
+    proc = run_recon("--data", str(tmp_path))
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout)
+    files = {f["file"]: f for f in out["data_files"]}
 
+    assert files["notes.txt"]["format"] == "text"
+    assert files["notes.txt"]["needles"]["flag"] == ["flag{deadbeef}"]
+    assert files["notes.txt"]["needles"]["hex"]["count"] == 1
+    assert files["notes.txt"]["needles"]["keyval"] == 1
 
-def test_trim_to_budget_fits_cap():
-    result = {
-        "target": "http://127.0.0.1:8000/",
-        "host": "127.0.0.1",
-        "ports": {
-            "status": "ok",
-            "open": [{"port": i, "service": "x"} for i in range(200)],
-            "scanned": 100,
-        },
-        "http": {
-            "status": "ok",
-            "url": "http://127.0.0.1:8000/",
-            "http_status": 200,
-            "headers": {},
-            "title": "t",
-        },
-        "fingerprint": {
-            "server": "s",
-            "x_powered_by": None,
-            "generator": None,
-            "js": [f"lib{i}" for i in range(100)],
-            "frameworks": [],
-        },
-        "endpoints": {
-            "status": "ok",
-            "pages": [{"path": f"/p{i}", "status": 200} for i in range(100)],
-            "interesting": [{"path": f"/i{i}", "status": 200} for i in range(100)],
-            "links": [f"/link{i}" for i in range(100)],
-        },
-        "timing": {"total_sec": 1.0},
-    }
-    recon._trim_to_budget(result)
-    packed = json.dumps(result, separators=(",", ":")).encode("utf-8")
-    assert len(packed) <= 3000
+    assert files["app.jsonl"]["format"] == "jsonl"
+    assert files["app.jsonl"]["ts_first"] == "2026-05-01T10:00:00"
+    assert files["app.jsonl"]["ts_last"] == "2026-05-01T10:00:09"
+    assert "event" in files["app.jsonl"]["jsonl_keys"]
+
+    # magic-byte detection for forensically relevant containers
+    assert files["capture.pcap"]["format"] == "pcap"

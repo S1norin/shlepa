@@ -65,6 +65,12 @@ def _settings(root, **overrides):
 
 def _repo(root: Path, with_test_sh=True):
     (root / "agent" / "shlepa_agent").mkdir(parents=True, exist_ok=True)
+    (root / "agent" / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "shlepa-agent"\n'
+        'requires-python = ">=3.12"\n'
+        'dependencies = ["pydantic-ai-slim[openai]", "python-dotenv"]\n'
+    )
     (root / "agent" / "shlepa_agent" / "__init__.py").write_text(
         "__version__ = '0.1.0'\n"
     )
@@ -269,6 +275,32 @@ def test_container_faithful_solved(tmp_path: Path):
     assert fake.cps[0][0] == f"container-{run['name']}"
     assert fake.cps[0][1] == "/app"
     assert fake.stopped == [f"container-{run['name']}"]
+
+
+def test_dev_dockerfile_covers_no_uv_and_no_venv(tmp_path: Path):
+    """Dev Dockerfile must survive env images without uv or /app/.venv."""
+    fake = FakeDocker(reward="1")
+    task = _repo(tmp_path)
+    run_engine.run_task(
+        task,
+        _settings(tmp_path),
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+    )
+    dev_context = Path(fake.built[1][1])
+    text = (dev_context / "Dockerfile").read_text()
+    # uv detection: PATH first, then the acp venv location, then a
+    # bootstrap of the pinned static release when neither exists.
+    assert "command -v uv" in text
+    assert "/app/.venv/bin/uv" in text
+    assert "astral-sh/uv/releases" in text
+    # Images without /app/.venv get a fresh agent venv with the agent's
+    # own dependencies (extras shell-quoted) before the telemetry pin.
+    assert "venv /app/.venv --python 3.12" in text
+    assert "'pydantic-ai-slim[openai]'" in text
+    # The telemetry pin is installed on every path.
+    assert "openinference-instrumentation-pydantic-ai" in text
 
 
 def test_container_faithful_unsolved(tmp_path: Path):

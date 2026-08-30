@@ -1,0 +1,108 @@
+# Shlepa agent v2 configuration.
+#
+# Single source of tuning values: budgets, tools, phases, and the request
+# template. Env-var overrides (SHLEPA_*) take precedence over the values
+# here; see docs/agent-config.md for the full mapping.
+
+[agent]
+# Pipeline: entry phase, emergency phase (phase failure after retries /
+# budget breach), total step guard, model temperature.
+entry = "explore"
+emergency = "commit"
+max_steps = 12
+temp = 0.2
+
+[budget]
+# Global cross-phase budget enforced by the tracked model. The task agent
+# timeout is 600s (closed set): soft fires at ~500s, the commit window is up
+# to 80s, the process is done by ~585s.
+hard_time = 585.0
+soft_time = 500.0
+request_limit = 90
+token_budget = 300000
+# Hard per-request output cap. Without it a single request can loop for
+# tens of thousands of tokens and eat the whole trial before commit.
+max_tokens = 16384
+request_timeout = 180.0
+# Kill a single in-flight request if it runs this long (open -> last chunk).
+request_wall = 240.0
+
+[tools.bash]
+# Per-call timeout in seconds: default 30, hard cap 120 (out-of-range values
+# are clamped and announced to the model). max_output caps the result text.
+enabled = true
+timeout = 30.0
+max_timeout = 120.0
+max_output = 16000
+
+[tools.read]
+# Paged reads: at most max_limit lines per call (default page when the model
+# omits limit), result capped at max_output chars.
+enabled = true
+max_limit = 100
+max_output = 4000
+
+[tools.write]
+# New files only (never overwrites).
+enabled = true
+
+[tools.edit]
+# Precise replacements in existing files (edits[] with optional 0-based line).
+enabled = true
+
+[phases.explore]
+tools = ["read", "write", "edit", "bash"]
+requests = 90
+time = 500.0
+
+[phases.commit]
+# Emergency / terminal phase: write the deliverable now, verify once, stop.
+tools = ["read", "write", "edit", "bash"]
+requests = 25
+time = 80.0
+reasoning_effort = "low"
+
+[template]
+# Render order of the common request template. "system", "tools" and "task"
+# render into the system message (the task never changes during the run);
+# all other blocks render into the per-phase user message, in this order.
+# A block with empty content is dropped together with its wrappers.
+# "note" is reserved for the future self-note tool.
+blocks = [
+    "system",
+    "tools",
+    "task",
+    "extra",
+    "previous_results",
+    "phase_prompt",
+    "output_schema",
+    "note",
+]
+
+[template.wrappers.tools]
+before = "AVAILABLE TOOLS\n"
+after = "\n"
+
+[template.wrappers.task]
+before = "TASK\n"
+after = "\n"
+
+[template.wrappers.extra]
+before = "ADDITIONAL CONTEXT\n"
+after = "\n"
+
+[template.wrappers.previous_results]
+before = "RESULTS OF PREVIOUS PHASES\n"
+after = "\n"
+
+[template.wrappers.phase_prompt]
+before = "PHASE INSTRUCTIONS\n"
+after = "\n"
+
+[template.wrappers.output_schema]
+before = "OUTPUT FORMAT\n"
+after = "\n"
+
+[template.wrappers.note]
+before = "NOTES\n"
+after = "\n"

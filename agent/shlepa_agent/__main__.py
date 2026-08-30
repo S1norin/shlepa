@@ -4,10 +4,10 @@ import os
 
 
 def main() -> None:
-    from shlepa_agent import core
+    from shlepa_agent import runner
 
     if os.environ.get("SLEPA_OTEL_ENABLED") != "1":
-        core.main(instrument=False)
+        runner.main(instrument=False)
         return
 
     # Imported only when tracing is requested, so the baseline
@@ -19,7 +19,7 @@ def main() -> None:
         # Root span for the whole run; carries the task slug so traces
         # can be grouped per task in Jaeger.
         with root_span(provider):
-            core.main(instrument=True)
+            runner.main(instrument=True)
     finally:
         provider.shutdown()  # flushes pending spans
 
