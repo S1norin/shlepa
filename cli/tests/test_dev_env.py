@@ -18,6 +18,8 @@ def _make_agent_repo(base: Path) -> Path:
     (agent / "shlepa_agent" / "core.py").write_text("X = 1\n")
     (agent / "shlepa_agent" / "telemetry" / "__init__.py").write_text("T = 1\n")
     (agent / "tests" / "test_x.py").write_text("")
+    (agent / "tools").mkdir()
+    (agent / "tools" / "recon.py").write_text("print('recon')\n")
     return agent
 
 
@@ -33,6 +35,9 @@ def test_stage_agent_copies_only_the_package(tmp_path: Path) -> None:
         context / "dev_agent" / "shlepa_agent" / "telemetry" / "__init__.py"
     ).is_file()
     assert (context / "dev_agent" / "dev_run.py").is_file()
+    # The tools/ helper scripts are staged next to the package so the
+    # agent can run /agent/tools/recon.py inside the container.
+    assert (context / "dev_agent" / "tools" / "recon.py").is_file()
     # Submission-only files are not part of the dev agent dir.
     assert not (context / "dev_agent" / "run.sh").exists()
     assert not (context / "dev_agent" / "agent.py").exists()
