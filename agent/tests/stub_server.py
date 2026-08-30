@@ -6,6 +6,7 @@ non-streaming responses, returning a fixed final answer.
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FINAL_ANSWER = "Created hello.txt with the exact content hello"
@@ -18,7 +19,8 @@ FINAL_ANSWER = "Created hello.txt with the exact content hello"
 #     step {"tool_call": {"name": "bash", "arguments": {...}}} -> assistant tool call
 #     step {"error": 500}     -> HTTP error response (OpenAI-style error body)
 #     optional per step: "reasoning": model thinking text, returned as
-#     `reasoning_content` (llama.cpp style) alongside the answer.
+#     optional per step: "delay": seconds to sleep before responding
+#     (used to force phase time-caps in tests).
 stub_state: dict = {"last_path": None, "last_body": None, "bodies": [], "script": None}
 
 
@@ -37,6 +39,9 @@ class StubHandler(BaseHTTPRequestHandler):
         script = stub_state.get("script") or [{"final": FINAL_ANSWER}]
         index = min(len(stub_state["bodies"]) - 1, len(script) - 1)
         return script[index]
+
+    def _reasoning(self, step: dict) -> str | None:
+        return step.get("reasoning")
 
     def do_POST(self):  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length", 0))
@@ -60,6 +65,8 @@ class StubHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if step.get("delay"):
+            time.sleep(float(step["delay"]))
         tool_call = step.get("tool_call")
         base = {
             "id": "chatcmpl-stub",
@@ -86,8 +93,8 @@ class StubHandler(BaseHTTPRequestHandler):
                 finish = "tool_calls"
             else:
                 message = {"role": "assistant", "content": step.get("final", FINAL_ANSWER)}
-                if step.get("reasoning") is not None:
-                    message["reasoning_content"] = step["reasoning"]
+                if self._reasoning(step) is not None:
+                    message["reasoning_content"] = self._reasoning(step)
                 finish = "stop"
             payload = {
                 **base,
@@ -119,6 +126,7 @@ class StubHandler(BaseHTTPRequestHandler):
                     }
                 ]
             }
+            reasoning = self._reasoning(step)
             chunks = [
                 {
                     **base,
@@ -130,7 +138,23 @@ class StubHandler(BaseHTTPRequestHandler):
                             "finish_reason": None,
                         }
                     ],
-                },
+                }
+            ]
+            if reasoning is not None:
+                chunks.append(
+                    {
+                        **base,
+                        "object": "chat.completion.chunk",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"reasoning_content": reasoning},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+            chunks += [
                 {
                     **base,
                     "object": "chat.completion.chunk",
@@ -157,7 +181,7 @@ class StubHandler(BaseHTTPRequestHandler):
                     ],
                 }
             ]
-            if step.get("reasoning") is not None:
+            if self._reasoning(step) is not None:
                 chunks.append(
                     {
                         **base,
@@ -165,7 +189,7 @@ class StubHandler(BaseHTTPRequestHandler):
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"reasoning_content": step["reasoning"]},
+                                "delta": {"reasoning_content": self._reasoning(step)},
                                 "finish_reason": None,
                             }
                         ],

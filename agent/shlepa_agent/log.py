@@ -14,6 +14,7 @@ import logging
 import sys
 from typing import Any
 
+from pydantic import BaseModel
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -71,7 +72,8 @@ def _log_event_raw(event: str, **fields: Any) -> None:
     LOGGER.info(json.dumps(payload, ensure_ascii=False, default=str))
 
 
-def _log_stream_event(event: Any) -> str | None:
+def _log_stream_event(event: Any) -> Any:
+    """Log one stream event; returns the run output on the result event."""
     if isinstance(event, PartEndEvent) and isinstance(event.part, ThinkingPart):
         _log_event_raw("llm_thinking", index=event.index, content=event.part.content)
         return None
@@ -96,7 +98,7 @@ def _log_stream_event(event: Any) -> str | None:
         return None
 
     if isinstance(event, AgentRunResultEvent):
-        output = str(event.result.output)
+        raw = event.result.output
         usage = getattr(event.result, "usage", None)
         if usage is not None:
             _log_event(
@@ -106,7 +108,10 @@ def _log_stream_event(event: Any) -> str | None:
                 requests=getattr(usage, "requests", None),
                 tool_calls=getattr(usage, "tool_calls", None),
             )
-        _log_event("agent_done", output=output)
-        return output
+        if isinstance(raw, BaseModel):
+            _log_event("agent_done", output=raw.model_dump_json())
+        else:
+            _log_event("agent_done", output=str(raw))
+        return raw
 
     return None

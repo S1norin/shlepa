@@ -1,32 +1,40 @@
-"""Phase-graph runner for the v2 agent.
+"""4-phase pipeline runner (v3).
 
-Walks the configured phase graph:
+Walks the phase graph:
 
-    entry phase -> run -> PhaseResult -> route() -> next phase id | None
+    plan -> work -> (commit | replan -> plan, max N cycles)
+
+with two escape valves:
+
+- a phase hard-timeout (or any budget breach) triggers ONE extra toolless
+  ``final_ask`` request on the same conversation ("write the deliverable
+  now"), then hands off (plan -> work, work -> commit);
+- crossing ``[agent].commit_deadline`` (520s) at a phase boundary while the
+  next phase is not commit runs the emergency phase instead (terminal,
+  full tools, until the global hard_time).
 
 Rules:
 - A budget breach (``BudgetExceeded`` / ``UsageLimitExceeded`` / persistent
-  model ``ModelAPIError``) is a NORMAL hand-off to the emergency phase,
-  never a retryable error.
-- A phase ERROR (any other exception) in a regular phase is retried up to
-  the phase's ``max_retries`` (fresh run per attempt; the retried phase
-  shares the global ``TrackedModel`` budget — no extra wall-clock
-  allowance), then routes to the emergency phase. The emergency phase
-  itself is never retried: it is the last line of defense, its outcome is
-  reported in the ``commit`` events, and re-running it would only burn the
-  remaining wall-clock window.
+  model ``ModelAPIError`` / phase time cap) is a NORMAL hand-off, never a
+  retryable error.
+- A phase ERROR (any other exception) in plan/work is retried up to the
+  phase's ``max_retries`` (fresh run per attempt; the retried phase shares
+  the global ``TrackedModel`` budget — no extra wall-clock allowance), then
+  routes to commit. Terminal phases (commit, emergency) are never retried.
 - The step guard (``[agent].max_steps``) bounds total phase runs; when it
-  is exhausted the emergency phase runs once more, then the run stops.
-- The emergency phase has a hard wall-clock cap (``min(phase time, remaining
-  hard time)``); with less than a minimal window left it is skipped.
+  is exhausted the emergency phase runs, then the run stops.
+- A phase is skipped when its wall-clock window is below
+  ``MIN_RUN_WINDOW_S`` (there is nothing left to do).
 - Never crash: any unexpected failure is logged as ``agent_error`` and the
-  process exits 0 (a crash scores 0 anyway; a partial deliverable may score 1).
+  process exits 0 (a crash scores 0 anyway; a partial deliverable may score
+  1).
 
 Log contract (the CLI dev engine parses a subset — ``usage``,
 ``agent_start``, ``agent_done`` — keep those fields stable; unknown events
 are ignored by the CLI): agent_start, usage, llm_thinking, llm_tool_call,
-llm_tool_result, run_usage, budget, commit, phase_retry, agent_done,
-agent_error.
+llm_tool_result, run_usage, budget, phase, phase_done, phase_retry,
+final_ask, deadline, commit (legacy, terminal-phase skip marker),
+agent_done, agent_error.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -52,11 +61,22 @@ from shlepa_agent.log import (
 from shlepa_agent.model import BudgetExceeded, TrackedModel
 from shlepa_agent.phases import get_phase
 from shlepa_agent.phases.base import Phase, PhaseResult, RunState
+from shlepa_agent.phases.commit import trim_history
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
 
-#: Skip the emergency phase when less wall-clock time than this remains.
-MIN_EMERGENCY_WINDOW_S = 10.0
+#: Skip a phase run when less wall-clock time than this remains.
+MIN_RUN_WINDOW_S = 10.0
+
+#: Hard cap for the one-shot final_ask request after a phase time-out.
+FINAL_ASK_CAP_S = 30.0
+
+FINAL_ASK_MESSAGE = (
+    "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. Write the final "
+    "deliverable NOW to the exact path in the exact format using only the "
+    "information you already have. Do not call any tools and do not think "
+    "any further: reply with one short line naming the deliverable path."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -92,19 +112,18 @@ def _resolve_model_name() -> str:
 
 
 def _is_budget_error(exc: BaseException) -> bool:
-    """True when a phase breach should hand off to the emergency phase.
+    """True when a phase breach should hand off (budget result).
 
-    Budget/limit breaches and persistent model errors (the server may recover
-    inside the emergency window; the deliverable may already be partially
-    usable). These are NOT retryable — only unexpected errors are.
+    Budget/limit breaches and persistent model errors (the server may
+    recover inside the remaining window; the deliverable may already be
+    partially usable). These are NOT retryable — only unexpected errors
+    are.
     """
     e: BaseException | None = exc
     seen: set[int] = set()
     while e is not None and id(e) not in seen:
         seen.add(id(e))
         if isinstance(e, (BudgetExceeded, UsageLimitExceeded, ModelAPIError)):
-            return True
-        if "BudgetExceeded" in type(e).__name__ or "soft time limit" in str(e):
             return True
         e = e.__cause__ or e.__context__
     return False
@@ -115,22 +134,10 @@ def _is_budget_error(exc: BaseException) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_phase_agent(
-    model: TrackedModel,
-    agent_cfg: AgentConfig,
-    phase: Phase,
-    task: str,
-    instrument: bool = False,
-) -> Agent[AgentDeps, str]:
-    """Build a pydantic-ai agent for one phase (toolset from phase config).
-
-    The system prompt is rendered from the common request template (base.md,
-    the per-tool usage notes, and the task text — constant for the whole
-    run); tool descriptions themselves live in the tool modules
-    (pydantic-ai tool spec).
-    """
+def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
+    """Render the common system message for a phase (base + tools + task)."""
     tools = get_tools(agent_cfg, phase.tools(agent_cfg))
-    system = render_system(
+    return render_system(
         agent_cfg,
         phase.id,
         {
@@ -139,7 +146,30 @@ def build_phase_agent(
             "task": task,
         },
     )
-    agent = Agent(model, deps_type=AgentDeps, system_prompt=system)
+
+
+def build_phase_agent(
+    model: TrackedModel,
+    agent_cfg: AgentConfig,
+    phase: Phase,
+    task: str,
+    instrument: bool = False,
+) -> Agent:
+    """Build a pydantic-ai agent for one phase (toolset from phase config).
+
+    Phases with an ``output_type`` (plan, work) get the typed output tool;
+    commit/emergency stay free text.
+    """
+    tools = get_tools(agent_cfg, phase.tools(agent_cfg))
+    kwargs: dict[str, Any] = {}
+    if phase.output_type is not None:
+        kwargs["output_type"] = phase.output_type
+    agent = Agent(
+        model,
+        deps_type=AgentDeps,
+        system_prompt=_system_prompt(agent_cfg, phase, task),
+        **kwargs,
+    )
     if instrument:
         agent.instrument = True
     for tool in tools:
@@ -152,83 +182,49 @@ def build_phase_agent(
 # ---------------------------------------------------------------------------
 
 
-async def _run_normal_phase(
-    state: RunState, phase: Phase, agent: Agent[AgentDeps, str]
+async def _run_phase(
+    state: RunState, phase: Phase, agent: Agent
 ) -> PhaseResult:
-    """Run a regular (non-terminal) phase; returns its PhaseResult."""
-    cfg = state.cfg
-    model = state.model
-    limits = phase.limits(cfg)
-    model_settings: dict[str, Any] = {"temperature": cfg.agent.temp}
-    if limits.reasoning_effort is not None:
-        model_settings["openai_reasoning_effort"] = limits.reasoning_effort
-    output = ""
-    try:
-        async with agent.run_stream_events(
-            phase.prompt(state),
-            deps=state.deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(
-                request_limit=limits.requests,
-                total_tokens_limit=cfg.budget.token_budget,
-            ),
-            message_history=phase.history(state),
-        ) as events:
-            async for event in events:
-                out = _log_stream_event(event)
-                if out is not None:
-                    output = out
-        model.log_pending_usage()
-        return PhaseResult(status="done", summary=output)
-    except Exception as e:
-        model.log_pending_usage()
-        if _is_budget_error(e):
-            _log_event("budget", reason="usage_or_time", detail=str(e)[:200])
-            return PhaseResult(status="budget", error=str(e)[:300])
-        _log_event("agent_error", error=f"{type(e).__name__}: {str(e)[:500]}")
-        return PhaseResult(
-            status="error", error=f"{type(e).__name__}: {str(e)[:300]}"
-        )
-
-
-async def _run_terminal_phase(
-    state: RunState, phase: Phase, agent: Agent[AgentDeps, str]
-) -> PhaseResult:
-    """Run the emergency phase under its hard wall-clock cap."""
+    """Run one phase under its wall-clock cap; returns its PhaseResult."""
     cfg = state.cfg
     model = state.model
     limits = phase.limits(cfg)
     remaining = max(0.0, cfg.budget.hard_time - model.elapsed())
-    cap = min(limits.time, remaining)
-    if cap < MIN_EMERGENCY_WINDOW_S:
+    cap = min(limits.time, remaining) if limits.time is not None else remaining
+    if cap < MIN_RUN_WINDOW_S:
         _log_event(
-            "commit",
+            "phase",
+            id=phase.id,
             skipped=True,
             reason="not enough time left",
+            cap_s=round(cap, 1),
             elapsed_s=round(model.elapsed(), 1),
         )
-        return PhaseResult(status="done", summary="emergency phase skipped")
-    # The emergency phase is allowed to spend the remaining hard-time window.
-    model.enable_soft_check = False
-    history = phase.history(state)
+        return PhaseResult(status="budget", summary=f"{phase.id} skipped: no time left")
     model_settings: dict[str, Any] = {"temperature": cfg.agent.temp}
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort
-    _log_event(
-        "commit",
-        start=True,
-        history_messages=len(history or []),
-        time_cap_s=round(cap, 1),
-        elapsed_s=round(model.elapsed(), 1),
-    )
-    output = ""
+    history = phase.history(state) or None
+    if phase.terminal:
+        _log_event(
+            "commit",
+            start=True,
+            phase=phase.id,
+            history_messages=len(history or []),
+            time_cap_s=round(cap, 1),
+            elapsed_s=round(model.elapsed(), 1),
+        )
+    output: Any = None
     try:
         async with asyncio.timeout(cap):
             async with agent.run_stream_events(
                 phase.prompt(state),
                 deps=state.deps,
                 model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=limits.requests),
+                usage_limits=UsageLimits(
+                    request_limit=limits.requests,
+                    total_tokens_limit=cfg.budget.token_budget,
+                ),
                 message_history=history,
             ) as events:
                 async for event in events:
@@ -236,34 +232,36 @@ async def _run_terminal_phase(
                     if out is not None:
                         output = out
         model.log_pending_usage()
-        _log_event("commit", done=True, elapsed_s=round(model.elapsed(), 1))
-        return PhaseResult(status="done", summary=output)
+        if phase.output_type is not None:
+            if not isinstance(output, BaseModel):
+                # The run ended without a typed result (defensive; with an
+                # output_type pydantic-ai retries until the limit is hit).
+                _log_event("agent_error", error=f"phase {phase.id}: missing typed output")
+                return PhaseResult(status="error", error="missing typed output")
+            deliverable: str | None = getattr(output, "deliverable", None) or None
+            return PhaseResult(
+                status="done",
+                summary=output.model_dump_json(),
+                deliverable=deliverable,
+                output=output,
+            )
+        return PhaseResult(status="done", summary=output or "")
     except (TimeoutError, asyncio.TimeoutError):
         model.log_pending_usage()
         _log_event(
-            "commit",
-            done=True,
-            note="commit time cap reached",
+            "budget",
+            reason=f"{phase.id} time cap",
+            detail=f"phase {phase.id} hit its {cap:.0f}s cap",
             elapsed_s=round(model.elapsed(), 1),
         )
-        return PhaseResult(status="budget", summary="commit time cap reached")
+        return PhaseResult(status="budget", error=f"{phase.id} time cap reached")
     except Exception as e:
         model.log_pending_usage()
-        _log_event(
-            "commit", done=True, error=f"{type(e).__name__}: {str(e)[:300]}"
-        )
         if _is_budget_error(e):
+            _log_event("budget", reason="usage_or_time", detail=str(e)[:200])
             return PhaseResult(status="budget", error=str(e)[:300])
         _log_event("agent_error", error=f"{type(e).__name__}: {str(e)[:500]}")
         return PhaseResult(status="error", error=f"{type(e).__name__}: {str(e)[:300]}")
-
-
-async def _run_phase(
-    state: RunState, phase: Phase, agent: Agent[AgentDeps, str]
-) -> PhaseResult:
-    if phase.terminal:
-        return await _run_terminal_phase(state, phase, agent)
-    return await _run_normal_phase(state, phase, agent)
 
 
 async def _run_phase_with_retries(
@@ -272,12 +270,14 @@ async def _run_phase_with_retries(
     """Run a phase; retry ERROR results up to its max_retries.
 
     Budget results are a normal hand-off (never retried), and the terminal
-    (emergency) phase is never retried. Each retry is a fresh run sharing
-    the global TrackedModel budget.
+    phases are never retried. Each retry is a fresh run sharing the global
+    TrackedModel budget. The result is stored in state.results after every
+    attempt, so a retry's prompt can see the previous attempt.
     """
     result = await _run_phase(
         state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
     )
+    state.results[phase.id] = result
     max_retries = 0 if phase.terminal else state.cfg.phases[phase.id].max_retries
     attempts = 1
     while result.status == "error" and attempts <= max_retries:
@@ -292,33 +292,115 @@ async def _run_phase_with_retries(
         result = await _run_phase(
             state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
         )
+        state.results[phase.id] = result
     return result
 
 
+async def _final_ask(state: RunState, phase: Phase) -> None:
+    """One extra toolless request after a phase hard-timeout.
+
+    Appends a single user message to the SAME conversation (byte-identical
+    prompt prefix -> KV-cache reuse on the local server) and asks the model
+    to write the deliverable right now, without tools. Its outcome does not
+    change routing: plan -> work, work -> commit.
+    """
+    cfg = state.cfg
+    model = state.model
+    remaining = max(0.0, cfg.budget.hard_time - model.elapsed())
+    cap = min(FINAL_ASK_CAP_S, remaining)
+    if cap < MIN_RUN_WINDOW_S:
+        _log_event(
+            "final_ask",
+            phase=phase.id,
+            skipped=True,
+            reason="not enough time left",
+            elapsed_s=round(model.elapsed(), 1),
+        )
+        return
+    history = trim_history(model.last_messages) or None
+    agent = Agent(
+        model,
+        deps_type=AgentDeps,
+        system_prompt=_system_prompt(cfg, phase, state.task),
+    )
+    _log_event(
+        "final_ask",
+        phase=phase.id,
+        start=True,
+        cap_s=round(cap, 1),
+        history_messages=len(history or []),
+        elapsed_s=round(model.elapsed(), 1),
+    )
+    try:
+        async with asyncio.timeout(cap):
+            async with agent.run_stream_events(
+                FINAL_ASK_MESSAGE,
+                deps=state.deps,
+                model_settings={"temperature": cfg.agent.temp},
+                message_history=history,
+            ) as events:
+                async for event in events:
+                    _log_stream_event(event)
+        model.log_pending_usage()
+        _log_event("final_ask", phase=phase.id, ok=True, elapsed_s=round(model.elapsed(), 1))
+    except (TimeoutError, asyncio.TimeoutError):
+        model.log_pending_usage()
+        _log_event(
+            "final_ask",
+            phase=phase.id,
+            ok=False,
+            reason="time cap",
+            elapsed_s=round(model.elapsed(), 1),
+        )
+    except Exception as e:
+        model.log_pending_usage()
+        _log_event(
+            "final_ask",
+            phase=phase.id,
+            ok=False,
+            error=f"{type(e).__name__}: {str(e)[:200]}",
+        )
+
+
 # ---------------------------------------------------------------------------
-# Phase-graph walk
+# Pipeline walk
 # ---------------------------------------------------------------------------
 
 
-async def _walk(
+async def _pipeline(
     state: RunState,
     instrument: bool,
     phase_factory: Callable[[str], Phase],
 ) -> tuple[str, str]:
-    """Walk the phase graph; returns (status, last_output).
+    """Walk the 4-phase pipeline; returns (status, last_output).
 
-    status is the decisive phase's status: "done" (entry finished its job),
-    "budget" (breach or step-guard exhaustion), or "error" (a phase failed
-    after its retries).
+    status is the decisive phase's status: "done" (the pipeline reached
+    commit/emergency with a completed work/plan), "budget" (breach, cycle
+    cap, or step-guard exhaustion), or "error" (a phase failed after its
+    retries).
     """
     cfg = state.cfg
     phase_id = cfg.agent.entry
     steps = 0
-    final_status: str | None = None
+    final_status = "done"
     output = ""
     while True:
-        guard_hit = steps >= cfg.agent.max_steps
-        if guard_hit:
+        # Commit deadline at a phase boundary: past 520s and not heading to
+        # commit -> emergency (until the global hard_time).
+        if (
+            phase_id not in ("commit", "emergency")
+            and state.model.elapsed() >= cfg.agent.commit_deadline
+        ):
+            _log_event(
+                "deadline",
+                phase=phase_id,
+                elapsed_s=round(state.model.elapsed(), 1),
+                commit_deadline=cfg.agent.commit_deadline,
+                hard_time=cfg.budget.hard_time,
+            )
+            phase_id = cfg.agent.emergency
+        # Step guard: total phase runs exhausted -> emergency, then stop.
+        if steps >= cfg.agent.max_steps and phase_id not in ("commit", "emergency"):
             _log_event(
                 "budget",
                 reason="max_steps",
@@ -327,21 +409,86 @@ async def _walk(
             phase_id = cfg.agent.emergency
         steps += 1
         phase = phase_factory(phase_id)
+        _log_event(
+            "phase",
+            id=phase.id,
+            start=True,
+            cycle=state.cycles,
+            requests=phase.limits(cfg).requests,
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        start_t = state.model.elapsed()
         result = await _run_phase_with_retries(state, phase, instrument)
-        state.results[phase.id] = result
+        _log_event(
+            "phase_done",
+            id=phase.id,
+            status=result.status,
+            duration_s=round(state.model.elapsed() - start_t, 1),
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        # Track the human-readable final output (terminal text wins).
         if result.summary:
-            output = result.summary
-        if guard_hit:
-            return "budget", output
-        next_id = phase.route(result, state)
-        if next_id is None:
-            if phase.terminal:
-                # The emergency phase ended the run: keep the decisive status
-                # of the phase that routed here.
-                return (final_status or result.status), output
-            return result.status, output
-        final_status = result.status
-        phase_id = next_id
+            if phase.id == "work" and result.output is not None:
+                output = result.output.summary or output
+            elif phase.terminal:
+                output = result.summary
+            elif phase.id != "plan":
+                output = result.summary
+        if phase.terminal:
+            return (
+                final_status if final_status in ("budget", "error") else "done",
+                output,
+            )
+        decision = getattr(result.output, "decision", None)
+        if phase.id == "plan":
+            if result.status == "budget":
+                # Hard timeout / budget breach: one toolless final_ask on the
+                # same conversation, then execute whatever the plan knows.
+                await _final_ask(state, phase)
+                final_status = "budget"
+                phase_id = "work"
+                continue
+            if result.status == "error":
+                final_status = "error"
+                phase_id = "commit"
+                continue
+            if decision == "commit":
+                # Trivial task: the plan already knows the answer.
+                final_status = "done"
+                phase_id = "commit"
+                continue
+            final_status = "done"
+            phase_id = "work"
+            continue
+        if phase.id == "work":
+            if result.status == "budget":
+                await _final_ask(state, phase)
+                final_status = "budget"
+                phase_id = "commit"
+                continue
+            if result.status == "error":
+                final_status = "error"
+                phase_id = "commit"
+                continue
+            if decision == "replan":
+                state.cycles += 1
+                if state.cycles < cfg.agent.max_cycles:
+                    final_status = "done"
+                    phase_id = "plan"
+                    continue
+                _log_event(
+                    "budget",
+                    reason="max_cycles",
+                    detail=f"replan cycle cap {cfg.agent.max_cycles} reached",
+                )
+                final_status = "budget"
+                phase_id = "commit"
+                continue
+            final_status = "done"
+            phase_id = "commit"
+            continue
+        # Unknown phase id: stop the walk (defensive).
+        return result.status, output
 
 
 async def run_prompt(
@@ -353,7 +500,8 @@ async def run_prompt(
     """Run the full phase pipeline for one task prompt; returns final output.
 
     Never raises: any unexpected failure is logged as agent_error (+ a final
-    agent_done with status "error") and "" is returned, so the process exits 0.
+    agent_done with status "error") and "" is returned, so the process exits
+    0.
     """
     _configure_logging()
     cfg = agent_cfg or load_config()
@@ -384,9 +532,13 @@ async def run_prompt(
             hard_time=cfg.budget.hard_time,
             request_limit=cfg.budget.request_limit,
             token_budget=cfg.budget.token_budget,
+            entry=cfg.agent.entry,
+            emergency=cfg.agent.emergency,
+            max_cycles=cfg.agent.max_cycles,
+            commit_deadline=cfg.agent.commit_deadline,
         )
         factory = phase_factory or get_phase
-        status, output = await _walk(state, instrument, factory)
+        status, output = await _pipeline(state, instrument, factory)
         model.log_pending_usage()
         _log_event(
             "agent_done",

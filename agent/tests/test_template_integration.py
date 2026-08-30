@@ -1,9 +1,9 @@
-"""Integration: the v2 block template end-to-end through the stub OpenAI server.
+"""Integration: the block template end-to-end through the stub OpenAI server.
 
-Covers the t3 acceptance criteria: the system message carries base.md
-content, per-tool notes and the task text (constant for the run), the explore
-user message carries the phase instructions, and the commit request carries
-the commit text plus the resumed history.
+Covers the t3 acceptance criteria on the 4-phase pipeline: the system
+message carries base.md content, per-tool notes and the task text (constant
+for the run), the plan user message carries the phase instructions, and the
+commit request carries the commit text plus the resumed history.
 """
 
 import asyncio
@@ -21,7 +21,21 @@ def _run(monkeypatch, stub_openai, tmp_path, task="Create hello.txt with the exa
     return asyncio.run(run_prompt(task, agent_cfg=agent_cfg))
 
 
-def test_explore_request_uses_template(monkeypatch, stub_openai, tmp_path):
+def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
+    stub_state["script"] = [
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "goal": "write hello.txt with the content hello",
+                    "findings": "",
+                    "steps": ["write the file"],
+                    "decision": "commit",
+                },
+            }
+        },
+        {"final": FINAL_ANSWER},
+    ]
     _run(monkeypatch, stub_openai, tmp_path)
     first = stub_state["bodies"][0]
     messages = first["messages"]
@@ -35,14 +49,16 @@ def test_explore_request_uses_template(monkeypatch, stub_openai, tmp_path):
         assert tool in system, tool
     # the task text renders into the system message (constant for the run)
     assert "Create hello.txt with the exact content hello" in system
-    # first user message: phase instructions only
+    # first user message: plan phase instructions, advisory limits, output
+    # schema — but NOT the task text (it is in the system message)
     assert "PHASE INSTRUCTIONS" in user
+    assert "PLAN PHASE" in user
     assert "Create hello.txt with the exact content hello" not in user
+    assert "ADDITIONAL CONTEXT" in user  # plan limits are rendered
+    assert "OUTPUT FORMAT" in user  # the final_result schema
     assert "NO NOTES" not in user and "NOTES\n" not in user  # empty note block dropped
-    # reserved blocks render nothing while empty
-    assert "ADDITIONAL CONTEXT" not in user
+    # reserved empty blocks render nothing
     assert "RESULTS OF PREVIOUS PHASES" not in user
-    assert "OUTPUT FORMAT" not in user
 
 
 def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai, tmp_path):
@@ -50,29 +66,46 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
 
     reset_stub_state()
     stub_state["script"] = [
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},
+        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # plan req 1
+        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # plan req 2
+        {"final": "FINAL-ASK"},  # final_ask (free text, no tools)
+        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # work req 1
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "summary": "wrote hello.txt",
+                    "findings": "",
+                    "deliverable": "/app/hello.txt",
+                    "decision": "commit",
+                },
+            }
+        },  # work req 2
         {"final": FINAL_ANSWER},  # the commit request
     ]
-    # explore request cap 2 -> the third explore request raises
-    # UsageLimitExceeded, routing the run to the commit phase (v2 config).
+    # plan request cap 2 -> the third plan request raises UsageLimitExceeded
+    # (blocked before it is sent): final_ask, then work, then commit. The
+    # work phase makes a tool call first so its conversation (prompt + tool
+    # call) survives trim_history into the commit request.
     from shlepa_agent.config import load_config
 
     cfg = load_config().model_copy(deep=True)
-    cfg.phases["explore"].requests = 2
+    cfg.phases["plan"].requests = 2
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     bodies = stub_state["bodies"]
-    assert len(bodies) == 3, f"expected explore x2 + commit x1, got {len(bodies)}"
-    messages = bodies[2]["messages"]
+    assert len(bodies) == 6, (
+        f"expected plan x2 + final_ask + work x2 + commit, got {len(bodies)}"
+    )
+    messages = bodies[-1]["messages"]
     last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
     # commit text (commit.md) in the final user message
-    assert "BUDGET EXHAUSTED" in last_user
+    assert "COMMIT PHASE" in last_user
     assert "PHASE INSTRUCTIONS" in last_user
-    # resumed history: the rendered explore user message is still in the request
+    # resumed history: the work user message is still in the request
     assert any(
-        "Follow the protocol above" in (m.get("content") or "")
+        "WORK PHASE" in (m.get("content") or "")
         for m in messages
         if m["role"] == "user" and m is not messages[-1]
     )
-    # tool calls from the explore run are part of the resumed history
+    # the final_result call from the work run is part of the resumed history
     assert any(m.get("role") == "assistant" and m.get("tool_calls") for m in messages)

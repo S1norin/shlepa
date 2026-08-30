@@ -1,8 +1,10 @@
-"""t5: phase protocol, explore/commit phases, structured results.
+"""t5: phase protocol, the four pipeline phases, structured results.
 
-Covers: PhaseResult JSON roundtrip, RunState.results, routing (explore:
-done->None / budget|error->commit; commit: terminal), trimmed commit
-history on synthetic message lists, and config-driven toolsets/limits.
+Covers: PhaseResult JSON roundtrip, RunState.results/cycles, the phase
+registry (plan/work/commit/emergency; explore is gone), config-driven
+toolsets and limits (hard vs advisory soft), fresh vs continued history,
+trimmed continuation history on synthetic message lists, and phase prompts
+(phase instructions, advisory limits, output schema, previous results).
 """
 
 import json
@@ -18,11 +20,14 @@ from pydantic_ai.messages import (
 )
 
 from shlepa_agent.config import load_config
+from shlepa_agent.outputs import PlanResult, WorkResult
 from shlepa_agent.phases import (
     CommitPhase,
-    ExplorePhase,
+    EmergencyPhase,
     PhaseResult,
+    PlanPhase,
     RunState,
+    WorkPhase,
     get_phase,
     trim_history,
 )
@@ -47,37 +52,57 @@ def test_phase_result_json_roundtrip():
     assert PhaseResult().status == "done"
 
 
-def test_run_state_holds_one_result_per_phase():
+def test_phase_result_carries_typed_output():
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo hi"], decision="work")
+    result = PhaseResult(status="done", summary=plan.model_dump_json(), output=plan)
+    assert result.output.decision == "work"
+    # output is Any-typed: the JSON roundtrip keeps the data (as a dict)
+    restored = PhaseResult.model_validate(json.loads(result.model_dump_json()))
+    assert restored.output["decision"] == "work"
+
+
+def test_run_state_holds_one_result_per_phase_and_cycles():
     state = _state()
-    state.results["explore"] = PhaseResult(status="budget", summary="cut off")
+    state.results["work"] = PhaseResult(status="budget", summary="cut off")
     state.results["commit"] = PhaseResult(status="done")
     assert state.cfg is state.deps.cfg
-    assert state.results["explore"].status == "budget"
-    assert state.cfg.agent.emergency == "commit"
+    assert state.results["work"].status == "budget"
+    assert state.cycles == 0
+    state.cycles += 1
+    assert state.cycles == 1
 
 
-# -- routing -----------------------------------------------------------------
-def test_explore_route_done_is_terminal():
-    state = _state()
-    assert ExplorePhase().route(PhaseResult(status="done"), state) is None
+# -- registry ------------------------------------------------------------------
+def test_registry_resolves_all_four_phase_ids():
+    cfg = load_config()
+    assert isinstance(get_phase(cfg.agent.entry), PlanPhase)
+    assert isinstance(get_phase("work"), WorkPhase)
+    assert isinstance(get_phase("commit"), CommitPhase)
+    assert isinstance(get_phase(cfg.agent.emergency), EmergencyPhase)
+    # explore was removed in the v3 pipeline
+    assert "explore" not in {p.id for p in (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase())}
+    try:
+        get_phase("nope")
+        assert False, "expected KeyError"
+    except KeyError as e:
+        assert "nope" in str(e)
 
 
-def test_explore_route_budget_and_error_go_to_commit():
-    state = _state()
-    phase = ExplorePhase()
-    assert phase.route(PhaseResult(status="budget", error="limit"), state) == "commit"
-    assert phase.route(PhaseResult(status="error", error="boom"), state) == "commit"
+def test_terminal_flags():
+    assert CommitPhase().terminal is True
+    assert EmergencyPhase().terminal is True
+    assert PlanPhase().terminal is False
+    assert WorkPhase().terminal is False
 
 
-def test_commit_phase_is_terminal():
-    state = _state()
-    assert CommitPhase().route(PhaseResult(status="done"), state) is None
-    limits = CommitPhase().limits(state.cfg)
-    assert limits.terminal is True
-    assert ExplorePhase().limits(state.cfg).terminal is False
+def test_output_types():
+    assert PlanPhase.output_type is PlanResult
+    assert WorkPhase.output_type is WorkResult
+    assert CommitPhase.output_type is None
+    assert EmergencyPhase.output_type is None
 
 
-# -- commit history trimming -------------------------------------------------
+# -- continuation history trimming ---------------------------------------------
 def test_trim_history_drops_trailing_prompt_without_tool_return():
     msgs = [
         ModelRequest(parts=[TextPart("hi")]),
@@ -106,43 +131,125 @@ def test_trim_history_drops_dangling_tool_call_response():
     assert out == msgs[:2]
 
 
-# -- config-driven toolsets and limits ----------------------------------------
+def test_commit_and_emergency_continue_the_last_conversation():
+    msgs = [
+        ModelRequest(parts=[TextPart("hi")]),
+        ModelResponse(parts=[TextPart("ok")]),
+    ]
+    state = _state(last_messages=msgs)
+    assert CommitPhase().history(state) == msgs
+    assert EmergencyPhase().history(state) == msgs
+
+
+def test_plan_and_work_are_fresh_runs():
+    state = _state(last_messages=[ModelRequest(parts=[TextPart("hi")])])
+    assert PlanPhase().history(state) is None
+    assert WorkPhase().history(state) is None
+
+
+# -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
     cfg = load_config()
-    assert CommitPhase().tools(cfg) == ["read", "write", "edit", "bash"]
-    assert ExplorePhase().tools(cfg) == ["read", "write", "edit", "bash"]
+    for phase in (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase()):
+        assert phase.tools(cfg) == ["read", "write", "edit", "bash"]
 
 
 def test_phase_limits_from_config():
     cfg = load_config()
+    plan = PlanPhase().limits(cfg)
+    assert plan.requests == 25
+    assert plan.time == 60.0
+    assert plan.soft_time == 45.0
+    assert plan.soft_tokens == 15000
+    assert plan.reasoning_effort is None
+
+    work = WorkPhase().limits(cfg)
+    assert work.requests == 100
+    assert work.time == 180.0
+    assert work.soft_time == 150.0
+    assert work.soft_tokens == 80000
+
     commit = CommitPhase().limits(cfg)
-    assert commit.requests == 25
-    assert commit.time == 80.0
+    assert commit.requests == 20
+    assert commit.time is None  # takes the remainder until hard_time
+    assert commit.soft_time == 45.0
+    assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
-    explore = ExplorePhase().limits(cfg)
-    assert explore.requests == 90
-    assert explore.time == 500.0
-    assert explore.reasoning_effort is None
+
+    emergency = EmergencyPhase().limits(cfg)
+    assert emergency.requests == 20
+    assert emergency.time is None
+    assert emergency.reasoning_effort == "low"
 
 
-def test_registry_resolves_configured_phase_ids():
+def test_limits_note_rendered_advisory_values_only():
     cfg = load_config()
-    assert isinstance(get_phase(cfg.agent.entry), ExplorePhase)
-    assert isinstance(get_phase(cfg.agent.emergency), CommitPhase)
-    try:
-        get_phase("nope")
-        assert False, "expected KeyError"
-    except KeyError as e:
-        assert "nope" in str(e)
+    plan_note = PlanPhase().limits_note(cfg)
+    assert "60s" in plan_note
+    assert "45s" in plan_note
+    assert "15000" in plan_note
+    # commit has no hard phase time (takes the remainder)
+    assert "hard-capped" not in CommitPhase().limits_note(cfg)
 
 
-# -- prompts -------------------------------------------------------------------
-def test_explore_prompt_carries_phase_instructions_only():
-    phase = ExplorePhase()
-    prompt = phase.prompt(_state())
+def test_max_retries_from_config():
+    cfg = load_config()
+    assert cfg.phases["plan"].max_retries == 1
+    assert cfg.phases["work"].max_retries == 1
+    assert cfg.phases["commit"].max_retries == 0
+    assert cfg.phases["emergency"].max_retries == 0
+
+
+# -- prompts ---------------------------------------------------------------------
+def test_plan_prompt_carries_instructions_schema_and_limits():
+    state = _state()
+    prompt = PlanPhase().prompt(state)
     assert "PHASE INSTRUCTIONS" in prompt
-    # the task text lives in the system message now, not in the user prompt
+    assert "PLAN PHASE" in prompt
+    assert "final_result" in prompt  # output schema block
+    assert "decision" in prompt
+    assert "60s" in prompt  # advisory limits
+    # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
+    # fresh first pass: no previous results block
+    assert "RESULTS OF PREVIOUS PHASES" not in prompt
+
+
+def test_plan_prompt_on_replan_carries_previous_work_result():
+    state = _state()
+    work = WorkResult(summary="tried", decision="replan")
+    state.results["work"] = PhaseResult(
+        status="done", summary=work.model_dump_json(), output=work,
+    )
+    prompt = PlanPhase().prompt(state)
+    assert "RESULTS OF PREVIOUS PHASES" in prompt
+    assert "tried" in prompt
+
+
+def test_work_prompt_carries_plan_result():
+    state = _state()
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo"], decision="work")
+    state.results["plan"] = PhaseResult(
+        status="done", summary=plan.model_dump_json(), output=plan,
+    )
+    prompt = WorkPhase().prompt(state)
+    assert "WORK PHASE" in prompt
+    assert "RESULTS OF PREVIOUS PHASES" in prompt
+    assert "write /app/out.txt" in prompt
+    assert "final_result" in prompt
+    assert "180s" in prompt  # advisory hard cap
+
+
+def test_work_prompt_on_retry_carries_previous_attempt_error():
+    state = _state()
+    plan = PlanResult(goal="g", steps=["s"], decision="work")
+    state.results["plan"] = PhaseResult(
+        status="done", summary=plan.model_dump_json(), output=plan,
+    )
+    state.results["work"] = PhaseResult(status="error", error="tool exploded")
+    prompt = WorkPhase().prompt(state)
+    assert "previous work attempt failed with" in prompt
+    assert "tool exploded" in prompt
 
 
 def test_commit_prompt_never_repeats_task():
@@ -159,4 +266,10 @@ def test_commit_prompt_never_repeats_task():
     for state in (no_history, with_history):
         prompt = phase.prompt(state)
         assert "Create hello.txt" not in prompt
-        assert "BUDGET EXHAUSTED" in prompt
+        assert "COMMIT PHASE" in prompt
+
+
+def test_emergency_prompt_is_the_rescue_instruction():
+    prompt = EmergencyPhase().prompt(_state())
+    assert "EMERGENCY" in prompt
+    assert "Create hello.txt" not in prompt

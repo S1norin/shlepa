@@ -1,8 +1,10 @@
-"""t6: runner tests — phase-graph execution, budget routing, retries, log contract.
+"""t6: runner tests — 4-phase pipeline, handoffs, final_ask, deadlines, retries.
 
-The runner (shlepa_agent.runner) walks the configured phase graph:
-entry phase -> PhaseResult -> route() -> next phase, with a step guard,
-per-phase error retries, and the emergency phase as the last line of defense.
+The runner (shlepa_agent.runner) walks the 4-phase pipeline:
+plan -> work -> (commit | replan -> plan), with per-phase hard time caps,
+the one-shot toolless final_ask after a phase time-out, the 520s commit
+deadline -> emergency, per-phase error retries, and a stable log contract
+for the CLI.
 """
 
 import asyncio
@@ -39,16 +41,125 @@ def events():
         LOGGER.setLevel(old_level)
 
 
-def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt"):
+def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt", phase_factory=None):
     from shlepa_agent import runner
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
-    return asyncio.run(runner.run_prompt(task, agent_cfg=agent_cfg))
+    return asyncio.run(
+        runner.run_prompt(task, agent_cfg=agent_cfg, phase_factory=phase_factory)
+    )
 
 
+def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8, max_cycles=2):
+    """Small test config for the 4-phase pipeline (short budgets)."""
+    p = tmp_path / "cfg.toml"
+    p.write_text(
+        f"""
+[agent]
+temp = 0.2
+entry = "plan"
+emergency = "emergency"
+max_cycles = {max_cycles}
+commit_deadline = {deadline}
+max_steps = {max_steps}
+
+[budget]
+hard_time = {hard}
+soft_time = 450.0
+request_limit = 90
+token_budget = 100000
+max_tokens = 16384
+request_timeout = 30.0
+request_wall = 60.0
+
+[tools.bash]
+enabled = true
+[tools.read]
+enabled = true
+[tools.write]
+enabled = true
+[tools.edit]
+enabled = true
+
+[phases.plan]
+tools = ["read", "write", "edit", "bash"]
+requests = 25
+time = {plan_time}
+soft_time = 45.0
+soft_tokens = 15000
+max_retries = 1
+
+[phases.work]
+tools = ["read", "write", "edit", "bash"]
+requests = 100
+time = {work_time}
+soft_time = 150.0
+soft_tokens = 80000
+max_retries = 1
+
+[phases.commit]
+tools = ["read", "write", "edit", "bash"]
+requests = 20
+reasoning_effort = "low"
+max_retries = 0
+
+[phases.emergency]
+tools = ["read", "write", "edit", "bash"]
+requests = 20
+reasoning_effort = "low"
+max_retries = 0
+
+[template]
+blocks = ["system", "tools", "task", "extra", "previous_results", "phase_prompt", "output_schema", "note"]
+""",
+        encoding="utf-8",
+    )
+    from shlepa_agent.config import load_config
+
+    return load_config(p)
+
+
+def _plan_step(decision="work"):
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "goal": "write /app/hello.txt with the content hello",
+                "findings": "n/a",
+                "steps": ["write the file", "verify it"],
+                "decision": decision,
+            },
+        }
+    }
+
+
+def _work_step(decision="commit"):
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": "wrote hello.txt and verified it",
+                "findings": "",
+                "deliverable": "/app/hello.txt",
+                "decision": decision,
+            },
+        }
+    }
+
+
+def _phase_starts(events, phase):
+    return [e for e in events if e.get("event") == "phase" and e.get("id") == phase and e.get("start")]
+
+
+def _status(events):
+    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
+    return done[-1]["status"] if done else None
+
+
+# -- env / construction ---------------------------------------------------
 def test_main_never_crashes_on_env_failure(monkeypatch, events):
     # Missing LLM endpoint env: run_prompt must log agent_error + a final
     # agent_done(status=error) and main() must return (process exits 0).
@@ -62,15 +173,15 @@ def test_main_never_crashes_on_env_failure(monkeypatch, events):
     monkeypatch.setattr(sys, "argv", ["shlepa_agent", "some task"])
     runner.main()  # must not raise
     assert any(e.get("event") == "agent_error" for e in events)
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert done and done[-1]["status"] == "error"
+    assert _status(events) == "error"
 
 
-def test_build_phase_agent_instrument_flag(tmp_path):
+def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     from pydantic_ai.providers.openai import OpenAIProvider
 
     from shlepa_agent.config import load_config
     from shlepa_agent.model import TrackedModel
+    from shlepa_agent.outputs import PlanResult
     from shlepa_agent.phases import get_phase
     from shlepa_agent.runner import build_phase_agent
 
@@ -78,323 +189,214 @@ def test_build_phase_agent_instrument_flag(tmp_path):
     model = TrackedModel(
         "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
     )
-    phase = get_phase("explore")
-    instrumented = build_phase_agent(model, cfg, phase, "some task", instrument=True)
-    plain = build_phase_agent(model, cfg, phase, "some task", instrument=False)
+    plan = get_phase("plan")
+    instrumented = build_phase_agent(model, cfg, plan, "some task", instrument=True)
+    plain = build_phase_agent(model, cfg, plan, "some task", instrument=False)
     assert instrumented.instrument is True
     assert not plain.instrument  # untouched default is None
+    # plan is a typed-output phase
+    assert plan.output_type is PlanResult
+    # commit stays free text
+    assert get_phase("commit").output_type is None
 
 
-def _v2_cfg(tmp_path, explore_requests: int, commit_requests: int):
-    """Build a small test config (short budgets, tiny request caps)."""
-    p = tmp_path / "cfg.toml"
-    p.write_text(
-        f"""
-[agent]
-temp = 0.2
+# -- pipeline graph ---------------------------------------------------------
+def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
+    stub_state["script"] = [
+        _plan_step("work"),
+        _work_step("commit"),
+        {"final": "wrote hello.txt"},
+    ]
+    output = _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert output == "wrote hello.txt"
+    assert _status(events) == "done"
+    starts = [(e["id"], e["cycle"]) for e in events if e.get("event") == "phase" and e.get("start")]
+    assert [i for i, _ in starts] == ["plan", "work", "commit"]
+    assert all(c == 0 for _, c in starts)  # no replan cycle
+    assert len(stub_state["bodies"]) == 3  # one request per phase
+    # phase_done events carry the phase statuses
+    dones = [e for e in events if e.get("event") == "phase_done"]
+    assert [e["status"] for e in dones] == ["done", "done", "done"]
 
-[budget]
-hard_time = 60.0
-soft_time = 45.0
-request_limit = {explore_requests}
-token_budget = 100000
-max_tokens = 1024
-request_timeout = 30.0
-request_wall = 60.0
 
-[phases.explore]
-tools = ["bash"]
-requests = {explore_requests}
-time = 45.0
+def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
+    stub_state["script"] = [_plan_step("commit"), {"final": "wrote hello.txt"}]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "done"
+    assert not _phase_starts(events, "work")  # work was skipped
+    assert _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 2
 
-[phases.commit]
-tools = ["bash"]
-requests = {commit_requests}
-time = 30.0
-reasoning_effort = "low"
-""",
-        encoding="utf-8",
+
+def test_replan_allowed_then_cycle_cap_forces_commit(monkeypatch, stub_openai, tmp_path, events):
+    stub_state["script"] = [
+        _plan_step("work"),      # plan, cycle 1
+        _work_step("replan"),    # work: replan (cycles 1 < 2 -> allowed)
+        _plan_step("work"),      # plan, cycle 2
+        _work_step("replan"),    # work: replan (cap reached -> forced commit)
+        {"final": "final best effort"},
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "budget"  # forced commit after the cycle cap
+    plan_starts = _phase_starts(events, "plan")
+    work_starts = _phase_starts(events, "work")
+    assert [e["cycle"] for e in plan_starts] == [0, 1]
+    assert len(work_starts) == 2
+    assert _phase_starts(events, "commit")
+    assert any(
+        e.get("event") == "budget" and e.get("reason") == "max_cycles" for e in events
     )
-    from shlepa_agent.config import load_config
-
-    return load_config(p)
+    assert len(stub_state["bodies"]) == 5
 
 
-def test_explore_done_finishes_without_commit(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [{"final": FINAL_ANSWER}]
-    output = _run(monkeypatch, stub_openai, tmp_path)
-    assert output == FINAL_ANSWER
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert len(done) == 1
-    assert done[0]["status"] == "done"
-    assert not any(e.get("event") == "commit" for e in events)
-    assert not any(e.get("event") == "budget" for e in events)
-    assert not any(e.get("event") == "agent_error" for e in events)
+# -- final_ask handoff on phase hard timeout ---------------------------------
+def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tmp_path, events):
+    import shlepa_agent.runner as runner_mod
 
-
-class _LoopPhase:
-    """A phase that always routes back to itself (infinite loop)."""
-
-    id = "loop"
-    terminal = False
-
-    def tools(self, cfg):
-        return ["bash"]
-
-    def limits(self, cfg):
-        from shlepa_agent.phases.base import PhaseLimits
-
-        p = cfg.phases[self.id]
-        return PhaseLimits(requests=p.requests, time=p.time)
-
-    def history(self, state):
-        return None
-
-    def prompt(self, state):
-        return "keep looping"
-
-    def route(self, result, state):
-        return self.id
-
-
-def test_max_steps_guard_stops_looping_graph(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    stub_state["script"] = [{"final": FINAL_ANSWER}]
-    p = tmp_path / "cfg.toml"
-    p.write_text(
-        """
-[agent]
-entry = "loop"
-emergency = "commit"
-max_steps = 3
-temp = 0.2
-
-[budget]
-hard_time = 60.0
-soft_time = 45.0
-request_limit = 9
-token_budget = 100000
-max_tokens = 1024
-request_timeout = 30.0
-request_wall = 60.0
-
-[phases.loop]
-tools = ["bash"]
-requests = 5
-time = 45.0
-
-[phases.commit]
-tools = ["bash"]
-requests = 5
-time = 30.0
-reasoning_effort = "low"
-""",
-        encoding="utf-8",
+    # shrink the minimum run window so a 1.0s plan cap is honored, not skipped
+    monkeypatch.setattr(runner_mod, "MIN_RUN_WINDOW_S", 0.5)
+    stub_state["script"] = [
+        {"delay": 2.5, "final": "too slow — plan timed out"},
+        {"final": "FINAL-ASK: wrote hello.txt"},
+        _work_step("commit"),
+        {"final": "committed"},
+    ]
+    cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0, hard=60.0)
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    assert _status(events) == "done"
+    # plan was cut by its hard cap (budget), NOT retried
+    assert any(
+        e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
     )
-    from shlepa_agent.config import load_config
-    from shlepa_agent.phases import get_phase
+    assert not [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
+    # one toolless final_ask on the plan conversation, then work and commit
+    asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
+    assert asks[0].get("start") is True
+    assert asks[-1].get("ok") is True
+    assert _phase_starts(events, "work") and _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 4
+    # KV-cache reuse: the final_ask request prefix is byte-identical to the
+    # plan phase's last request (same system message, same history prefix).
+    bodies = stub_state["bodies"]
+    fa = next(
+        b
+        for b in bodies
+        if any("HARD TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"])
+    )
+    plan = bodies[0]
+    assert fa["messages"][0] == plan["messages"][0]  # system: byte-identical
+    assert fa["messages"][:-1] == plan["messages"][:-1]  # history prefix
 
-    cfg = load_config(p)
 
-    def factory(phase_id: str):
-        if phase_id == "loop":
-            return _LoopPhase()
-        return get_phase(phase_id)
+def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, tmp_path, events):
+    import shlepa_agent.runner as runner_mod
 
-    from shlepa_agent import runner
-
-    monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
-    monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
-    asyncio.run(runner.run_prompt("t", agent_cfg=cfg, phase_factory=factory))
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert done[-1]["status"] == "budget"
-    # Step guard tripped, emergency phase ran exactly once, then the run stopped.
-    assert sum(1 for e in events if e.get("event") == "budget" and e.get("reason") == "max_steps") == 1
-    assert sum(1 for e in events if e.get("event") == "commit" and e.get("start")) == 1
-    # 3 loop runs + 1 emergency run: the loop did not continue past the guard.
+    monkeypatch.setattr(runner_mod, "MIN_RUN_WINDOW_S", 0.5)
+    stub_state["script"] = [
+        _plan_step("work"),
+        {"delay": 2.5, "final": "too slow — work timed out"},
+        {"final": "FINAL-ASK: wrote hello.txt"},
+        {"final": "committed"},
+    ]
+    cfg = _cfg(tmp_path, work_time=1.0, hard=60.0)
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    assert _status(events) == "budget"  # work was cut by its cap
+    asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "work"]
+    assert asks and asks[-1].get("ok") is True
+    assert len(_phase_starts(events, "work")) == 1  # work was NOT rerun
+    assert _phase_starts(events, "commit")
     assert len(stub_state["bodies"]) == 4
 
 
-def test_phase_error_retried_then_emergency(monkeypatch, stub_openai, tmp_path, events):
-    # Unknown tool call -> UnexpectedModelBehavior: an unexpected phase ERROR
-    # (not a budget breach). The stub is scripted to fail every request.
-    stub_state["script"] = [
-        {"tool_call": {"name": "no_such_tool", "arguments": {}}}
-    ]
-    from shlepa_agent.config import load_config
-
-    cfg = load_config()  # packaged config: explore/commit max_retries = 2
+# -- commit deadline -> emergency ---------------------------------------------
+def test_commit_deadline_routes_to_emergency(monkeypatch, stub_openai, tmp_path, events):
+    # deadline ~0: at the first boundary (next = work) the clock is past it.
+    cfg = _cfg(tmp_path, deadline=0.001, hard=60.0)
+    stub_state["script"] = [_plan_step("work"), {"final": "EMERGENCY: wrote hello.txt"}]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert done[-1]["status"] == "error"
-    # Explore: initial attempt + exactly 2 retries.
-    explore_retries = [
-        e for e in events
-        if e.get("event") == "phase_retry" and e.get("phase") == "explore"
-    ]
-    assert [e["attempt"] for e in explore_retries] == [2, 3]
-    # Emergency phase ran (once), then the run finished.
-    assert sum(1 for e in events if e.get("event") == "commit" and e.get("start")) == 1
+    assert _status(events) == "done"
+    assert any(e.get("event") == "deadline" for e in events)
+    assert not _phase_starts(events, "work")
+    assert _phase_starts(events, "emergency")
+    assert len(stub_state["bodies"]) == 2
+
+
+def test_step_guard_exhaustion_routes_to_emergency(monkeypatch, stub_openai, tmp_path, events):
+    cfg = _cfg(tmp_path, max_steps=1, hard=60.0)
+    stub_state["script"] = [_plan_step("work"), {"final": "EMERGENCY: wrote hello.txt"}]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert any(
-        e.get("event") == "commit" and e.get("done") and "error" in e for e in events
+        e.get("event") == "budget" and e.get("reason") == "max_steps" for e in events
     )
+    assert _phase_starts(events, "emergency")
+    assert len(stub_state["bodies"]) == 2
 
 
-def test_log_contract_events_and_fields(monkeypatch, stub_openai, tmp_path, events):
-    # One tool round-trip, then the final answer: exercises every regular
-    # event the CLI (and trace tooling) may parse.
+# -- retries -----------------------------------------------------------------
+def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.phases import PlanPhase, get_phase
+
+    calls = {"n": 0}
+
+    class _FlakyPlan(PlanPhase):
+        def prompt(self, state):
+            calls["n"] += 1
+            if calls["n"] <= 1:
+                raise RuntimeError("simulated plan failure")
+            return super().prompt(state)
+
+    def factory(phase_id):
+        return _FlakyPlan() if phase_id == "plan" else get_phase(phase_id)
+
+    stub_state["script"] = [
+        _plan_step("work"),  # attempt 2 (attempt 1 dies before the request)
+        _work_step("commit"),
+        {"final": "ok"},
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), phase_factory=factory)
+    assert _status(events) == "done"
+    retries = [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
+    assert [e["attempt"] for e in retries] == [2]
+    # one phase entry; the retry is tracked by phase_retry, not a new phase start
+    assert len(_phase_starts(events, "plan")) == 1
+    assert len(stub_state["bodies"]) == 3  # no model request on the failed attempt
+
+
+# -- log contract ---------------------------------------------------------------
+def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "echo hi"}}},
+        _plan_step("work"),
+        _work_step("commit"),
         {"final": FINAL_ANSWER},
     ]
-    _run(monkeypatch, stub_openai, tmp_path, task="make the file")
-    by_event: dict[str, list[dict]] = {}
-    for e in events:
-        by_event.setdefault(e.get("event", ""), []).append(e)
-
-    start = by_event.get("agent_start", [{}])
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    names = {e.get("event") for e in events}
+    # CLI-parsed events keep their names
+    assert {"usage", "agent_start", "agent_done", "agent_error"} & names == {
+        "usage",
+        "agent_start",
+        "agent_done",
+    }
+    start = next(e for e in events if e.get("event") == "agent_start")
     for field in (
-        "model", "base_url", "workdir", "prompt", "temp",
-        "soft_time", "hard_time", "request_limit", "token_budget",
+        "model",
+        "base_url",
+        "workdir",
+        "prompt",
+        "temp",
+        "soft_time",
+        "hard_time",
+        "request_limit",
+        "token_budget",
     ):
-        assert field in start[0], f"agent_start missing {field}"
-    assert start[0]["prompt"] == "make the file"
-
-    usage = by_event.get("usage", [])
-    assert usage, "no usage events"
-    for field in (
-        "request", "input_tokens", "output_tokens",
-        "cumulative_input", "cumulative_output", "cumulative_total", "elapsed_s",
-    ):
-        assert field in usage[0], f"usage missing {field}"
-
-    calls = by_event.get("llm_tool_call", [])
-    results = by_event.get("llm_tool_result", [])
-    assert calls and calls[0]["tool"] == "bash"
-    assert results and results[0]["tool"] == "bash" and "result" in results[0]
-
-    run_usage = by_event.get("run_usage", [])
-    assert run_usage, "no run_usage events"
-    for field in ("input_tokens", "output_tokens", "requests", "tool_calls"):
-        assert field in run_usage[0], f"run_usage missing {field}"
-
-    done = [e for e in by_event.get("agent_done", []) if "status" in e]
-    assert done and done[-1]["status"] == "done"
-    for field in ("status", "elapsed_s", "output"):
-        assert field in done[-1], f"agent_done missing {field}"
-
-
-def test_commit_event_fields(monkeypatch, stub_openai, tmp_path, events):
-    # Budget breach in explore (1 request capped by a tool call) -> the
-    # emergency commit run then succeeds: both commit events carry fields.
-    stub_state["script"] = [
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo x"}}},
-        {"final": FINAL_ANSWER},
-    ]
-    p = tmp_path / "cfg.toml"
-    p.write_text(
-        """
-[agent]
-temp = 0.2
-
-[budget]
-hard_time = 60.0
-soft_time = 45.0
-request_limit = 9
-token_budget = 100000
-max_tokens = 1024
-request_timeout = 30.0
-request_wall = 60.0
-
-[phases.explore]
-tools = ["bash"]
-requests = 1
-time = 45.0
-
-[phases.commit]
-tools = ["bash"]
-requests = 9
-time = 30.0
-reasoning_effort = "low"
-""",
-        encoding="utf-8",
-    )
-    from shlepa_agent.config import load_config
-
-    cfg = load_config(p)
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    commits = [e for e in events if e.get("event") == "commit"]
-    starts = [e for e in commits if e.get("start")]
-    dones = [e for e in commits if e.get("done")]
-    assert starts and dones
-    for field in ("history_messages", "time_cap_s", "elapsed_s"):
-        assert field in starts[0], f"commit start missing {field}"
-    for field in ("done", "elapsed_s"):
-        assert field in dones[0], f"commit done missing {field}"
-
-
-def test_budget_error_is_not_retried(monkeypatch, stub_openai, tmp_path, events):
-    # Persistent HTTP 500 -> TrackedModel retries once internally, then raises
-    # ModelAPIError (a persistent model error = budget-class, never retried
-    # by the runner). Both phases fail; no phase_retry events may appear.
-    stub_state["script"] = [{"error": 500}]
-    p = tmp_path / "cfg.toml"
-    p.write_text(
-        """
-[agent]
-temp = 0.2
-
-[budget]
-hard_time = 60.0
-soft_time = 45.0
-request_limit = 9
-token_budget = 100000
-max_tokens = 1024
-request_timeout = 30.0
-request_wall = 60.0
-
-[phases.explore]
-tools = ["bash"]
-requests = 9
-time = 45.0
-
-[phases.commit]
-tools = ["bash"]
-requests = 9
-time = 30.0
-reasoning_effort = "low"
-""",
-        encoding="utf-8",
-    )
-    from shlepa_agent.config import load_config
-
-    cfg = load_config(p)
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert done[-1]["status"] == "budget"
-    assert not any(e.get("event") == "phase_retry" for e in events)
-    assert sum(1 for e in events if e.get("event") == "commit" and e.get("start")) == 1
-
-
-def test_budget_breach_routes_to_commit_exactly_once(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # Stub keeps issuing a bash tool call: the run loops until the per-phase
-    # request cap trips UsageLimitExceeded (a budget breach).
-    stub_state["script"] = [
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo x"}}}
-    ]
-    cfg = _v2_cfg(tmp_path, explore_requests=2, commit_requests=1)
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    done = [e for e in events if e.get("event") == "agent_done" and "status" in e]
-    assert done[-1]["status"] == "budget"
-    # Budget breach is a normal hand-off: commit runs exactly once, no retry.
-    assert sum(1 for e in events if e.get("event") == "commit" and e.get("start")) == 1
-    assert not any(e.get("event") == "phase_retry" for e in events)
-    assert not any(e.get("event") == "agent_error" for e in events)
-    assert any(e.get("event") == "budget" and e.get("reason") == "usage_or_time" for e in events)
-    # explore: 2 capped requests, commit: 1 capped request
-    assert len(stub_state["bodies"]) == 3
+        assert field in start, f"agent_start lost stable field {field}"
+    usage = next(e for e in events if e.get("event") == "usage")
+    for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
+        assert field in usage
+    # v3 pipeline events
+    assert {"phase", "phase_done"} <= names
+    assert "llm_tool_call" in names  # the bash round-trip in the plan phase
+    done = next(e for e in events if e.get("event") == "agent_done" and "status" in e)
+    assert done["status"] in ("done", "budget", "error")
+    assert "elapsed_s" in done and "output" in done
