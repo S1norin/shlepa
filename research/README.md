@@ -10,11 +10,15 @@ research/
 ├── README.md          # this file: conventions
 ├── notes/             # one digest per paper/idea: <slug>.md
 ├── papers/            # PDF registry: <slug>.pdf + registry table
-└── benchmarks/        # benchmark research (self-contained)
-    ├── README.md      # master index: one row per benchmark
-    ├── notes/         # one digest per benchmark/paper: <slug>.md
-    ├── papers/        # benchmark PDFs: <slug>.pdf + registry table
-    └── analysis/      # cross-cutting analysis docs
+├── benchmarks/        # benchmark research (self-contained)
+│   ├── README.md      # master index: one row per benchmark
+│   ├── notes/         # one digest per benchmark/paper: <slug>.md
+│   ├── papers/        # benchmark PDFs: <slug>.pdf + registry table
+│   └── analysis/      # cross-cutting analysis docs
+└── code_search/       # code-search tooling research (self-contained)
+    ├── README.md      # context, hard constraints, master index, decision record
+    ├── notes/         # one digest per tool: <slug>.md
+    └── analysis/      # cross-cutting analysis (fit matrix)
 ```
 
 - `notes/` + `papers/` (top level) are for **agent-architecture and general
@@ -23,6 +27,10 @@ research/
 - `benchmarks/` is for **evaluation research** — external benchmarks and
   papers that measure security/agent capability. Everything benchmark-related
   (notes, PDFs, analysis) stays inside `benchmarks/`.
+- `code_search/` is for **code-search tooling research** — search/index
+  engines and retrieval techniques the agent can use to find code with less
+  context. Self-contained like `benchmarks/` (own README index, notes,
+  analysis).
 
 ## Rules
 
