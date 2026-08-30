@@ -78,5 +78,5 @@ string-built SQL).
 
 BUDGET
 - Never run the same failing command more than twice; change strategy.
-- If you receive a "BUDGET EXHAUSTED" message: stop exploring immediately, write the deliverable
-now from the information you already have, verify it once, and finish with one line.
+- If you receive a "COMMIT PHASE" or "EMERGENCY" message: stop exploring immediately, write the
+deliverable now from the information you already have, verify it once, and finish with one line.

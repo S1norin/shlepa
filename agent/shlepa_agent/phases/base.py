@@ -1,15 +1,15 @@
-"""Phase protocol and run state.
+"""Phase protocol and shared run state.
 
-A phase is one stage of the agent pipeline (explore, commit, future
-verify/fix). The runner (core.run_prompt) walks the phase graph:
+A phase is one stage of the 4-phase pipeline: plan, work, commit,
+emergency. The runner walks the graph (see ``runner.py``); phases declare
+their toolset and limits from the config (``[phases.<id>]``) — the phase
+code must not contain budget numbers.
 
-    entry phase -> run -> PhaseResult -> route() -> next phase id | None
-
-Phases declare their toolset and limits from the config
-(``[phases.<id>]``); the phase code must not contain budget numbers.
-
-``PhaseResult`` is the structured, JSON-serializable outcome of a phase run;
-one per phase, stored in ``RunState.results``.
+``PhaseResult`` is the structured outcome of a phase run, stored in
+``RunState.results`` under the phase id. For phases with an
+``output_type`` the typed result (PlanResult/WorkResult) lives in
+``result.output`` and ``result.summary`` carries its JSON dump; for
+free-text phases ``summary`` is the final answer text.
 """
 
 from __future__ import annotations
@@ -26,37 +26,39 @@ from shlepa_agent.tools import AgentDeps
 
 
 class PhaseResult(BaseModel):
-    """Structured outcome of one phase run (JSON-serializable).
+    """Structured, JSON-serializable outcome of one phase run.
 
     ``status``:
       - "done": the phase finished its job;
-      - "budget": the phase was cut off by a budget/limit breach;
-      - "error": the phase failed (model error, unexpected exception).
-    ``deliverable``: path (relative to the workdir) of the produced
-    deliverable, when the phase can name one. ``iteration``: loop index for
-    future verify/fix iterations (None on the first pass).
+      - "budget": the phase was cut off by a budget/limit breach (a normal
+        hand-off, never retried);
+      - "error": the phase failed after its retries.
     """
 
     status: str = "done"
     summary: str = ""
     deliverable: str | None = None
-    iteration: int | None = None
+    #: Typed phase output (PlanResult/WorkResult); None for free-text phases.
+    output: Any | None = None
     error: str | None = None
+    iteration: int | None = None
 
 
 @dataclass(frozen=True)
 class PhaseLimits:
-    """Wall-clock window and request cap for one phase, from [phases.<id>].
+    """Limits for one phase, from ``[phases.<id>]``.
 
-    For regular phases ``time`` is a soft window (a breach routes to the
-    emergency phase); for the emergency phase it is a hard cap (the runner
-    stops the run when it expires).
+    ``time``: hard wall-clock cap for the phase run; ``None`` = until the
+    global hard_time (terminal phases take the remainder). ``soft_time`` /
+    ``soft_tokens``: advisory only — rendered into the prompt/status, never
+    enforced.
     """
 
     requests: int
-    time: float
+    time: float | None = None
+    soft_time: float | None = None
+    soft_tokens: int | None = None
     reasoning_effort: str | None = None
-    terminal: bool = False
 
 
 @dataclass
@@ -67,6 +69,8 @@ class RunState:
     deps: AgentDeps
     model: TrackedModel
     results: dict[str, PhaseResult] = field(default_factory=dict)
+    #: Completed plan->work cycles (replan count).
+    cycles: int = 0
 
     @property
     def cfg(self) -> AgentConfig:
@@ -80,6 +84,10 @@ class Phase(ABC):
     """
 
     id: str
+    #: Typed output model (pydantic-ai ``output_type``); None = free text.
+    output_type: type[BaseModel] | None = None
+    #: Terminal phases (commit, emergency) end the run.
+    terminal: bool = False
 
     # -- config-driven defaults ------------------------------------------
     def tools(self, cfg: AgentConfig) -> list[str]:
@@ -90,9 +98,22 @@ class Phase(ABC):
         return PhaseLimits(
             requests=p.requests,
             time=p.time,
+            soft_time=p.soft_time,
+            soft_tokens=p.soft_tokens,
             reasoning_effort=p.reasoning_effort,
-            terminal=self.terminal,
         )
+
+    def limits_note(self, cfg: AgentConfig) -> str:
+        """Advisory time-budget line rendered into the phase prompt."""
+        l = self.limits(cfg)
+        parts: list[str] = []
+        if l.time is not None:
+            parts.append(f"this phase is hard-capped at {l.time:.0f}s")
+        if l.soft_time is not None:
+            parts.append(f"aim to finish within {l.soft_time:.0f}s")
+        if l.soft_tokens is not None:
+            parts.append(f"keep the output lean (soft budget ~{l.soft_tokens} tokens)")
+        return "; ".join(parts)
 
     # -- to implement -----------------------------------------------------
     @abstractmethod
@@ -102,14 +123,6 @@ class Phase(ABC):
     def history(self, state: RunState) -> list[Any] | None:
         """Message history to resume from, or None for a fresh run."""
         return None
-
-    @abstractmethod
-    def route(self, result: PhaseResult, state: RunState) -> str | None:
-        """Next phase id after this phase, or None when the run is over."""
-
-    # -- flags ------------------------------------------------------------
-    #: The emergency phase has a hard time cap and is terminal.
-    terminal: bool = False
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<phase {self.id}>"
