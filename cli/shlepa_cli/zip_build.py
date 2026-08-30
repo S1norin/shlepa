@@ -1,9 +1,10 @@
 """Build the submission zip from agent/ (flat layout, telemetry excluded).
 
 The zip is what gets handed to the contest runtime: run.sh at the root
-(executable bit preserved via zip attrs), agent.py, and the shlepa_agent
-package. Development-only artifacts (telemetry module, pyproject, lockfile,
-tests, caches) are excluded so the submission cannot ship telemetry.
+(executable bit preserved via zip attrs), agent.py, the flat tools/ scripts,
+and the shlepa_agent package. Development-only artifacts (telemetry module,
+pyproject, lockfile, tests, caches) are excluded so the submission cannot
+ship telemetry.
 """
 
 import os
@@ -16,6 +17,10 @@ MAX_ZIP_BYTES = 10 * 1024 * 1024
 
 #: Package directory copied into the zip root.
 PACKAGE_DIR = "shlepa_agent"
+
+#: Flat agent-facing scripts directory copied into the zip root
+#: (run as `python3 tools/<name>.py` from the /app cwd).
+TOOLS_DIR = "tools"
 
 #: Directory names excluded anywhere inside the package.
 EXCLUDED_DIR_NAMES = {"telemetry", "__pycache__"}
@@ -94,6 +99,15 @@ def build_submission_zip(repo_root: Path) -> Path:
         info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(info, run_sh.read_bytes())
         zf.write(agent_py, "agent.py")
+        tools_dir = agent_dir / TOOLS_DIR
+        if tools_dir.is_dir():
+            for path in sorted(tools_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(agent_dir)
+                if _is_excluded(rel):
+                    continue
+                zf.write(path, rel.as_posix())
         for path in sorted(pkg_dir.rglob("*")):
             if not path.is_file():
                 continue
