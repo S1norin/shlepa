@@ -17,10 +17,10 @@ class ExplorePhase(Phase):
     id = "explore"
 
     def prompt(self, state: RunState) -> str:
+        # The task lives in the system message (constant for the whole run);
+        # the user message carries only the phase instructions.
         return render_user(
-            state.cfg,
-            self.id,
-            {"task": state.task, "phase_prompt": load_prompt(f"{self.id}.md")},
+            state.cfg, self.id, {"phase_prompt": load_prompt(f"{self.id}.md")}
         )
 
     def route(self, result: PhaseResult, state: RunState) -> str | None:

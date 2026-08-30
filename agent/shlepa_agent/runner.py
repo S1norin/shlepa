@@ -119,13 +119,15 @@ def build_phase_agent(
     model: TrackedModel,
     agent_cfg: AgentConfig,
     phase: Phase,
+    task: str,
     instrument: bool = False,
 ) -> Agent[AgentDeps, str]:
     """Build a pydantic-ai agent for one phase (toolset from phase config).
 
-    The system prompt is rendered from the common request template (base.md
-    plus the per-tool usage notes); tool descriptions themselves live in the
-    tool modules (pydantic-ai tool spec).
+    The system prompt is rendered from the common request template (base.md,
+    the per-tool usage notes, and the task text — constant for the whole
+    run); tool descriptions themselves live in the tool modules
+    (pydantic-ai tool spec).
     """
     tools = get_tools(agent_cfg, phase.tools(agent_cfg))
     system = render_system(
@@ -134,6 +136,7 @@ def build_phase_agent(
         {
             "system": load_prompt("base.md"),
             "tools": "\n".join(f"- {tool.note}" for tool in tools),
+            "task": task,
         },
     )
     agent = Agent(model, deps_type=AgentDeps, system_prompt=system)
@@ -272,7 +275,9 @@ async def _run_phase_with_retries(
     (emergency) phase is never retried. Each retry is a fresh run sharing
     the global TrackedModel budget.
     """
-    result = await _run_phase(state, phase, build_phase_agent(state.model, state.cfg, phase, instrument))
+    result = await _run_phase(
+        state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
+    )
     max_retries = 0 if phase.terminal else state.cfg.phases[phase.id].max_retries
     attempts = 1
     while result.status == "error" and attempts <= max_retries:
@@ -285,7 +290,7 @@ async def _run_phase_with_retries(
             error=result.error or "",
         )
         result = await _run_phase(
-            state, phase, build_phase_agent(state.model, state.cfg, phase, instrument)
+            state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
         )
     return result
 

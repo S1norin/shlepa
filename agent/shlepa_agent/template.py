@@ -3,9 +3,10 @@
 The model-facing request is assembled from the ordered block list in
 ``[template].blocks`` of config.toml. Each block renders as
 ``{before}{content}{after}``; a block with empty content is dropped
-together with its wrappers. The ``system`` and ``tools`` blocks render
-into the system message; every other block renders into the per-phase
-user message, both in list order.
+together with its wrappers. The ``system``, ``tools`` and ``task`` blocks
+render into the system message (the task is constant for the whole run);
+every other block renders into the per-phase user message, both in list
+order.
 
 Wrapper precedence (per block): phase code (``phase_wrappers`` argument)
 > ``[phases.<id>.template.<block>]`` > ``[template].wrappers.<block>``.
@@ -22,8 +23,9 @@ from shlepa_agent.config import AgentConfig, BlockWrapper
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 #: Blocks rendered into the system message (in config list order); every
-#: other configured block renders into the user message.
-SYSTEM_BLOCKS = ("system", "tools")
+#: other configured block renders into the user message. The task block
+#: lives in the system message because it never changes during the run.
+SYSTEM_BLOCKS = ("system", "tools", "task")
 
 
 def load_prompt(name: str) -> str:
@@ -71,7 +73,7 @@ def render_system(
     contents: dict[str, str],
     phase_wrappers: dict[str, BlockWrapper] | None = None,
 ) -> str:
-    """Render the system-message blocks (``system``, ``tools``) of a phase."""
+    """Render the system-message blocks (``system``, ``tools``, ``task``) of a phase."""
     blocks = [b for b in cfg.template.blocks if b in SYSTEM_BLOCKS]
     return _render_blocks(cfg, phase_id, blocks, contents, phase_wrappers)
 

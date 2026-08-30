@@ -1,9 +1,9 @@
 """Integration: the v2 block template end-to-end through the stub OpenAI server.
 
-Covers the t3 acceptance criteria: the explore request's first user message
-contains the rendered task, the system message carries base.md content and
-per-tool notes, and the commit request carries the commit text plus the
-resumed history.
+Covers the t3 acceptance criteria: the system message carries base.md
+content, per-tool notes and the task text (constant for the run), the explore
+user message carries the phase instructions, and the commit request carries
+the commit text plus the resumed history.
 """
 
 import asyncio
@@ -33,9 +33,11 @@ def test_explore_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "AVAILABLE TOOLS" in system
     for tool in ("read", "write", "edit", "bash"):
         assert tool in system, tool
-    # first user message: rendered task + phase instructions
-    assert "Create hello.txt with the exact content hello" in user
+    # the task text renders into the system message (constant for the run)
+    assert "Create hello.txt with the exact content hello" in system
+    # first user message: phase instructions only
     assert "PHASE INSTRUCTIONS" in user
+    assert "Create hello.txt with the exact content hello" not in user
     assert "NO NOTES" not in user and "NOTES\n" not in user  # empty note block dropped
     # reserved blocks render nothing while empty
     assert "ADDITIONAL CONTEXT" not in user
@@ -68,7 +70,7 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
     assert "PHASE INSTRUCTIONS" in last_user
     # resumed history: the rendered explore user message is still in the request
     assert any(
-        "Create hello.txt with the exact content hello" in (m.get("content") or "")
+        "Follow the protocol above" in (m.get("content") or "")
         for m in messages
         if m["role"] == "user" and m is not messages[-1]
     )

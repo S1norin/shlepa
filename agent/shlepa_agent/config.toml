@@ -63,10 +63,11 @@ time = 80.0
 reasoning_effort = "low"
 
 [template]
-# Render order of the common request template. "system" and "tools" render
-# into the system message; all other blocks render into the per-phase user
-# message, in this order. A block with empty content is dropped together
-# with its wrappers. "note" is reserved for the future self-note tool.
+# Render order of the common request template. "system", "tools" and "task"
+# render into the system message (the task never changes during the run);
+# all other blocks render into the per-phase user message, in this order.
+# A block with empty content is dropped together with its wrappers.
+# "note" is reserved for the future self-note tool.
 blocks = [
     "system",
     "tools",

@@ -79,8 +79,8 @@ def test_build_phase_agent_instrument_flag(tmp_path):
         "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
     )
     phase = get_phase("explore")
-    instrumented = build_phase_agent(model, cfg, phase, instrument=True)
-    plain = build_phase_agent(model, cfg, phase, instrument=False)
+    instrumented = build_phase_agent(model, cfg, phase, "some task", instrument=True)
+    plain = build_phase_agent(model, cfg, phase, "some task", instrument=False)
     assert instrumented.instrument is True
     assert not plain.instrument  # untouched default is None
 

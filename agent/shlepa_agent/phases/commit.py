@@ -43,12 +43,11 @@ class CommitPhase(Phase):
         return trim_history(state.model.last_messages)
 
     def prompt(self, state: RunState) -> str:
-        # The task block is repeated only when there is no history to resume
-        # (otherwise the task is already in the conversation).
-        contents: dict[str, str] = {"phase_prompt": load_prompt(f"{self.id}.md")}
-        if not self.history(state):
-            contents["task"] = state.task
-        return render_user(state.cfg, self.id, contents)
+        # The task is already in the system message (and in the resumed
+        # history), so the user message carries only the phase instructions.
+        return render_user(
+            state.cfg, self.id, {"phase_prompt": load_prompt(f"{self.id}.md")}
+        )
 
     def route(self, result: PhaseResult, state: RunState) -> str | None:
         return None

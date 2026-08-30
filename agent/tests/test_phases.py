@@ -137,25 +137,26 @@ def test_registry_resolves_configured_phase_ids():
 
 
 # -- prompts -------------------------------------------------------------------
-def test_explore_prompt_renders_task_and_phase_instructions():
+def test_explore_prompt_carries_phase_instructions_only():
     phase = ExplorePhase()
     prompt = phase.prompt(_state())
-    assert "Create hello.txt with the exact content hello" in prompt
     assert "PHASE INSTRUCTIONS" in prompt
+    # the task text lives in the system message now, not in the user prompt
+    assert "Create hello.txt with the exact content hello" not in prompt
 
 
-def test_commit_prompt_repeats_task_only_without_history():
+def test_commit_prompt_never_repeats_task():
     phase = CommitPhase()
-    # no history -> the task is repeated
+    # the task is in the system message (and in the resumed history), so the
+    # commit user prompt carries only the phase instructions
     no_history = _state(last_messages=[])
-    assert "Create hello.txt" in phase.prompt(no_history)
-    # real history -> the task is already in the conversation
     with_history = _state(
         last_messages=[
             ModelRequest(parts=[TextPart("task text")]),
             ModelResponse(parts=[TextPart("answer")]),
         ]
     )
-    prompt = phase.prompt(with_history)
-    assert "Create hello.txt with the exact content hello" not in prompt
-    assert "BUDGET EXHAUSTED" in prompt
+    for state in (no_history, with_history):
+        prompt = phase.prompt(state)
+        assert "Create hello.txt" not in prompt
+        assert "BUDGET EXHAUSTED" in prompt
