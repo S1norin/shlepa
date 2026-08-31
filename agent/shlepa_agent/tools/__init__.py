@@ -11,6 +11,7 @@ from __future__ import annotations
 from shlepa_agent.config import AgentConfig
 from shlepa_agent.tools.base import AgentDeps, Tool, resolve_path
 from shlepa_agent.tools.bash import BASH_TOOL
+from shlepa_agent.tools.code_search import CODE_SEARCH_TOOL, FILE_OUTLINE_TOOL
 from shlepa_agent.tools.edit import EDIT_TOOL
 from shlepa_agent.tools.read import READ_TOOL
 from shlepa_agent.tools.write import WRITE_TOOL
@@ -22,6 +23,11 @@ ALL_TOOLS: dict[str, Tool] = {
         WRITE_TOOL,
         EDIT_TOOL,
         BASH_TOOL,
+        # Off by default: registered only when AGENT_CODE_SEARCH is set
+        # (the config layer enables them and appends the names to the
+        # phase tool lists; get_tools skips disabled tools).
+        CODE_SEARCH_TOOL,
+        FILE_OUTLINE_TOOL,
     )
 }
 

@@ -4,8 +4,9 @@ Single source of tuning values: ``shlepa_agent/config.toml`` (shipped inside
 the package, carried by the submission zip). Environment variables override
 individual keys (``SHLEPA_*`` names; the legacy ``AGENT_*`` names were
 dropped with the v2 architecture — see ``docs/agent-config.md`` for the
-mapping). Invalid env values are ignored, matching the old ``_env_*``
-helpers.
+mapping; ``AGENT_CODE_SEARCH`` is the one deliberate exception, wired in
+``_apply_code_search_env``). Invalid env values are ignored, matching the
+old ``_env_*`` helpers.
 """
 
 from __future__ import annotations
@@ -81,12 +82,32 @@ class ToolsConfig(BaseModel):
     read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
     write: ToolConfig = ToolConfig()
     edit: ToolConfig = ToolConfig()
+    # Code-search tools: OFF by default. ``AGENT_CODE_SEARCH`` (rg | sifs)
+    # enables them and picks the engine (see _apply_code_search_env). The
+    # ``timeout`` is the per-call wall clock (the v5 regime bash cap; the
+    # engine's own 60s rg wall is too high for a tool call).
+    code_search: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
+    file_outline: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
 
     def get(self, name: str) -> ToolConfig:
         try:
             return getattr(self, name)
         except AttributeError:
             raise KeyError(f"unknown tool: {name}") from None
+
+
+class CodeSearchConfig(BaseModel):
+    """Engine selection for the code_search/file_outline tools.
+
+    Off by default: no section for this lives in config.toml, and the tools
+    are absent unless ``AGENT_CODE_SEARCH`` is set (see
+    ``_apply_code_search_env``). Keeping the switch in the env (not the
+    toml) is what makes the default agent byte-identical to the baseline.
+    """
+
+    #: Engine: "auto" (default = tools off), "rg" (ripgrep fixed-string
+    #: scan), or "sifs" (bundled SIFS, BM25-offline).
+    engine: str = "auto"
 
 
 class BlockWrapper(BaseModel):
@@ -134,6 +155,7 @@ class AgentConfig(BaseModel):
     agent: AgentSection = Field(default_factory=AgentSection)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
     phases: dict[str, PhaseConfig] = Field(min_length=1)
     template: TemplateConfig = Field(
         default_factory=lambda: TemplateConfig(blocks=["system", "tools", "task"])
@@ -162,6 +184,7 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_BASH_MAX_OUTPUT": ("tools.bash.max_output", int),
     "SHLEPA_READ_MAX_LIMIT": ("tools.read.max_limit", int),
     "SHLEPA_READ_MAX_OUTPUT": ("tools.read.max_output", int),
+    "SHLEPA_CODE_SEARCH_TIMEOUT": ("tools.code_search.timeout", float),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
 }
@@ -190,10 +213,42 @@ def _apply_env_overrides(cfg: AgentConfig) -> None:
             setattr(node, last, value)
 
 
+#: The one deliberate AGENT_* env var (the legacy set was dropped in v2):
+#: dev switch for the code-search toolset arms (#51). Valid values only.
+CODE_SEARCH_ENV = "AGENT_CODE_SEARCH"
+CODE_SEARCH_ENGINES = ("rg", "sifs")
+
+
+def _apply_code_search_env(cfg: AgentConfig) -> None:
+    """Enable code_search/file_outline from AGENT_CODE_SEARCH (rg | sifs).
+
+    Unset or an invalid value leaves the config untouched (tools off,
+    baseline byte-identical). When set, both tools are enabled, the engine
+    is stored (``cfg.code_search.engine``), and the tool names are appended
+    to every phase's tool list — their notes then render into the system
+    prompt automatically. Shaped for the named toolset arms (#51): an arm
+    is exactly this config mutation.
+    """
+    raw = os.environ.get(CODE_SEARCH_ENV)
+    if raw is None or not raw.strip():
+        return
+    engine = raw.strip().lower()
+    if engine not in CODE_SEARCH_ENGINES:
+        return  # invalid value: ignore, tools stay off
+    cfg.code_search.engine = engine
+    cfg.tools.code_search.enabled = True
+    cfg.tools.file_outline.enabled = True
+    for phase in cfg.phases.values():
+        for name in ("code_search", "file_outline"):
+            if name not in phase.tools:
+                phase.tools.append(name)
+
+
 def load_config(path: Path | str | None = None) -> AgentConfig:
     """Load the agent config: packaged config.toml + env overrides."""
     p = Path(path) if path else DEFAULT_CONFIG_PATH
     data = tomllib.loads(p.read_text(encoding="utf-8"))
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
+    _apply_code_search_env(cfg)
     return cfg
