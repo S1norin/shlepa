@@ -189,7 +189,10 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
   when `send_temp` is enabled; default: not sent, the endpoint decides).
 - `[budget]` — global wall-clock/token/request budgets (TrackedModel).
 - `[tools.*]` — per-tool `enabled` plus caps: `timeout`/`max_timeout`/
-  `max_output` (bash), `max_limit`/`max_output` (read).
+  `max_output` (bash), `max_limit`/`max_output`/`max_file_mb` (read),
+  `max_file_mb` (edit). File tools (read/write/edit) have a hard 5s
+  per-call timeout; read/edit reject files larger than `max_file_mb`
+  (default 100 MB) with a bash hint instead of loading them.
 - `[phases.*]` — per-phase toolset, request/time slices, advisory soft
   limits, reasoning effort, retry count, template wrapper overrides.
 - `[template]` — ordered block list + per-block wrappers for the common

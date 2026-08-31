@@ -73,18 +73,23 @@ max_output = 16000
 
 [tools.read]
 # Paged reads: at most max_limit lines per call (default page when the model
-# omits limit), result capped at max_output chars.
+# omits limit), result capped at max_output chars. Files larger than
+# max_file_mb are rejected (with a bash hint) instead of being loaded.
 enabled = true
 max_limit = 100
 max_output = 4000
+max_file_mb = 100.0
 
 [tools.write]
-# New files only (never overwrites).
+# New files only (never overwrites). Every read/write/edit call is capped at
+# a 5s per-call timeout (a hang there must not eat the whole run).
 enabled = true
 
 [tools.edit]
 # Precise replacements in existing files (edits[] with optional 0-based line).
+# Files larger than max_file_mb are rejected (with a bash hint).
 enabled = true
+max_file_mb = 100.0
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a

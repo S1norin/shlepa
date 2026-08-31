@@ -95,6 +95,8 @@ class ToolConfig(BaseModel):
     - ``max_timeout``: bash hard cap for the per-call timeout (seconds)
     - ``max_limit``: read max lines per call
     - ``max_output``: hard char cap on the tool result (read: 4000, bash: 16000)
+    - ``max_file_mb``: file size cap for read/edit (default 100 MB; larger
+      files are rejected with a bash hint instead of being loaded)
     """
 
     enabled: bool = True
@@ -102,6 +104,7 @@ class ToolConfig(BaseModel):
     max_timeout: float | None = None
     max_output: int | None = None
     max_limit: int | None = None
+    max_file_mb: float | None = None
 
 
 class ToolsConfig(BaseModel):
