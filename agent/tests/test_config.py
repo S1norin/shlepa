@@ -10,13 +10,12 @@ def test_agent_section_defaults():
     # packaged pipeline is budget-driven: zero/empty = "derive from T"
     assert cfg.agent.entry == ""
     assert cfg.agent.emergency == "emergency"
-    assert cfg.agent.max_cycles == 0
     assert cfg.agent.commit_deadline == 0.0
     assert cfg.agent.max_steps == 0
     assert cfg.agent.temp == 0.2
 
 
-def test_build_budget_derives_v4_world_for_600s(monkeypatch):
+def test_build_budget_derives_v5_world_for_600s(monkeypatch):
     from shlepa_agent.budget import TIME_ENV_CANDIDATES
     from shlepa_agent.config import build_budget
 
@@ -26,17 +25,19 @@ def test_build_budget_derives_v4_world_for_600s(monkeypatch):
     budget = build_budget(cfg, "a task with no explicit limit")
     assert budget.T == 600.0
     assert budget.source in ("fallback", "config:default")
+    # v5 fixed regime: caps are constants, only hard follows T
     assert budget.hard == pytest.approx(585.0)
-    assert budget.reserve == pytest.approx(60.0)
+    assert budget.margin == pytest.approx(15.0)
     assert budget.plan == pytest.approx(60.0)
-    assert budget.work == pytest.approx(180.0)
-    assert budget.max_cycles == 2
-    assert budget.commit_cap == pytest.approx(120.0)
-    # derived pipeline values the runner uses
-    assert (cfg.agent.entry or ("plan" if budget.plan > 0 else "work")) == "plan"
-    assert (cfg.agent.max_cycles or budget.max_cycles) == 2
-    deadline = min(budget.plan + budget.work + budget.commit_cap, budget.hard - budget.reserve)
-    assert deadline == pytest.approx(360.0)  # < old static 520s
+    assert budget.work == pytest.approx(120.0)
+    assert budget.review == pytest.approx(45.0)
+    assert budget.bash_cap == pytest.approx(30.0)
+    assert budget.llm_wall == pytest.approx(180.0)
+    # derived pipeline values the runner uses: a full 225s cycle fits 585s
+    full_cycle = budget.plan + budget.work + budget.review
+    assert (cfg.agent.entry or ("plan" if budget.hard >= full_cycle else "work")) == "plan"
+    deadline = min(full_cycle, budget.hard)
+    assert deadline == pytest.approx(225.0)
 
 
 def test_budget_values_match_v1_defaults():
@@ -46,12 +47,9 @@ def test_budget_values_match_v1_defaults():
     assert b.hard_time == 585.0
     assert b.soft_time == 500.0
     assert b.t_fallback == 600.0
-    assert b.request_limit == 90
-    assert b.token_budget == 300000
     assert b.max_tokens == 16384
     assert b.request_timeout == 180.0
-    assert b.request_wall == 240.0
-    assert b.form == {}  # v4 defaults in budget.BudgetForm
+    assert b.request_wall == 180.0
 
 
 def test_tool_values():
@@ -126,13 +124,11 @@ def test_env_override_wins(monkeypatch):
     monkeypatch.setenv("SHLEPA_BASH_TIMEOUT", "90")
     monkeypatch.setenv("SHLEPA_TEMP", "0.1")
     monkeypatch.setenv("SHLEPA_COMMIT_DEADLINE", "500")
-    monkeypatch.setenv("SHLEPA_MAX_CYCLES", "3")
     cfg = load_config()
     assert cfg.budget.hard_time == 600.0
     assert cfg.tools.bash.timeout == 90.0
     assert cfg.agent.temp == 0.1
     assert cfg.agent.commit_deadline == 500.0
-    assert cfg.agent.max_cycles == 3
 
 
 def test_invalid_env_override_ignored(monkeypatch):

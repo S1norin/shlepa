@@ -106,27 +106,31 @@ def test_hard_time_still_raises(tmp_path):
         asyncio.run(model.request([], {}, None))
 
 
-def test_global_token_budget_raises(tmp_path):
-    """The token budget is per-task (cross-phase), not per-phase: once the
-    cumulative usage hits it, the next request is refused."""
-    from shlepa_agent.model import BudgetExceeded
+def test_token_usage_counted_but_not_limited(tmp_path, monkeypatch):
+    """v5: token usage is accumulated and logged (tie-break analysis) but
+    never limits requests — no token budget exists anymore."""
+    import shlepa_agent.model as model_mod
 
-    model = _make_model(tmp_path, hard_time=100.0, soft_time=10.0)
-    assert model.token_budget == 300_000
-    model._cum_input = 290_000
-    model._cum_output = 10_000  # 300k total: at the limit
-    with pytest.raises(BudgetExceeded, match="token budget"):
-        asyncio.run(model.request([], {}, None))
+    model = _make_model(tmp_path, hard_time=1000.0, soft_time=10.0)
+    model._cum_input = 2_900_000  # far past any old budget
+    model._cum_output = 10_000
+
+    async def fake_super(self, messages, ms, params):
+        return "ok"
+
+    monkeypatch.setattr(model_mod.OpenAIChatModel, "request", fake_super)
+    assert asyncio.run(model.request([], {}, None)) == "ok"
 
 
 def test_request_caps_shrink_by_margin(tmp_path):
-    """v4: per-request timeout/wall shrink by (time_left - margin)."""
+    """v5: per-request timeout/wall shrink by (time_left - margin)."""
     from shlepa_agent.budget import derive_budget
 
     model = _make_model(tmp_path, hard_time=100.0, soft_time=10.0)
     budget = derive_budget(600.0)  # margin 15s
     model.budget = budget
     model.hard = budget.hard
+    model.llm_wall = budget.llm_wall
     model.t0 -= 500.0  # time_left = 85s
     assert model._request_timeout() == pytest.approx(85.0 - 15.0)
     assert model._request_wall() == pytest.approx(85.0 - 15.0)

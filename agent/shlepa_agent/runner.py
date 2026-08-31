@@ -62,7 +62,6 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, UsageLimitExceeded
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.usage import UsageLimits
 
 from shlepa_agent.budget import Budget
 from shlepa_agent.config import AgentConfig, build_budget, load_config
@@ -214,12 +213,12 @@ def _phase_cap(
     if budget is None:
         return max(0.0, remaining)
     if phase_id == "plan":
-        # A plan only makes sense when a work run + a commit still fit.
+        # A plan only makes sense when a work run + a review still fit.
         cap = min(budget.plan, remaining - (MIN_RUN_WINDOW_S + COMMIT_MIN_S))
     elif phase_id == "work":
         cap = min(budget.work, remaining - COMMIT_MIN_S)
-    elif phase_id == "commit":
-        cap = min(budget.commit_cap, remaining)
+    elif phase_id == "commit":  # review phase
+        cap = min(budget.review, remaining)
     else:  # emergency: run until the hard stop
         cap = remaining
     return max(0.0, cap)
@@ -266,12 +265,9 @@ async def _run_phase(
                 phase.prompt(state),
                 deps=state.deps,
                 model_settings=model_settings,
-                usage_limits=UsageLimits(
-                    request_limit=limits.requests,
-                    total_tokens_limit=(
-                        budget.token_budget if budget is not None else cfg.budget.token_budget
-                    ),
-                ),
+                # v5: no UsageLimits — token and request-count limits are
+                # removed; the time caps (phase wall + model gates) are the
+                # only bounds. Token usage stays logged for analysis.
                 message_history=history,
             ) as events:
                 async for event in events:
@@ -421,7 +417,7 @@ async def _pipeline(
     instrument: bool,
     phase_factory: Callable[[str], Phase],
     entry: str,
-    max_cycles: int,
+    max_cycles: int | None,
     commit_deadline: float,
     max_steps: int,
 ) -> tuple[str, str]:
@@ -471,25 +467,12 @@ async def _pipeline(
                 hard_time=hard,
             )
             phase_id = cfg.agent.emergency
-        # Budget-disabled plan (T too small for a plan phase): the entry
-        # walks straight to work (a replan never comes here — it is gated
-        # by the replan fit check).
+        # Step guard (dev knob only; v5 default: off — time is the bound).
         if (
-            phase_id == "plan"
-            and budget is not None
-            and budget.plan <= 0
-            and state.cycles == 0
+            max_steps is not None
+            and steps >= max_steps
+            and phase_id not in ("commit", cfg.agent.emergency)
         ):
-            _log_event(
-                "budget",
-                reason="plan_disabled",
-                detail=f"T={budget.T:.0f}s leaves no plan phase; entering work",
-                elapsed_s=round(elapsed, 1),
-            )
-            phase_id = "work"
-            continue
-        # Step guard: total phase runs exhausted -> emergency, then stop.
-        if steps >= max_steps and phase_id not in ("commit", cfg.agent.emergency):
             _log_event(
                 "budget",
                 reason="max_steps",
@@ -503,7 +486,6 @@ async def _pipeline(
             id=phase.id,
             start=True,
             cycle=state.cycles,
-            requests=phase.limits(cfg).requests,
             elapsed_s=round(state.model.elapsed(), 1),
         )
         start_t = state.model.elapsed()
@@ -571,38 +553,31 @@ async def _pipeline(
                 continue
             if decision == "replan":
                 state.cycles += 1
-                # A replan is only taken when the budget still fits one more
-                # full cycle (plan + work + a 30s commit window).
+                # A replan is only taken when a full cycle (plan + work +
+                # review) still fits before the hard stop. There is NO cycle
+                # cap: rounds are time-driven.
                 if budget is not None:
                     replan_fits = (
-                        budget.plan > 0
-                        and (budget.hard - state.model.elapsed())
-                        >= budget.plan + budget.work + COMMIT_MIN_S
+                        (budget.hard - state.model.elapsed())
+                        >= budget.plan + budget.work + budget.review
                     )
                 else:
                     replan_fits = True
-                if state.cycles < max_cycles and replan_fits:
+                if replan_fits and (max_cycles is None or state.cycles < max_cycles):
                     final_status = "done"
                     phase_id = "plan"
                     continue
-                if state.cycles >= max_cycles:
-                    _log_event(
-                        "budget",
-                        reason="max_cycles",
-                        detail=f"replan cycle cap {max_cycles} reached",
-                    )
-                else:
-                    _log_event(
-                        "budget",
-                        reason="replan_no_time",
-                        detail=(
-                            f"replan not taken: not enough time left for a "
-                            f"full cycle (plan {budget.plan:.0f}s + work "
-                            f"{budget.work:.0f}s + {COMMIT_MIN_S:.0f}s commit)"
-                            if budget is not None
-                            else "replan not taken: no time left"
-                        ),
-                    )
+                _log_event(
+                    "budget",
+                    reason="replan_no_time",
+                    detail=(
+                        f"replan not taken: not enough time left for a "
+                        f"full cycle (plan {budget.plan:.0f}s + work "
+                        f"{budget.work:.0f}s + {budget.review:.0f}s review)"
+                        if budget is not None
+                        else "replan not taken: no time left"
+                    ),
+                )
                 final_status = "budget"
                 phase_id = "commit"
                 continue
@@ -633,19 +608,18 @@ async def run_prompt(
         # Derive the per-run budget from the task time limit T (env ->
         # task.toml probe -> instruction text -> config fallback).
         budget = build_budget(cfg, prompt)
-        # Budget-derived pipeline values; explicit positive config values
-        # override the derivation (dev knob).
-        entry = cfg.agent.entry or ("plan" if budget.plan > 0 else "work")
-        max_cycles = cfg.agent.max_cycles or budget.max_cycles
+        # v5 pipeline values: entry is "plan" only when a full cycle
+        # (plan + work + review) fits before the hard stop; there is NO
+        # cycle cap — rounds are time-driven.
+        full_cycle = budget.plan + budget.work + budget.review
+        entry = cfg.agent.entry or ("plan" if budget.hard >= full_cycle else "work")
+        max_cycles: int | None = None  # v5: no cycle cap
         commit_deadline = (
             cfg.agent.commit_deadline
             if cfg.agent.commit_deadline > 0
-            else min(
-                budget.plan + budget.work + budget.commit_cap,
-                budget.hard - budget.reserve,
-            )
+            else min(full_cycle, budget.hard)
         )
-        max_steps = cfg.agent.max_steps or (2 * max_cycles + 2)
+        max_steps: int | None = cfg.agent.max_steps or None  # dev knob, off by default
 
         workdir = _resolve_workdir()
         model = TrackedModel(
@@ -672,21 +646,19 @@ async def run_prompt(
             prompt=prompt,
             temp=cfg.agent.temp,
             # Stable CLI-consumed fields (derived values now):
-            soft_time=round(budget.hard - budget.reserve, 1),
+            soft_time=round(budget.hard - budget.margin, 1),
             hard_time=round(budget.hard, 1),
-            request_limit=cfg.budget.request_limit,
-            token_budget=budget.token_budget,
             entry=entry,
             emergency=cfg.agent.emergency,
-            max_cycles=max_cycles,
             commit_deadline=round(commit_deadline, 1),
-            # Adaptive budget details (additive, CLI ignores unknown fields):
+            # v5 fixed-regime details (additive, CLI ignores unknown fields):
             t=round(budget.T, 1),
             t_source=budget.source,
             plan_cap=round(budget.plan, 1),
             work_cap=round(budget.work, 1),
-            reserve=round(budget.reserve, 1),
+            review_cap=round(budget.review, 1),
             bash_cap=round(budget.bash_cap, 1),
+            llm_wall=round(budget.llm_wall, 1),
             max_steps=max_steps,
         )
         _log_event(

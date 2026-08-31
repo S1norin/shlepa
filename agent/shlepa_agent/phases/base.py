@@ -125,9 +125,9 @@ class Phase(ABC):
                 parts.append(f"aim to finish within {max(10.0, b.plan - 10.0):.0f}s")
             elif self.id == "work":
                 parts.append(f"this cycle is hard-capped at {b.work:.0f}s")
-                parts.append(f"this is cycle {state.cycles + 1} of at most {b.max_cycles}")
-            elif self.id == "commit":
-                cap = min(b.commit_cap, max(0.0, b.hard - state.model.elapsed()))
+                parts.append(f"this is cycle {state.cycles + 1}")
+            elif self.id == "commit":  # review phase
+                cap = min(b.review, max(0.0, b.hard - state.model.elapsed()))
                 parts.append(f"this phase is hard-capped at {max(cap, 1.0):.0f}s")
         else:
             if l.time is not None:

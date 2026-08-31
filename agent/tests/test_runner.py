@@ -53,7 +53,7 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.
     )
 
 
-def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8, max_cycles=2):
+def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8):
     """Small test config for the 4-phase pipeline (short budgets)."""
     p = tmp_path / "cfg.toml"
     p.write_text(
@@ -62,15 +62,12 @@ def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, 
 temp = 0.2
 entry = "plan"
 emergency = "emergency"
-max_cycles = {max_cycles}
 commit_deadline = {deadline}
 max_steps = {max_steps}
 
 [budget]
 hard_time = {hard}
 soft_time = 450.0
-request_limit = 90
-token_budget = 100000
 max_tokens = 16384
 request_timeout = 30.0
 request_wall = 60.0
@@ -243,25 +240,24 @@ def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_pa
     assert len(stub_state["bodies"]) == 2
 
 
-def test_replan_allowed_then_cycle_cap_forces_commit(monkeypatch, stub_openai, tmp_path, events):
+def test_replan_without_cycle_cap(monkeypatch, stub_openai, tmp_path, events):
+    # v5: there is NO cycle cap — replans are only gated by the remaining
+    # time, so a second replan is still taken before the run ends.
     stub_state["script"] = [
         _plan_step("work"),      # plan, cycle 1
-        _work_step("replan"),    # work: replan (cycles 1 < 2 -> allowed)
+        _work_step("replan"),    # replan allowed (time left)
         _plan_step("work"),      # plan, cycle 2
-        _work_step("replan"),    # work: replan (cap reached -> forced commit)
+        _work_step("replan"),    # replan still allowed (no cycle cap)
+        _plan_step("work"),      # plan, cycle 3
+        _work_step("commit"),
         _commit_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "budget"  # forced commit after the cycle cap
+    assert _status(events) == "done"
     plan_starts = _phase_starts(events, "plan")
-    work_starts = _phase_starts(events, "work")
-    assert [e["cycle"] for e in plan_starts] == [0, 1]
-    assert len(work_starts) == 2
+    assert [e["cycle"] for e in plan_starts] == [0, 1, 2]
     assert _phase_starts(events, "commit")
-    assert any(
-        e.get("event") == "budget" and e.get("reason") == "max_cycles" for e in events
-    )
-    assert len(stub_state["bodies"]) == 5
+    assert len(stub_state["bodies"]) == 7
 
 
 # -- final_ask handoff on phase hard timeout ---------------------------------
@@ -402,13 +398,12 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "temp",
         "soft_time",
         "hard_time",
-        "request_limit",
-        "token_budget",
     ):
         assert field in start, f"agent_start lost stable field {field}"
-    # adaptive budget details are additive (unknown to the CLI, but logged)
+    # v5 fixed-regime details are additive (unknown to the CLI, but logged)
     assert start["hard_time"] == pytest.approx(585.0)  # derived from T=600
-    assert {"t", "t_source", "plan_cap", "work_cap", "reserve", "bash_cap"} <= set(start)
+    assert {"t", "t_source", "plan_cap", "work_cap", "review_cap",
+            "bash_cap", "llm_wall"} <= set(start)
     usage = next(e for e in events if e.get("event") == "usage")
     for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
         assert field in usage

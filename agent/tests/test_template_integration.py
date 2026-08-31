@@ -76,12 +76,19 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
 
     reset_stub_state()
     stub_state["script"] = [
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # plan req 1
-        {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # plan req 2
-        {"final": "FINAL-ASK"},  # final_ask (free text, no tools)
+        {
+            "tool_call": {  # the plan request (typed PlanResult)
+                "name": "final_result",
+                "arguments": {
+                    "goal": "write /app/hello.txt",
+                    "steps": ["echo hello > /app/hello.txt"],
+                    "decision": "work",
+                },
+            }
+        },
         {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # work req 1
         {
-            "tool_call": {
+            "tool_call": {  # work req 2 (typed WorkResult)
                 "name": "final_result",
                 "arguments": {
                     "summary": "wrote hello.txt",
@@ -90,7 +97,7 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
                     "decision": "commit",
                 },
             }
-        },  # work req 2
+        },
         {
             "tool_call": {  # the commit request (typed CommitResult)
                 "name": "final_result",
@@ -103,18 +110,14 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
             }
         },
     ]
-    # plan request cap 2 -> the third plan request raises UsageLimitExceeded
-    # (blocked before it is sent): final_ask, then work, then commit. The
-    # work phase makes a tool call first so its conversation (prompt + tool
-    # call) survives trim_history into the commit request.
-    from shlepa_agent.config import load_config
-
-    cfg = load_config().model_copy(deep=True)
-    cfg.phases["plan"].requests = 2
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    # v5: phases are bounded by time, not by request counts — the plan phase
+    # ends with its typed PlanResult. The work phase makes a tool call first
+    # so its conversation (prompt + tool call) survives trim_history into the
+    # commit request.
+    _run(monkeypatch, stub_openai, tmp_path)
     bodies = stub_state["bodies"]
-    assert len(bodies) == 6, (
-        f"expected plan x2 + final_ask + work x2 + commit, got {len(bodies)}"
+    assert len(bodies) == 4, (
+        f"expected plan + work x2 + commit, got {len(bodies)}"
     )
     messages = bodies[-1]["messages"]
     last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")

@@ -201,8 +201,8 @@ def test_limits_note_rendered_budget_values():
     assert "hard-capped at 60s" in plan_note
     assert "15000" in plan_note
     commit_note = CommitPhase().limits_note(state)
-    # commit gets its derived cap (120s at T=600)
-    assert "hard-capped at 120s" in commit_note
+    # the review (commit) phase gets its fixed regime cap (45s)
+    assert "hard-capped at 45s" in commit_note
 
 
 def test_limits_note_legacy_without_budget():
@@ -261,7 +261,7 @@ def test_work_prompt_carries_plan_result():
     assert "RESULTS OF PREVIOUS PHASES" in prompt
     assert "write /app/out.txt" in prompt
     assert "final_result" in prompt
-    assert "180s" in prompt  # advisory hard cap
+    assert "120s" in prompt  # fixed regime hard cap
 
 
 def test_work_prompt_on_retry_carries_previous_attempt_error():

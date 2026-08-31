@@ -11,8 +11,10 @@ TrackedModel wraps OpenAIChatModel with:
   the per-request timeout/wall and the request-start gate are derived from
   the task time limit T instead of the static [budget] reference values.
 
-The static [budget] section always provides the global caps: request_limit
-(the anti-loop guard), max_tokens, request_timeout, request_wall.
+The fixed per-run budget (``budget.Budget``, v5 regime) provides the hard
+stop, the per-request wall (``llm_wall``) and the request-start gate. There
+is NO token budget and NO request-count limit: token usage is logged per
+request (telemetry / tie-break analysis) but never enforced.
 """
 
 from __future__ import annotations
@@ -96,7 +98,12 @@ class _WallCappedStream:
 
 
 class TrackedModel(OpenAIChatModel):
-    """OpenAIChatModel with wall-clock/token budgeting and per-request usage logs."""
+    """OpenAIChatModel with wall-clock budgeting and per-request usage logs.
+
+    Tokens are counted and logged only (tie-break analysis); they are never
+    limited. Requests are only gated by time (hard stop, per-request wall,
+    request-start gate).
+    """
 
     def __init__(
         self,
@@ -111,11 +118,11 @@ class TrackedModel(OpenAIChatModel):
         if budget is not None:
             self.hard = budget.hard
             self.gate_min: float | None = budget.gate_min
-            self.token_budget = budget.token_budget
+            self.llm_wall = budget.llm_wall
         else:
             self.hard = agent_cfg.budget.hard_time
             self.gate_min = None
-            self.token_budget = agent_cfg.budget.token_budget
+            self.llm_wall = agent_cfg.budget.request_wall
         self.t0 = time.monotonic()
         self.last_messages: list[Any] = []
         self._pending_stream: Any = None
@@ -128,7 +135,7 @@ class TrackedModel(OpenAIChatModel):
         return max(0.0, self.hard - self.elapsed())
 
     def _margin(self) -> float:
-        """Safety margin reserved for the finalize tail (0 in legacy mode)."""
+        """Safety margin (15s) reserved for the run tail (0 in legacy mode)."""
         return self.budget.margin if self.budget is not None else 0.0
 
     def _request_timeout(self) -> float:
@@ -142,22 +149,13 @@ class TrackedModel(OpenAIChatModel):
         )
 
     def _request_wall(self) -> float:
-        """Per-request wall (open -> last chunk): static cap, shrunk by remaining time."""
-        return max(
-            5.0, min(self.cfg.request_wall, self._time_left() - self._margin())
-        )
+        """Per-request wall (open -> last chunk): regime cap (180s),
+        shrunk by the remaining time minus the margin."""
+        return max(5.0, min(self.llm_wall, self._time_left() - self._margin()))
 
     def _gate_blocked(self) -> bool:
         """True when not enough time remains for a new request to be useful."""
         return self.gate_min is not None and self._time_left() < self.gate_min
-
-    def _request_limit_reached(self) -> bool:
-        return self._request_no >= self.cfg.request_limit
-
-    def _token_budget_exhausted(self) -> bool:
-        """Global (per-task) token budget; pydantic-ai's UsageLimits only
-        cover a single phase run, so the cross-phase ceiling is enforced here."""
-        return self._cum_input + self._cum_output >= self.token_budget
 
     # -- helpers ----------------------------------------------------------
     def _capped_settings(self, model_settings: Any) -> dict:
@@ -206,13 +204,6 @@ class TrackedModel(OpenAIChatModel):
 
         Returns (streamed_response, context_manager); the caller must close the CM.
         """
-        if self._request_limit_reached():
-            raise BudgetExceeded(f"global request limit {self.cfg.request_limit} reached")
-        if self._token_budget_exhausted():
-            raise BudgetExceeded(
-                f"global token budget {self.token_budget} exhausted "
-                f"({self._cum_input + self._cum_output} used)"
-            )
         if self._gate_blocked():
             raise BudgetExceeded(
                 f"request gate: {self._time_left():.0f}s left < "
@@ -303,13 +294,6 @@ class TrackedModel(OpenAIChatModel):
         self.log_pending_usage()
         self.last_messages = list(messages)
         model_settings = self._capped_settings(model_settings)
-        if self._request_limit_reached():
-            raise BudgetExceeded(f"global request limit {self.cfg.request_limit} reached")
-        if self._token_budget_exhausted():
-            raise BudgetExceeded(
-                f"global token budget {self.token_budget} exhausted "
-                f"({self._cum_input + self._cum_output} used)"
-            )
         if self._gate_blocked():
             raise BudgetExceeded(
                 f"request gate: {self._time_left():.0f}s left < "

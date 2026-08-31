@@ -49,11 +49,11 @@ async def bash(
     elif t < MIN_TIMEOUT:
         note = f"timeout clamped to {MIN_TIMEOUT:.0f}s (min)"
         t = MIN_TIMEOUT
-    # Adaptive budget: a single command must never eat into the finalize
-    # zone or the run's hard stop, and never exceed the scaled bash cap.
+    # Fixed regime: a single command must never eat into the margin or the
+    # run's hard stop, and never exceed the bash cap (30s).
     budget = ctx.deps.budget
     if budget is not None:
-        dyn = max(MIN_TIMEOUT, budget.hard - ctx.deps.clock() - budget.margin - budget.finalize)
+        dyn = max(MIN_TIMEOUT, budget.hard - ctx.deps.clock() - budget.margin)
         cap = min(budget.bash_cap, dyn)
         if t > cap:
             note = (note + "; " if note else "") + f"timeout clamped to {cap:.0f}s (time budget)"
