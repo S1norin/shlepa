@@ -76,20 +76,21 @@ max_retries = 1
 [phases.work]
 # Execute the plan, do not invent new approaches, keep the deliverable file
 # fresh, hand off to review. Hard cap per cycle is the fixed regime constant
-# (work = 120s, budget.py; an explicit `time` would override it).
+# (work = 120s, budget.py; an explicit `time` would override it). The soft
+# time is advisory and stays under the hard cap; there is NO soft_tokens for
+# work (the "keep the output lean" note applies to plan/review only).
 tools = ["read", "write", "edit", "bash"]
 requests = 100
-soft_time = 150.0
-soft_tokens = 80000
+soft_time = 105.0
 max_retries = 1
 
 [phases.commit]
 # Terminal REVIEW phase: verify the deliverable mechanically, repair it if
 # broken, decide done|next_round. Hard cap is the fixed regime constant
-# (review = 45s, budget.py).
+# (review = 45s, budget.py). The soft time stays UNDER the hard cap.
 tools = ["read", "write", "edit", "bash"]
 requests = 20
-soft_time = 45.0
+soft_time = 35.0
 soft_tokens = 20000
 reasoning_effort = "low"
 max_retries = 0

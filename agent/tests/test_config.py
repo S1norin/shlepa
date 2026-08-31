@@ -61,15 +61,15 @@ def test_phase_values_4_phase_pipeline():
     assert set(work.tools) == {"read", "write", "edit", "bash"}
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
-    assert work.soft_time == 150.0  # advisory
-    assert work.soft_tokens == 80000  # advisory
+    assert work.soft_time == 105.0  # advisory, under the 120s cap
+    assert work.soft_tokens is None  # no token note for work
     assert work.max_retries == 1
 
     commit = cfg.phases["commit"]
     assert set(commit.tools) == {"read", "write", "edit", "bash"}
     assert commit.requests == 20
     assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 45.0
+    assert commit.soft_time == 35.0  # advisory, under the 45s cap
     assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
     assert commit.max_retries == 0

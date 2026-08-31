@@ -128,8 +128,9 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 - **Hard, enforced by the environment**: the container kill at the
   task's own time limit — the only external bound on the cycles.
 - **Advisory (rendered into prompts/status, never enforced)**:
-  per-phase `soft_time`/`soft_tokens` (`plan`: 45s/15k, `work`: 150s/80k,
-  `commit`: 45s/20k) and `phases.*.requests` (legacy slices, no longer
+  per-phase `soft_time`/`soft_tokens` (`plan`: 45s/15k, `work`: 105s — no
+  token note for work, `commit`: 35s/20k; every soft time stays under its
+  phase's hard cap) and `phases.*.requests` (legacy slices, no longer
   enforced — kept as prompt context only).
 
 ## Sections overview

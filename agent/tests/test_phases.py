@@ -176,13 +176,13 @@ def test_phase_limits_from_config():
     work = WorkPhase().limits(cfg)
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
-    assert work.soft_time == 150.0
-    assert work.soft_tokens == 80000
+    assert work.soft_time == 105.0  # advisory, under the 120s cap
+    assert work.soft_tokens is None  # no token note for work
 
     commit = CommitPhase().limits(cfg)
     assert commit.requests == 20
     assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 45.0
+    assert commit.soft_time == 35.0  # advisory, under the 45s cap
     assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
 
@@ -237,8 +237,9 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
     assert "60s" in prompt  # advisory limits
     # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
-    # fresh first pass: no previous results block
-    assert "RESULTS OF PREVIOUS PHASES" not in prompt
+    # fresh first pass: no previous results block (the plan instructions
+    # mention the block name in prose — check header + content instead)
+    assert "RESULTS OF PREVIOUS PHASES\nwork phase" not in prompt
 
 
 def test_plan_prompt_on_replan_carries_previous_work_result():

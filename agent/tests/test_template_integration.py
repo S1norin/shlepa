@@ -71,7 +71,8 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "OUTPUT FORMAT" in user  # the final_result schema
     assert "NO NOTES" not in user and "NOTES\n" not in user  # empty note block dropped
     # reserved empty blocks render nothing
-    assert "RESULTS OF PREVIOUS PHASES" not in user
+    # the plan instructions mention the block name in prose — check header + content
+    assert "RESULTS OF PREVIOUS PHASES\nwork phase" not in user
 
 
 def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai, tmp_path):

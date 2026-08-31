@@ -91,8 +91,7 @@ max_retries = 1
 tools = ["read", "write", "edit", "bash"]
 requests = 100
 time = {work_time}
-soft_time = 150.0
-soft_tokens = 80000
+soft_time = 105.0
 max_retries = 1
 
 [phases.commit]
