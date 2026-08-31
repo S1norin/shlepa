@@ -504,7 +504,7 @@ async def _pipeline(
                 output = result.output.summary or output
             elif phase.terminal:
                 if isinstance(result.output, BaseModel):
-                    # Typed terminal output (CommitResult): report the
+                    # Typed terminal output (ReviewResult): report the
                     # deliverable path, or the notes line if any.
                     output = (
                         getattr(result.output, "notes", "")
