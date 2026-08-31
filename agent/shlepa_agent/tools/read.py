@@ -41,7 +41,9 @@ async def read(
     100). Output is capped at 4000 characters. Files larger than the
     configured size cap are rejected (use bash head/tail/grep/sed). The
     result tells you how many lines remain and which offset to continue
-    with."""
+    with. NOT suited for large files or single-line files (e.g. logs with
+    few newlines, minified code, one-line JSON): offset pagination cannot
+    advance inside one line — use bash head/tail/grep/sed for those."""
     t0 = time.monotonic()
     rcfg = ctx.deps.cfg.tools.read
     max_limit = rcfg.max_limit or DEFAULT_MAX_LIMIT
@@ -124,9 +126,13 @@ async def read(
 
 READ_TOOL = Tool(
     name="read",
-    note="read: read a text file page by page. 0-based offset; 100 lines per "
-    "page by default; output capped at 4000 chars; files above the size cap "
-    "are rejected (use bash head/tail/grep); the result reports the offset "
-    "to continue from.",
+    note=(
+        "read: read a text file page by page. 0-based offset; 100 lines per "
+        "page by default; output capped at 4000 chars; files above the size "
+        "cap are rejected (use bash head/tail/grep); the result reports the "
+        "offset to continue from. NOT suited for large files or single-line "
+        "files (e.g. logs with few newlines, minified code, one-line JSON) — "
+        "use bash head/tail/grep/sed for those."
+    ),
     run=read,
 )
