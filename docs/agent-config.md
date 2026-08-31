@@ -138,7 +138,8 @@ Routing rules (runner):
 
 | Env var | Config key | Type |
 |---|---|---|
-| `SHLEPA_TEMP` | `agent.temp` | float |
+| `SHLEPA_TEMP` | `agent.temp` | float (sent only when `send_temp` is on) |
+| `SHLEPA_SEND_TEMP` | `agent.send_temp` | 1/0 (bool) |
 | `SHLEPA_MAX_STEPS` | `agent.max_steps` | int (0 = derive) |
 | `SHLEPA_MAX_CYCLES` | `agent.max_cycles` | int (0 = derive) |
 | `SHLEPA_COMMIT_DEADLINE` | `agent.commit_deadline` | float (0 = derive) |
@@ -182,7 +183,8 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 ## Sections overview
 
 - `[agent]` — pipeline entry, emergency phase, cycle cap, commit
-  deadline, step guard, temperature.
+  deadline, step guard, temperature (opt-in: sent to the endpoint only
+  when `send_temp` is enabled; default: not sent, the endpoint decides).
 - `[budget]` — global wall-clock/token/request budgets (TrackedModel).
 - `[tools.*]` — per-tool `enabled` plus caps: `timeout`/`max_timeout`/
   `max_output` (bash), `max_limit`/`max_output` (read).
@@ -201,7 +203,7 @@ fields:
 
 | Event | Fields | Notes |
 |---|---|---|
-| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `temp`, `soft_time`, `hard_time`, `request_limit`, `token_budget` | first line of a run (the four stable CLI fields stay; `soft_time`/`hard_time` are now the derived values). Additive: `entry`, `emergency`, `max_cycles`, `commit_deadline`, `max_steps`, `t`, `t_source`, `plan_cap`, `work_cap`, `reserve`, `bash_cap` (CLI ignores unknown fields) |
+| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `temp`, `soft_time`, `hard_time`, `request_limit`, `token_budget` | first line of a run (the four stable CLI fields stay; `soft_time`/`hard_time` are now the derived values). `temp` is present only when `agent.send_temp` is enabled. Additive: `entry`, `emergency`, `max_cycles`, `commit_deadline`, `max_steps`, `t`, `t_source`, `plan_cap`, `work_cap`, `reserve`, `bash_cap` (CLI ignores unknown fields) |
 | `usage` | `request`, `input_tokens`, `output_tokens`, `cumulative_input`, `cumulative_output`, `cumulative_total`, `elapsed_s` | per model request |
 | `agent_done` | `status`, `elapsed_s`, `output` | final line; `status` ∈ `done` / `budget` / `error` |
 | `agent_error` | `error`, `elapsed_s` | unexpected failure (the run still exits 0) |

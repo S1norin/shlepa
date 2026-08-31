@@ -50,7 +50,11 @@ class AgentSection(BaseModel):
     # Total phase-run guard (plan/work cycles + terminal phase).
     # 0 = derived (2 * max_cycles + 2).
     max_steps: int = Field(default=0, ge=0)
-    temp: float = 0.2
+    #: Sampling temperature; sent to the endpoint only when ``send_temp``
+    #: is enabled (default: the endpoint decides).
+    temp: float = 0.6
+    #: Send ``temp`` in model settings (env: SHLEPA_SEND_TEMP, 1/0).
+    send_temp: bool = False
 
 
 class BudgetConfig(BaseModel):
@@ -165,9 +169,20 @@ class AgentConfig(BaseModel):
     )
 
 
+def _env_bool(raw: str) -> bool:
+    """Parse a 1/0 (or true/false/yes/no/on/off) boolean env override."""
+    low = raw.strip().lower()
+    if low in ("1", "true", "yes", "on"):
+        return True
+    if low in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"not a bool: {raw!r}")
+
+
 #: Env-var overrides: name -> (dotted config path, target type).
 ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_TEMP": ("agent.temp", float),
+    "SHLEPA_SEND_TEMP": ("agent.send_temp", _env_bool),
     "SHLEPA_MAX_STEPS": ("agent.max_steps", int),
     "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
     "SHLEPA_COMMIT_DEADLINE": ("agent.commit_deadline", float),

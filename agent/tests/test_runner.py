@@ -59,7 +59,8 @@ def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, 
     p.write_text(
         f"""
 [agent]
-temp = 0.2
+temp = 0.6
+send_temp = true
 entry = "plan"
 emergency = "emergency"
 max_cycles = {max_cycles}
@@ -279,6 +280,8 @@ def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tm
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0, hard=60.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert _status(events) == "done"
+    # the test config has send_temp on: every request (incl. final_ask) sends it
+    assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
     # plan was cut by its hard cap (budget), NOT retried
     assert any(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
@@ -375,6 +378,52 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
     # one phase entry; the retry is tracked by phase_retry, not a new phase start
     assert len(_phase_starts(events, "plan")) == 1
     assert len(stub_state["bodies"]) == 3  # no model request on the failed attempt
+
+
+# -- temperature opt-in -----------------------------------------------------
+def test_temperature_not_sent_by_default(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.budget import TIME_ENV_CANDIDATES
+    from shlepa_agent.config import load_config
+
+    for key in TIME_ENV_CANDIDATES:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("SHLEPA_SEND_TEMP", raising=False)
+    monkeypatch.delenv("SHLEPA_TEMP", raising=False)
+    stub_state["script"] = [_plan_step("commit"), _commit_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all("temperature" not in b for b in stub_state["bodies"])
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert "temp" not in start
+
+
+def test_temperature_sent_when_send_temp_enabled(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.budget import TIME_ENV_CANDIDATES
+    from shlepa_agent.config import load_config
+
+    for key in TIME_ENV_CANDIDATES:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
+    stub_state["script"] = [_plan_step("commit"), _commit_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert start.get("temp") == 0.6
+
+
+def test_temperature_env_value_override(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.budget import TIME_ENV_CANDIDATES
+    from shlepa_agent.config import load_config
+
+    for key in TIME_ENV_CANDIDATES:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
+    monkeypatch.setenv("SHLEPA_TEMP", "0.9")
+    stub_state["script"] = [_plan_step("commit"), _commit_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all(b.get("temperature") == 0.9 for b in stub_state["bodies"])
 
 
 # -- log contract ---------------------------------------------------------------

@@ -6,7 +6,8 @@
 
 [agent]
 # Pipeline: plan -> work -> (commit | replan). Entry phase, emergency phase,
-# plan->work cycle cap, commit deadline, total step guard, temperature.
+# plan->work cycle cap, commit deadline, total step guard, temperature
+# (sent to the endpoint only when send_temp is enabled).
 #
 # All zero/empty values are DERIVED per run from the task time limit T via
 # the adaptive budget (budget.py / budget.build_budget). Explicit positive
@@ -20,7 +21,10 @@ emergency = "emergency"
 max_cycles = 0
 commit_deadline = 0.0
 max_steps = 0
-temp = 0.2
+temp = 0.6
+# Send `temp` to the LLM endpoint. Default: off — the endpoint picks its
+# own temperature (some endpoints reject or ignore an explicit value).
+send_temp = false
 
 [budget]
 # Global cross-phase budget enforced by the tracked model. The runtime
