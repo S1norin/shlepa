@@ -308,7 +308,7 @@ def _module_lines(rng: random.Random, idx: int) -> list[str]:
         "from dataclasses import dataclass",
         "",
         "",
-        f"logger = logging.getLogger(__name__)",
+        "logger = logging.getLogger(__name__)",
         "",
         f"MAX_{noun.upper()}_ITEMS = {rng.randint(64, 4096)}",
         "",
@@ -495,9 +495,13 @@ def write_report(
     styles = sorted({r.get("style") or "nl" for r in rows})
     lines += ["", "## Per-family summary (mean over queries)", ""]
     lines.append(
-        "| family | style | engine | queries | hit@1 | hit@3 | tokens-to-locate (hits) | latency ms |"
+        "| family | style | engine | queries | hit@1 | hit@3 "
+        "| tokens-to-locate (hits) | latency ms |"
     )
-    lines.append("|--------|-------|--------|---------|-------|-------|-------------------------|------------|")
+    lines.append(
+        "|--------|-------|--------|---------|-------|-------"
+        "|-------------------------|------------|"
+    )
     for fam in families:
         for sty in styles:
             for eng in engines:
@@ -573,7 +577,6 @@ def run_bench(
 
     corpus_meta: list[dict] = []
     rows: list[dict] = []
-    synth_queries: list[Query] = []
 
     for cid, corp in corpora.items():
         if corp["kind"] == "generated":
