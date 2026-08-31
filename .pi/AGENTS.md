@@ -27,6 +27,7 @@ files, code, comments, docs and commit messages are in English**.
 | `shlepa doctor [--probe]` | hard env checks (LLM endpoint + model match, MLflow, docker); `--probe` sends one real LLM request. Exit 0/1/2. |
 | `shlepa run [preset] [--dry-run]` | dev experiment loop: per task build env+dev images, run the agent **inside** the container (`/app`, `--network host`), score via `tests/test.sh` → `reward.txt`, log to MLflow (runs tagged `batch_id`/`mlflow_trace_id` when telemetry is on). `SLEPA_NO_DOCKER=1` switches to the legacy host-agent mode. |
 | `shlepa trace-export --batch <id>` | export a batch's agent traces from the MLflow trace experiment: `manifest.jsonl`, per-task trace JSON + Markdown digests, `summary.md` (LLM-readable failure analysis). |
+| `shlepa search-bench [--families …] [--engines …]` | research harness: measure search engines (read-all baseline, rg, sifs bm25) on the annotated query set (`research/code_search/analysis/queries.json`) plus a generated 10k-file corpus; emits a CSV + markdown report to `research/code_search/analysis/`. |
 | `shlepa smoke` | fail-fast end-to-end check: doctor → `contest-hello-file` → MLflow run exists. Exit 0/1. |
 | `shlepa submit-test [--ci]` | strict contest-faithful test via Harbor inside the acp container (planned in CI). |
 | `shlepa zip [--register]` | build the flat submission zip (telemetry/tests/pyproject stripped, ≤10MB); `--register` logs it + full source tarball to MLflow and creates a `shlepa` model version. |
