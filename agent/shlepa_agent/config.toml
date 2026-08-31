@@ -16,7 +16,10 @@ entry = ""
 emergency = "emergency"
 # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
 max_steps = 0
-temp = 0.2
+temp = 0.6
+# Send `temp` to the LLM endpoint. Default: off — the endpoint picks its
+# own temperature (some endpoints reject or ignore an explicit value).
+send_temp = false
 
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
@@ -41,18 +44,23 @@ max_output = 16000
 
 [tools.read]
 # Paged reads: at most max_limit lines per call (default page when the model
-# omits limit), result capped at max_output chars.
+# omits limit), result capped at max_output chars. Files larger than
+# max_file_mb are rejected (with a bash hint) instead of being loaded.
 enabled = true
 max_limit = 100
 max_output = 4000
+max_file_mb = 100.0
 
 [tools.write]
-# New files only (never overwrites).
+# New files only (never overwrites). Every read/write/edit call is capped at
+# a 5s per-call timeout (a hang there must not eat the whole run).
 enabled = true
 
 [tools.edit]
 # Precise replacements in existing files (edits[] with optional 0-based line).
+# Files larger than max_file_mb are rejected (with a bash hint).
 enabled = true
+max_file_mb = 100.0
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a

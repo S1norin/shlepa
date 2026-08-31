@@ -11,7 +11,8 @@ def test_agent_section_defaults():
     assert cfg.agent.entry == ""
     assert cfg.agent.emergency == "emergency"
     assert cfg.agent.max_steps == 0
-    assert cfg.agent.temp == 0.2
+    assert cfg.agent.temp == 0.6
+    assert cfg.agent.send_temp is False  # default: endpoint decides
 
 
 def test_budget_values():
@@ -96,10 +97,28 @@ def test_env_override_wins(monkeypatch):
     monkeypatch.setenv("SHLEPA_BUDGET_MAX_TOKENS", "999")
     monkeypatch.setenv("SHLEPA_BASH_TIMEOUT", "90")
     monkeypatch.setenv("SHLEPA_TEMP", "0.1")
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
     cfg = load_config()
     assert cfg.budget.max_tokens == 999
     assert cfg.tools.bash.timeout == 90.0
     assert cfg.agent.temp == 0.1
+    assert cfg.agent.send_temp is True
+
+
+def test_send_temp_env_override(monkeypatch):
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
+    assert load_config().agent.send_temp is True
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "0")
+    assert load_config().agent.send_temp is False
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "garbage")
+    assert load_config().agent.send_temp is False  # invalid: ignored
+
+
+def test_temp_env_override_independent_of_send(monkeypatch):
+    monkeypatch.setenv("SHLEPA_TEMP", "0.9")
+    cfg = load_config()
+    assert cfg.agent.temp == 0.9
+    assert cfg.agent.send_temp is False
 
 
 def test_invalid_env_override_ignored(monkeypatch):

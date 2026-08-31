@@ -34,7 +34,11 @@ class AgentSection(BaseModel):
     emergency: str = "emergency"
     # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
     max_steps: int = Field(default=0, ge=0)
-    temp: float = 0.2
+    #: Sampling temperature; sent to the endpoint only when ``send_temp``
+    #: is enabled (default: the endpoint decides).
+    temp: float = 0.6
+    #: Send ``temp`` in model settings (env: SHLEPA_SEND_TEMP, 1/0).
+    send_temp: bool = False
 
 
 class BudgetConfig(BaseModel):
@@ -60,6 +64,8 @@ class ToolConfig(BaseModel):
     - ``max_timeout``: bash hard cap for the per-call timeout (seconds)
     - ``max_limit``: read max lines per call
     - ``max_output``: hard char cap on the tool result (read: 4000, bash: 16000)
+    - ``max_file_mb``: file size cap for read/edit (default 100 MB; larger
+      files are rejected with a bash hint instead of being loaded)
     """
 
     enabled: bool = True
@@ -67,10 +73,11 @@ class ToolConfig(BaseModel):
     max_timeout: float | None = None
     max_output: int | None = None
     max_limit: int | None = None
+    max_file_mb: float | None = None
 
 
 class ToolsConfig(BaseModel):
-    bash: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_timeout=120.0, max_output=16000)
+    bash: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_timeout=30.0, max_output=16000)
     read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
     write: ToolConfig = ToolConfig()
     edit: ToolConfig = ToolConfig()
@@ -133,9 +140,20 @@ class AgentConfig(BaseModel):
     )
 
 
+def _env_bool(raw: str) -> bool:
+    """Parse a 1/0 (or true/false/yes/no/on/off) boolean env override."""
+    low = raw.strip().lower()
+    if low in ("1", "true", "yes", "on"):
+        return True
+    if low in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"not a bool: {raw!r}")
+
+
 #: Env-var overrides: name -> (dotted config path, target type).
 ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_TEMP": ("agent.temp", float),
+    "SHLEPA_SEND_TEMP": ("agent.send_temp", _env_bool),
     "SHLEPA_MAX_STEPS": ("agent.max_steps", int),
     "SHLEPA_BUDGET_MAX_TOKENS": ("budget.max_tokens", int),
     "SHLEPA_BUDGET_REQUEST_TIMEOUT": ("budget.request_timeout", float),

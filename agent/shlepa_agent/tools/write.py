@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from pydantic_ai import RunContext
 
 from shlepa_agent.log import _log_event
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result, resolve_path
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    format_tool_result,
+    resolve_path,
+    run_file_tool,
+)
 
 
 async def write(ctx: "RunContext[AgentDeps]", path: str, text: str) -> str:
@@ -17,17 +24,24 @@ async def write(ctx: "RunContext[AgentDeps]", path: str, text: str) -> str:
     t0 = time.monotonic()
     p = resolve_path(path, ctx.deps.workdir)
     _log_event("tool_call", tool="write", path=str(p))
-    if p.exists():
+
+    def fail(reason: str) -> str:
         return format_tool_result(
             ctx, "write", "", t0, args={"path": path, "text": text},
-            failed=f"File already exists (use edit to change it): {path}",
+            failed=reason,
         )
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
-    return format_tool_result(
-        ctx, "write", f"Wrote {len(text)} chars to {path}", t0,
-        args={"path": path, "text": text},
-    )
+
+    async def body() -> str:
+        if p.exists():
+            return fail(f"File already exists (use edit to change it): {path}")
+        await asyncio.to_thread(p.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(p.write_text, text, encoding="utf-8")
+        return format_tool_result(
+            ctx, "write", f"Wrote {len(text)} chars to {path}", t0,
+            args={"path": path, "text": text},
+        )
+
+    return await run_file_tool(body, fail)
 
 
 WRITE_TOOL = Tool(

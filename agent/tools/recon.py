@@ -36,11 +36,12 @@ from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 
 MAX_TOTAL = 8192          # hard cap on serialized output bytes
-DEADLINE_S = 100.0        # internal wall budget (< bash 120s cap)
+DEADLINE_S = 100.0        # internal wall budget for the crawl
 MAX_REQUESTS = 150        # crawl + sensitive combined
 MAX_BODY = 16384          # per-response body cap for parsing
 BINARY_EXT = re.compile(
-    r"\.(png|jpe?g|gif|ico|css|js|mjs|woff2?|ttf|eot|svg|mp4|webm|zip|gz|tgz|pdf|bin|iso|docx?|xlsx?)$",
+    r"\.(png|jpe?g|gif|ico|css|js|mjs|woff2?|ttf|eot|svg|mp4|webm|"
+    r"zip|gz|tgz|pdf|bin|iso|docx?|xlsx?)$",
     re.I,
 )
 
@@ -129,9 +130,11 @@ SINKS = [
     ("pickle loads", re.compile(r"pickle\.loads?\s*\(")),
     ("yaml unsafe load", re.compile(r"yaml\.load\s*\(")),
     ("weak crypto", re.compile(r"hashlib\.(md5|sha1)\s*\(")),
-    ("hardcoded secret", re.compile(r"(?i)\b(?:password|passwd|api_?key|secret|token)\b\s*=\s*['\"][^'\"]{4,}['\"]")),
+    ("hardcoded secret",
+     re.compile(r"(?i)\b(?:password|passwd|api_?key|secret|token)\b\s*=\s*['\"][^'\"]{4,}['\"]")),
     ("render_template_string", re.compile(r"render_(?:template_)?string\s*\(")),
-    ("php shell exec", re.compile(r"(?<![\w>])(?:system|shell_exec|passthru|popen|proc_open)\s*\(")),
+    ("php shell exec",
+     re.compile(r"(?<![\w>])(?:system|shell_exec|passthru|popen|proc_open)\s*\(")),
     ("php eval/assert", re.compile(r"(?<![\w>])(?:eval|assert)\s*\(")),
     ("php mysql_query", re.compile(r"mysql_query\s*\(")),
     ("php unserialize", re.compile(r"(?<![\w>])unserialize\s*\(")),

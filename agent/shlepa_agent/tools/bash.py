@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import time
 
 from pydantic_ai import RunContext
@@ -11,9 +13,77 @@ from shlepa_agent.log import _log_event, _truncate
 from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
 
 DEFAULT_TIMEOUT = 30.0
-DEFAULT_MAX_TIMEOUT = 120.0
+DEFAULT_MAX_TIMEOUT = 30.0
 DEFAULT_MAX_OUTPUT = 16000
 MIN_TIMEOUT = 1.0
+_CHUNK = 64 * 1024
+
+
+class _BoundedRetainer:
+    """Head+tail retention for one stream.
+
+    Keeps the first and last ``keep // 2`` bytes of whatever the process
+    writes and replaces the middle with a ``[...N bytes dropped...]``
+    marker, so an unbounded ``yes``/``dd`` cannot blow up memory or the
+    result.
+    """
+
+    def __init__(self, keep: int) -> None:
+        self._head_cap = max(1, keep // 4)
+        self._tail_cap = max(1, keep // 4)
+        self._head = bytearray()
+        self._tail = bytearray()
+        self._dropped = 0
+
+    def add(self, chunk: bytes) -> None:
+        rest = chunk
+        if len(self._head) < self._head_cap:
+            room = self._head_cap - len(self._head)
+            self._head += rest[:room]
+            rest = rest[room:]
+        self._tail += rest
+        if len(self._tail) > self._tail_cap:
+            overflow = len(self._tail) - self._tail_cap
+            del self._tail[:overflow]
+            self._dropped += overflow
+
+    def data(self) -> bytes:
+        if self._dropped == 0:
+            return bytes(self._head) + bytes(self._tail)
+        marker = f"\n[...{self._dropped} bytes dropped...]\n".encode("ascii")
+        return bytes(self._head) + marker + bytes(self._tail)
+
+
+async def _read_stream(stream, retainer: _BoundedRetainer) -> None:
+    while True:
+        chunk = await stream.read(_CHUNK)
+        if not chunk:
+            return
+        retainer.add(chunk)
+
+
+async def _drain_and_wait(proc, out_ret: _BoundedRetainer, err_ret: _BoundedRetainer) -> None:
+    """Drain both pipes (bounded retention), then wait for the process to
+    exit — the same contract as ``communicate()``, which awaited
+    ``wait()`` after the pipes closed."""
+    await asyncio.gather(
+        _read_stream(proc.stdout, out_ret),
+        _read_stream(proc.stderr, err_ret),
+    )
+    await proc.wait()
+
+
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the command's whole session. The shell runs in its own session
+    (start_new_session), so its pgid is its pid: backgrounded children —
+    including orphans that outlive the shell and hold our pipes — die with
+    it. Must not check proc.returncode first: a child that inherited the
+    pipes keeps the group (and the drain timeout) alive even after the
+    shell has exited."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass  # group already gone
 
 
 async def bash(
@@ -57,22 +127,33 @@ async def bash(
             cwd=str(workdir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
     except OSError as e:
         return finish("", note=note or None, failed=f"spawn error: {e}")
 
+    # Bounded retention: each stream keeps head+tail up to half the result
+    # cap, so even an unbounded producer stays within the memory/result
+    # budget while we drain it.
+    keep = max(1024, max_output // 2)
+    out_ret = _BoundedRetainer(keep)
+    err_ret = _BoundedRetainer(keep)
     timed_out = False
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=t)
-    except (TimeoutError, asyncio.TimeoutError):
+        await asyncio.wait_for(_drain_and_wait(proc, out_ret, err_ret), timeout=t)
+    except TimeoutError:
         timed_out = True
-        proc.kill()
+        _kill_process_group(proc)
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except TimeoutError:
+            pass  # SIGKILLed; a stuck reap must not eat the run
+        try:
+            proc._transport.close()  # private: avoid GC on a closed loop
         except Exception:
-            stdout, stderr = b"", b""
-    out = stdout.decode("utf-8", errors="replace")
-    err = stderr.decode("utf-8", errors="replace")
+            pass
+    out = out_ret.data().decode("utf-8", errors="replace")
+    err = err_ret.data().decode("utf-8", errors="replace")
     if timed_out:
         header = (
             f"$ {command}\n[cwd] {workdir}\n"
@@ -105,7 +186,7 @@ BASH_TOOL = Tool(
     name="bash",
     note=(
         "bash: run a shell command in the working directory. Per-call timeout "
-        "in seconds (default 30, max 120); use absolute paths; start servers "
+        "in seconds (default 30, max 30); use absolute paths; start servers "
         "with nohup + & and verify they respond."
     ),
     run=bash,

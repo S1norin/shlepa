@@ -91,15 +91,18 @@ Routing rules (runner):
   `commit` 0. Timeout results (time caps, context-limit breaches) are
   never retried — they hand off per the rules above.
 - **State hand-off**: after every phase the runner persists the run state
-  (elapsed, cycles, regime, per-phase results) to the state file — the
-  structured bridge between phases and cycles.
+  (elapsed, cycles, regime, per-phase results) to the run-state file
+  (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
+  the task workdir; the structured bridge between phases and cycles.
 
 ## Env-var overrides
 
 | Env var | Config key | Type |
 |---|---|---|
-| `SHLEPA_TEMP` | `agent.temp` | float |
+| `SHLEPA_TEMP` | `agent.temp` | float (sent only when `send_temp` is on) |
+| `SHLEPA_SEND_TEMP` | `agent.send_temp` | 1/0 (bool) |
 | `SHLEPA_MAX_STEPS` | `agent.max_steps` | int (0 = off, the run cycles until done) |
+| `SHLEPA_STATE_FILE` | — | run-state file path (default `/tmp/shlepa_state.json`, never the workdir) |
 | `SHLEPA_BUDGET_MAX_TOKENS` | `budget.max_tokens` | int |
 | `SHLEPA_BUDGET_REQUEST_TIMEOUT` | `budget.request_timeout` | float |
 | `SHLEPA_BASH_TIMEOUT` | `tools.bash.timeout` (default per-call timeout) | float |
@@ -131,12 +134,23 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 
 ## Sections overview
 
-- `[agent]` — pipeline entry (dev knob, default `plan`), temperature,
-  step guard (dev knob), emergency phase name (unused in v5).
+- `[agent]` — pipeline entry (dev knob, default `plan`), temperature
+  (opt-in: sent to the endpoint only when `send_temp` is enabled; default:
+  not sent, the endpoint decides), step guard (dev knob), emergency
+  phase name (unused in v5).
 - `[budget]` — per-request caps: `max_tokens`, `request_timeout`
   (the phase caps are constants in `budget.py`).
 - `[tools.*]` — per-tool `enabled` plus caps: `timeout`/`max_timeout`/
-  `max_output` (bash), `max_limit`/`max_output` (read).
+  `max_output` (bash), `max_limit`/`max_output`/`max_file_mb` (read),
+  `max_file_mb` (edit). File tools (read/write/edit) have a hard 5s
+  per-call timeout; read/edit reject files larger than `max_file_mb`
+  (default 100 MB) with a bash hint instead of loading them. Bash runs
+  each command in its own session (process group): the per-call timeout
+  (default 30s, hard cap 30s) SIGKILLs the whole group — backgrounded
+  children included — and stdout/stderr are drained with bounded
+  head+tail retention (middle replaced by a
+  `[...N bytes dropped...]` marker), so an unbounded `yes`/`dd` cannot
+  blow up memory or the result.
 - `[phases.*]` — per-phase toolset, advisory soft limits, reasoning
   effort, retry count, template wrapper overrides.
 - `[template]` — ordered block list + per-block wrappers for the common
@@ -152,7 +166,7 @@ fields:
 
 | Event | Fields | Notes |
 |---|---|---|
-| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `temp`, `entry` | first line of a run (the stable CLI fields stay). Additive (v5): `emergency`, `max_steps`, `plan_cap`, `work_cap`, `review_cap`, `bash_cap`, `llm_wall` (CLI ignores unknown fields; there is NO `t`/`t_source`/`hard_time`/`soft_time`/`commit_deadline`) |
+| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `entry` | first line of a run (the stable CLI fields stay; `temp` is present only when `agent.send_temp` is enabled). Additive (v5): `emergency`, `max_steps`, `plan_cap`, `work_cap`, `review_cap`, `bash_cap`, `llm_wall` (CLI ignores unknown fields; there is NO `t`/`t_source`/`hard_time`/`soft_time`/`commit_deadline`) |
 | `usage` | `request`, `input_tokens`, `output_tokens`, `cumulative_input`, `cumulative_output`, `cumulative_total`, `elapsed_s` | per model request |
 | `agent_done` | `status`, `elapsed_s`, `output` | final line; `status` ∈ `done` / `timeout` / `error` |
 | `agent_error` | `error`, `elapsed_s` | unexpected failure (the run still exits 0) |

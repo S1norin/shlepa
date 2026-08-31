@@ -202,6 +202,18 @@ def _phase_cap(phase_id: str, limits: Any, cfg: AgentConfig) -> float:
     return 60.0
 
 
+def _model_settings(cfg: AgentConfig) -> dict[str, Any]:
+    """Per-request model settings.
+
+    Temperature is NOT sent by default — the endpoint decides. It is sent
+    only when ``agent.send_temp`` is enabled.
+    """
+    settings: dict[str, Any] = {}
+    if cfg.agent.send_temp:
+        settings["temperature"] = cfg.agent.temp
+    return settings
+
+
 async def _run_phase(
     state: RunState, phase: Phase, agent: Agent
 ) -> PhaseResult:
@@ -210,7 +222,7 @@ async def _run_phase(
     model = state.model
     limits = phase.limits(cfg)
     cap = _phase_cap(phase.id, limits, cfg)
-    model_settings: dict[str, Any] = {"temperature": cfg.agent.temp}
+    model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort
     history = phase.history(state) or None
@@ -335,7 +347,7 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
             async with agent.run_stream_events(
                 FINAL_ASK_MESSAGE,
                 deps=state.deps,
-                model_settings={"temperature": cfg.agent.temp},
+                model_settings=_model_settings(cfg),
                 message_history=history,
             ) as events:
                 async for event in events:
@@ -524,7 +536,8 @@ async def run_prompt(
             base_url=_required_env("OPENAI_BASE_URL"),
             workdir=str(workdir),
             prompt=prompt,
-            temp=cfg.agent.temp,
+            # reported only when it is actually sent to the endpoint (#65)
+            **({"temp": cfg.agent.temp} if cfg.agent.send_temp else {}),
             entry=entry,
             emergency=cfg.agent.emergency,
             # Fixed regime (additive, CLI ignores unknown fields):

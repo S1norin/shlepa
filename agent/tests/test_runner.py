@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from stub_server import FINAL_ANSWER, stub_state
+from stub_server import stub_state
 
 
 @pytest.fixture
@@ -40,7 +40,9 @@ def events():
         LOGGER.setLevel(old_level)
 
 
-def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt", phase_factory=None):
+def _run(
+    monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt", phase_factory=None
+):
     from shlepa_agent import runner
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
@@ -58,7 +60,8 @@ def _cfg(tmp_path, plan_time=60.0, work_time=180.0, max_steps=8):
     p.write_text(
         f"""
 [agent]
-temp = 0.2
+temp = 0.6
+send_temp = true
 entry = "plan"
 emergency = "emergency"
 max_steps = {max_steps}
@@ -105,7 +108,8 @@ reasoning_effort = "low"
 max_retries = 0
 
 [template]
-blocks = ["system", "tools", "task", "extra", "previous_results", "phase_prompt", "output_schema", "note"]
+blocks = ["system", "tools", "task", "extra", "previous_results",
+          "phase_prompt", "output_schema", "note"]
 """,
         encoding="utf-8",
     )
@@ -161,7 +165,9 @@ def _review_step(status="ok", verdict="done"):
 
 
 def _phase_starts(events, phase):
-    return [e for e in events if e.get("event") == "phase" and e.get("id") == phase and e.get("start")]
+    return [
+        e for e in events if e.get("event") == "phase" and e.get("id") == phase and e.get("start")
+    ]
 
 
 def _status(events):
@@ -270,6 +276,8 @@ def test_plan_time_cap_triggers_final_ask_then_review(
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert _status(events) == "timeout"  # plan was cut by its cap
+    # the test config has send_temp on: every request (incl. final_ask) sends it
+    assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
     # plan was cut by its hard cap (budget), NOT retried
     assert any(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
@@ -358,6 +366,43 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
     assert len(stub_state["bodies"]) == 3  # no model request on the failed attempt
 
 
+# -- temperature opt-in -----------------------------------------------------
+def test_temperature_not_sent_by_default(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.config import load_config
+
+    monkeypatch.delenv("SHLEPA_SEND_TEMP", raising=False)
+    monkeypatch.delenv("SHLEPA_TEMP", raising=False)
+    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all("temperature" not in b for b in stub_state["bodies"])
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert "temp" not in start
+
+
+def test_temperature_sent_when_send_temp_enabled(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.config import load_config
+
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
+    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert start.get("temp") == 0.6
+
+
+def test_temperature_env_value_override(monkeypatch, stub_openai, tmp_path, events):
+    from shlepa_agent.config import load_config
+
+    monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
+    monkeypatch.setenv("SHLEPA_TEMP", "0.9")
+    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert stub_state["bodies"]
+    assert all(b.get("temperature") == 0.9 for b in stub_state["bodies"])
+
+
 # -- log contract ---------------------------------------------------------------
 def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
@@ -393,7 +438,9 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     assert start["bash_cap"] == pytest.approx(30.0)
     assert start["llm_wall"] == pytest.approx(180.0)
     usage = next(e for e in events if e.get("event") == "usage")
-    for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
+    for field in (
+        "request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"
+    ):
         assert field in usage
     # v5 pipeline events
     assert {"phase", "phase_done"} <= names

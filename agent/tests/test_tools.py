@@ -101,7 +101,7 @@ def _untrusted_body(out: str) -> str:
     """Extract the body between the UNTRUSTED TEXT markers of a tool result."""
     start = out.index("UNTRUSTED TEXT ---------------\n")
     end = out.index("\nEND OF UNTRUSTED TEXT-----------")
-    return out[start + len("UNTRUSTED TEXT ---------------\n") : end]
+    return out[start + len("UNTRUSTED TEXT ---------------\n"):end]
 
 
 def test_bash_output_truncated_to_configured_limit(tmp_path):
@@ -411,3 +411,171 @@ def test_args_in_header_are_truncated(tmp_path):
     assert "…(truncated)" in out.splitlines()[0]
 
 
+# ---------------------------------------------------------------------------
+# file size caps + per-call timeout (#61)
+# ---------------------------------------------------------------------------
+
+
+def _sparse(path, mb: float) -> None:
+    """Create a sparse file of the given size (no real disk usage)."""
+    with open(path, "wb") as fh:
+        fh.seek(int(mb * 1024 * 1024))
+        fh.write(b"\x00")
+
+
+def test_read_file_over_size_limit_is_rejected(tmp_path):
+    from shlepa_agent.tools.read import read
+
+    _sparse(tmp_path / "big.bin", 200)
+    out = asyncio.run(read(_ctx(tmp_path), path="big.bin"))
+    assert "FAILED" in out
+    assert "file is 200.0 MB, limit is 100 MB" in out
+    assert "use bash: head/tail/grep/sed -n 'A,Bp'" in out
+    assert "<empty>" in out  # content was never loaded (empty body on failure)
+
+
+def test_read_size_limit_comes_from_config(tmp_path):
+    from shlepa_agent.tools.read import read
+
+    (tmp_path / "f.bin").write_text("a" * (2 * 1024 * 1024))  # real 2 MB text
+    cfg = _cfg()
+    cfg.tools.read.max_file_mb = 1.0
+    out = asyncio.run(read(_ctx(tmp_path, cfg), path="f.bin"))
+    assert "file is 2.0 MB, limit is 1 MB" in out
+    cfg2 = _cfg()
+    cfg2.tools.read.max_file_mb = 3.0
+    out2 = asyncio.run(read(_ctx(tmp_path, cfg2), path="f.bin"))
+    assert "FAILED" not in out2
+
+
+def test_edit_file_over_size_limit_is_rejected(tmp_path):
+    from shlepa_agent.tools.edit import edit
+
+    _sparse(tmp_path / "big.txt", 150)
+    out = asyncio.run(
+        edit(_ctx(tmp_path), path="big.txt", edits=[{"oldText": "x", "newText": "y"}])
+    )
+    assert "FAILED" in out
+    assert "file is 150.0 MB, limit is 100 MB" in out
+    assert "use bash: head/tail/grep/sed -n 'A,Bp'" in out
+
+
+def test_edit_size_limit_comes_from_config(tmp_path):
+    from shlepa_agent.tools.edit import edit
+
+    _sparse(tmp_path / "f.txt", 2)
+    cfg = _cfg()
+    cfg.tools.edit.max_file_mb = 1.0
+    out = asyncio.run(
+        edit(_ctx(tmp_path, cfg), path="f.txt", edits=[{"oldText": "x", "newText": "y"}])
+    )
+    assert "file is 2.0 MB, limit is 1 MB" in out
+
+
+def test_read_timeout_reports_message(tmp_path, monkeypatch):
+    import time
+
+    import shlepa_agent.tools.base as base_mod
+    import shlepa_agent.tools.read as read_mod
+    from shlepa_agent.tools.read import read
+
+    monkeypatch.setattr(base_mod, "FILE_TOOL_TIMEOUT_S", 0.02)
+    f = tmp_path / "slow.txt"
+    f.write_text("hello\n")
+    orig_load = read_mod._load_text
+
+    def slow_load(p, _path):
+        time.sleep(0.3)
+        return orig_load(p, _path)
+
+    monkeypatch.setattr(read_mod, "_load_text", slow_load)
+    out = asyncio.run(read(_ctx(tmp_path), path="slow.txt"))
+    assert "tool timed out after 0.02s" in out
+
+
+def test_write_timeout_reports_message(tmp_path, monkeypatch):
+    import time
+    from pathlib import Path
+
+    import shlepa_agent.tools.base as base_mod
+    from shlepa_agent.tools.write import write
+
+    monkeypatch.setattr(base_mod, "FILE_TOOL_TIMEOUT_S", 0.02)
+    orig_write_text = Path.write_text
+
+    def slow_write_text(self, data, encoding=None):
+        time.sleep(0.3)
+        return orig_write_text(self, data, encoding=encoding)
+
+    monkeypatch.setattr(Path, "write_text", slow_write_text)
+    out = asyncio.run(write(_ctx(tmp_path), path="slow.txt", text="hi"))
+    assert "tool timed out after 0.02s" in out
+
+
+def test_edit_timeout_reports_message(tmp_path, monkeypatch):
+    import time
+    from pathlib import Path
+
+    import shlepa_agent.tools.base as base_mod
+    from shlepa_agent.tools.edit import edit
+
+    monkeypatch.setattr(base_mod, "FILE_TOOL_TIMEOUT_S", 0.02)
+    f = tmp_path / "slow.txt"
+    f.write_text("hello\n")
+    orig_read_text = Path.read_text
+
+    def slow_read_text(self, encoding=None):
+        time.sleep(0.3)
+        return orig_read_text(self, encoding=encoding)
+
+    monkeypatch.setattr(Path, "read_text", slow_read_text)
+    out = asyncio.run(
+        edit(_ctx(tmp_path), path="slow.txt", edits=[{"oldText": "hello", "newText": "bye"}])
+    )
+    assert "tool timed out after 0.02s" in out
+
+
+# ---------------------------------------------------------------------------
+# bash: bounded output, process-group kill, 30s cap (#60)
+# ---------------------------------------------------------------------------
+
+
+def test_bash_unbounded_output_is_bounded_with_drop_marker(tmp_path):
+    import subprocess
+    import time
+
+    from shlepa_agent.tools.bash import bash
+
+    cfg = _cfg()
+    cfg.tools.bash.timeout = 2.0
+    # unbounded producer: /dev/zero never reaches EOF, so the 2s timeout
+    # is guaranteed to fire regardless of machine speed
+    out = asyncio.run(bash(_ctx(tmp_path, cfg), command="cat /dev/zero"))
+    assert "[exit_code] 124" in out  # killed at the 2s timeout
+    assert "bytes dropped" in out  # head+tail retention marker
+    # retention is bounded by the per-stream cap even though the process
+    # produced ~1 GB
+    assert len(_untrusted_body(out)) <= 20000
+    # and nothing of the command's process tree survives the kill
+    time.sleep(0.2)
+    p = subprocess.run(["pgrep", "-f", "dd if=/dev/zero"], capture_output=True)
+    assert p.returncode != 0  # no matches
+
+
+def test_bash_timeout_kills_whole_process_group(tmp_path):
+    import subprocess
+    import time
+
+    from shlepa_agent.tools.bash import bash
+
+    cfg = _cfg()
+    cfg.tools.bash.timeout = 2.0
+    out = asyncio.run(
+        bash(_ctx(tmp_path, cfg), command="sh -c 'sleep 317 & exec sleep 1'")
+    )
+    assert "[exit_code] 124" in out
+    # the backgrounded child (a separate process from the killed shell) must
+    # be gone too: the kill goes to the whole session/group
+    time.sleep(0.2)
+    p = subprocess.run(["pgrep", "-f", "sleep 317"], capture_output=True)
+    assert p.returncode != 0  # no matches
