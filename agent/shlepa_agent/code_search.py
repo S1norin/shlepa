@@ -1,8 +1,9 @@
 """Compact code-search primitives for the agent (rg engine + file_outline).
 
 This module implements the compact search primitive behind the
-``code_search`` / ``file_outline`` agent tools (wired in ``core.py`` behind
-``AGENT_CODE_SEARCH``; see the code-search-tools plan). The ``rg`` engine
+``code_search`` / ``file_outline`` agent tools (wired as Tool records in
+``shlepa_agent/tools/`` behind the ``AGENT_CODE_SEARCH`` env var; see the
+code-search-tools plan). The ``rg`` engine
 wraps the preinstalled ripgrep (fixed-string pattern mode, no ranking); a
 SIFS BM25 engine emitting the same shape is added to this module later.
 
@@ -20,8 +21,8 @@ over its token budget, see research/code_search/analysis/fit-matrix.md):
 
 All public functions are plain (sync) and NEVER raise: every failure
 (missing rg, bad path, timeout, unreadable file) returns a compact error
-string the agent can react to — the "never crash" philosophy of core.py.
-Tool wiring adapts them to @agent.tool via asyncio.to_thread.
+string the agent can react to — the "never crash" philosophy of the
+runner. Tool wiring adapts them to Tool records via asyncio.to_thread.
 """
 
 import json
