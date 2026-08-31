@@ -448,6 +448,10 @@ async def _pipeline(
             elif phase.id != "plan":
                 output = result.summary
         if phase.terminal:
+            # A review that itself failed (error after zero retries) or was
+            # cut by its own time cap reports its own status — not "done".
+            if result.status in ("timeout", "error"):
+                return result.status, output
             # Review phase: "done" stops the run; "next_round" always starts
             # a new cycle (the container kill at the task's own limit is the
             # only external bound).

@@ -54,7 +54,7 @@ def _run(
     )
 
 
-def _cfg(tmp_path, plan_time=60.0, work_time=180.0, max_steps=8):
+def _cfg(tmp_path, plan_time=60.0, work_time=180.0, commit_time=45.0, max_steps=8):
     """Small test config for the v5 pipeline (short phase caps)."""
     p = tmp_path / "cfg.toml"
     p.write_text(
@@ -97,6 +97,7 @@ max_retries = 1
 [phases.commit]
 tools = ["read", "write", "edit", "bash"]
 requests = 20
+time = {commit_time}
 reasoning_effort = "low"
 max_retries = 0
 
@@ -264,6 +265,50 @@ def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, 
 
 
 # -- final_ask handoff on phase hard timeout ---------------------------------
+def test_commit_api_failure_reports_timeout(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # A review that dies on a persistent model error (HTTP 500) is a normal
+    # hand-off: the run must end as "timeout", not "done".
+    stub_state["script"] = [
+        _plan_step("work"),
+        _work_step(),
+        {"error": 500},
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "timeout"
+
+
+def test_commit_invalid_verdict_reports_error(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # A review that exhausts output retries with an invalid verdict is an
+    # unexpected error: the run must end as "error", not "done".
+    bad_review = _review_step()
+    bad_review["tool_call"]["arguments"]["verdict"] = "explode"
+    stub_state["script"] = [
+        _plan_step("work"),
+        _work_step(),
+        bad_review,  # clamped by the stub: every retry sees the same bad step
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "error"
+
+
+def test_commit_time_cap_reports_timeout(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # A review cut by its own time cap must end the run as "timeout",
+    # not "done" (the previous work phase had succeeded).
+    stub_state["script"] = [
+        _plan_step("work"),
+        _work_step(),
+        {"delay": 2.5, "tool_call": _review_step()["tool_call"]},
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path, commit_time=1.0))
+    assert _status(events) == "timeout"
+
+
 def test_plan_time_cap_triggers_final_ask_then_review(
     monkeypatch, stub_openai, tmp_path, events
 ):
