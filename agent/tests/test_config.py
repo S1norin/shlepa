@@ -59,7 +59,7 @@ def test_tool_values():
     cfg = load_config()
     assert cfg.tools.bash.enabled is True
     assert cfg.tools.bash.timeout == 30.0
-    assert cfg.tools.bash.max_timeout == 120.0
+    assert cfg.tools.bash.max_timeout == 30.0
     assert cfg.tools.bash.max_output == 16000
     assert cfg.tools.read.enabled is True
     assert cfg.tools.read.max_limit == 100

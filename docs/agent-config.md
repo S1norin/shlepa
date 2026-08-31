@@ -192,7 +192,13 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
   `max_output` (bash), `max_limit`/`max_output`/`max_file_mb` (read),
   `max_file_mb` (edit). File tools (read/write/edit) have a hard 5s
   per-call timeout; read/edit reject files larger than `max_file_mb`
-  (default 100 MB) with a bash hint instead of loading them.
+  (default 100 MB) with a bash hint instead of loading them. Bash runs
+  each command in its own session (process group): the per-call timeout
+  (default 30s, hard cap 30s) SIGKILLs the whole group — backgrounded
+  children included — and stdout/stderr are drained with bounded
+  head+tail retention (middle replaced by a
+  `[...N bytes dropped...]` marker), so an unbounded `yes`/`dd` cannot
+  blow up memory or the result.
 - `[phases.*]` — per-phase toolset, request/time slices, advisory soft
   limits, reasoning effort, retry count, template wrapper overrides.
 - `[template]` — ordered block list + per-block wrappers for the common
@@ -234,8 +240,8 @@ Every tool result sent to the model is wrapped by `format_tool_result`
 ```
 [tool] name(arg1=..., arg2=...)
   spent=0.31s ended_at=42.7s time_left=542.3s
-  NOTE: timeout clamped to 120s (max)      <- optional, e.g. clamped params
-  FAILED: command killed after 120s timeout (exit 124)   <- optional, failure only
+  NOTE: timeout clamped to 30s (max)       <- optional, e.g. clamped params
+  FAILED: command killed after 30s timeout (exit 124)   <- optional, failure only
 UNTRUSTED TEXT ---------------               <- read/bash only
 <tool output or error>
 END OF UNTRUSTED TEXT-----------

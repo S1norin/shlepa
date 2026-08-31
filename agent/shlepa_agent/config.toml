@@ -64,11 +64,11 @@ request_wall = 240.0
 # gate_extra = 5.0
 
 [tools.bash]
-# Per-call timeout in seconds: default 30, hard cap 120 (out-of-range values
+# Per-call timeout in seconds: default 30, hard cap 30 (out-of-range values
 # are clamped and announced to the model). max_output caps the result text.
 enabled = true
 timeout = 30.0
-max_timeout = 120.0
+max_timeout = 30.0
 max_output = 16000
 
 [tools.read]

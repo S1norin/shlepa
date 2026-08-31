@@ -85,7 +85,7 @@ def test_bash_timeout_clamped_to_max_and_announced(tmp_path):
     from shlepa_agent.tools.bash import bash
 
     out = asyncio.run(bash(_ctx(tmp_path), command="echo ok", timeout=9999))
-    assert "timeout clamped to 120s (max)" in out
+    assert "timeout clamped to 30s (max)" in out
     assert "[exit_code] 0" in out and "ok" in out
 
 
@@ -533,3 +533,49 @@ def test_edit_timeout_reports_message(tmp_path, monkeypatch):
         edit(_ctx(tmp_path), path="slow.txt", edits=[{"oldText": "hello", "newText": "bye"}])
     )
     assert "tool timed out after 0.02s" in out
+
+
+# ---------------------------------------------------------------------------
+# bash: bounded output, process-group kill, 30s cap (#60)
+# ---------------------------------------------------------------------------
+
+
+def test_bash_unbounded_output_is_bounded_with_drop_marker(tmp_path):
+    import subprocess
+    import time
+
+    from shlepa_agent.tools.bash import bash
+
+    cfg = _cfg()
+    cfg.tools.bash.timeout = 2.0
+    # unbounded producer: /dev/zero never reaches EOF, so the 2s timeout
+    # is guaranteed to fire regardless of machine speed
+    out = asyncio.run(bash(_ctx(tmp_path, cfg), command="cat /dev/zero"))
+    assert "[exit_code] 124" in out  # killed at the 2s timeout
+    assert "bytes dropped" in out  # head+tail retention marker
+    # retention is bounded by the per-stream cap even though the process
+    # produced ~1 GB
+    assert len(_untrusted_body(out)) <= 20000
+    # and nothing of the command's process tree survives the kill
+    time.sleep(0.2)
+    p = subprocess.run(["pgrep", "-f", "dd if=/dev/zero"], capture_output=True)
+    assert p.returncode != 0  # no matches
+
+
+def test_bash_timeout_kills_whole_process_group(tmp_path):
+    import subprocess
+    import time
+
+    from shlepa_agent.tools.bash import bash
+
+    cfg = _cfg()
+    cfg.tools.bash.timeout = 2.0
+    out = asyncio.run(
+        bash(_ctx(tmp_path, cfg), command="sh -c 'sleep 317 & exec sleep 1'")
+    )
+    assert "[exit_code] 124" in out
+    # the backgrounded child (a separate process from the killed shell) must
+    # be gone too: the kill goes to the whole session/group
+    time.sleep(0.2)
+    p = subprocess.run(["pgrep", "-f", "sleep 317"], capture_output=True)
+    assert p.returncode != 0  # no matches

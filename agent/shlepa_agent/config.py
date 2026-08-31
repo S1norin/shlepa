@@ -108,7 +108,7 @@ class ToolConfig(BaseModel):
 
 
 class ToolsConfig(BaseModel):
-    bash: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_timeout=120.0, max_output=16000)
+    bash: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_timeout=30.0, max_output=16000)
     read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
     write: ToolConfig = ToolConfig()
     edit: ToolConfig = ToolConfig()
