@@ -25,14 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+
+from pydantic_ai import RunContext
 
 from shlepa_agent import code_search as engine
 from shlepa_agent.log import _log_event
 from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
-
-if TYPE_CHECKING:
-    from pydantic_ai import RunContext
 
 #: Per-call wall fallback when the config does not provide one (the v5
 #: regime bash cap).

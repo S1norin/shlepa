@@ -111,6 +111,30 @@ def test_env_unset_leaves_config_untouched(monkeypatch):
         assert list(cfg.phases[phase_id].tools) == ["read", "write", "edit", "bash"]
 
 
+def test_build_phase_agent_exposes_code_search_tools(monkeypatch):
+    """Regression: pydantic-ai must be able to resolve the tool signatures.
+
+    ``build_phase_agent`` crashed with ``NameError: RunContext`` while the
+    tools were wired: the run-function annotations referenced a name that
+    was only imported under ``TYPE_CHECKING``. Building the real agent is
+    what runs ``get_type_hints`` on the tool functions.
+    """
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.runner import build_phase_agent
+
+    monkeypatch.setenv("AGENT_CODE_SEARCH", "sifs")
+    cfg = load_config()
+    model = TrackedModel(
+        "m", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+    agent = build_phase_agent(model, cfg, get_phase("work"), TASK)
+    # private attribute in pydantic-ai 2.x; the point is the name set
+    names = set(agent._function_toolset.tools)
+    assert {"code_search", "file_outline"} <= names
+
+
 # ---------------------------------------------------------------------------
 # env enabled: tools + notes + engine
 # ---------------------------------------------------------------------------
