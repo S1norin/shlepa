@@ -59,10 +59,22 @@ def run(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print resolved tasks and model, do not run."
     ),
+    arm: str = typer.Option(
+        "",
+        "--arm",
+        help=(
+            "Toolset arm for the batch (named toolset, see "
+            "agent/shlepa_agent/toolsets.py): baseline, +smart-grep, +sifs. "
+            "Default: the AGENT_TOOLSET env var, else baseline. Passed into "
+            "the container as AGENT_TOOLSET and tagged on every MLflow run "
+            "as toolset=<arm>."
+        ),
+    ),
 ) -> None:
     """Run the dev experiment loop for a preset."""
     from shlepa_cli import tasks as tasks_module
     from shlepa_cli.config import get_settings
+    from shlepa_agent.toolsets import resolve_arm
 
     settings = get_settings()
     try:
@@ -72,10 +84,20 @@ def run(
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+    # Arm resolution: --arm flag > AGENT_TOOLSET env > baseline. The agent
+    # package is the single source of truth for known arms; an unknown
+    # value is a user error and must fail before any container is built.
+    arm_spec = arm or os.environ.get("AGENT_TOOLSET", "") or "baseline"
+    try:
+        arm = resolve_arm(arm_spec)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     if dry_run:
         model = preset_obj.model or settings.local_agent_model or "(from env)"
         typer.echo(f"preset: {preset_obj.name}")
         typer.echo(f"model: {model}")
+        typer.echo(f"arm: {arm}")
         typer.echo(f"tasks ({len(resolved)}):")
         for task in resolved:
             typer.echo(f"  - {task.slug} ({task.name})")
@@ -87,7 +109,7 @@ def run(
     no_docker = os.environ.get("SLEPA_NO_DOCKER") == "1"
     batch_id = run_engine.make_batch_id()
     typer.echo(
-        f"preset: {preset_obj.name} | model: {model or '(env)'} | "
+        f"preset: {preset_obj.name} | model: {model or '(env)'} | arm: {arm} | "
         f"mode: {'no-docker' if no_docker else 'container'} | "
         f"batch: {batch_id} | tasks: {len(resolved)}"
     )
@@ -107,6 +129,7 @@ def run(
         no_docker=no_docker,
         mlflow_client=mlflow_client,
         batch_id=batch_id,
+        arm=arm,
     )
     typer.echo("")
     typer.echo(run_engine.format_summary(results))
