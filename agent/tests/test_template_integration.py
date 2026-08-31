@@ -8,10 +8,13 @@ commit request carries the commit text plus the resumed history.
 
 import asyncio
 
-from stub_server import FINAL_ANSWER, stub_state
+from stub_server import stub_state
 
 
-def _run(monkeypatch, stub_openai, tmp_path, task="Create hello.txt with the exact content hello", agent_cfg=None):
+def _run(
+    monkeypatch, stub_openai, tmp_path, task="Create hello.txt with the exact content hello",
+    agent_cfg=None,
+):
     from shlepa_agent.runner import run_prompt
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)

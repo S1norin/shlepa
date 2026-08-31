@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-from stub_server import FINAL_ANSWER, stub_state
+from stub_server import stub_state
 
 
 @pytest.fixture
@@ -41,7 +41,9 @@ def events():
         LOGGER.setLevel(old_level)
 
 
-def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt", phase_factory=None):
+def _run(
+    monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.txt", phase_factory=None
+):
     from shlepa_agent import runner
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
@@ -53,7 +55,9 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.
     )
 
 
-def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8, max_cycles=2):
+def _cfg(
+    tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8, max_cycles=2
+):
     """Small test config for the 4-phase pipeline (short budgets)."""
     p = tmp_path / "cfg.toml"
     p.write_text(
@@ -114,7 +118,8 @@ reasoning_effort = "low"
 max_retries = 0
 
 [template]
-blocks = ["system", "tools", "task", "extra", "previous_results", "phase_prompt", "output_schema", "note"]
+blocks = ["system", "tools", "task", "extra", "previous_results",
+          "phase_prompt", "output_schema", "note"]
 """,
         encoding="utf-8",
     )
@@ -168,7 +173,9 @@ def _commit_step(status="ok"):
 
 
 def _phase_starts(events, phase):
-    return [e for e in events if e.get("event") == "phase" and e.get("id") == phase and e.get("start")]
+    return [
+        e for e in events if e.get("event") == "phase" and e.get("id") == phase and e.get("start")
+    ]
 
 
 def _status(events):
@@ -459,7 +466,9 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     assert start["hard_time"] == pytest.approx(585.0)  # derived from T=600
     assert {"t", "t_source", "plan_cap", "work_cap", "reserve", "bash_cap"} <= set(start)
     usage = next(e for e in events if e.get("event") == "usage")
-    for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
+    for field in (
+        "request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"
+    ):
         assert field in usage
     # v3 pipeline events
     assert {"phase", "phase_done"} <= names

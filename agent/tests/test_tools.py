@@ -101,7 +101,7 @@ def _untrusted_body(out: str) -> str:
     """Extract the body between the UNTRUSTED TEXT markers of a tool result."""
     start = out.index("UNTRUSTED TEXT ---------------\n")
     end = out.index("\nEND OF UNTRUSTED TEXT-----------")
-    return out[start + len("UNTRUSTED TEXT ---------------\n") : end]
+    return out[start + len("UNTRUSTED TEXT ---------------\n"):end]
 
 
 def test_bash_output_truncated_to_configured_limit(tmp_path):

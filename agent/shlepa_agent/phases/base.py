@@ -116,7 +116,7 @@ class Phase(ABC):
         """
         cfg = state.cfg
         b = state.deps.budget
-        l = self.limits(cfg)
+        lim = self.limits(cfg)
         parts: list[str] = []
         if b is not None:
             parts.append(f"task time limit T={b.T:.0f}s")
@@ -130,12 +130,12 @@ class Phase(ABC):
                 cap = min(b.commit_cap, max(0.0, b.hard - state.model.elapsed()))
                 parts.append(f"this phase is hard-capped at {max(cap, 1.0):.0f}s")
         else:
-            if l.time is not None:
-                parts.append(f"this phase is hard-capped at {l.time:.0f}s")
-            if l.soft_time is not None:
-                parts.append(f"aim to finish within {l.soft_time:.0f}s")
-        if l.soft_tokens is not None:
-            parts.append(f"keep the output lean (soft budget ~{l.soft_tokens} tokens)")
+            if lim.time is not None:
+                parts.append(f"this phase is hard-capped at {lim.time:.0f}s")
+            if lim.soft_time is not None:
+                parts.append(f"aim to finish within {lim.soft_time:.0f}s")
+        if lim.soft_tokens is not None:
+            parts.append(f"keep the output lean (soft budget ~{lim.soft_tokens} tokens)")
         return "; ".join(parts)
 
     # -- to implement -----------------------------------------------------

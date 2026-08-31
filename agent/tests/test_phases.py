@@ -91,7 +91,8 @@ def test_registry_resolves_all_four_phase_ids():
     assert isinstance(get_phase("commit"), CommitPhase)
     assert isinstance(get_phase(cfg.agent.emergency), EmergencyPhase)
     # explore was removed in the v3 pipeline
-    assert "explore" not in {p.id for p in (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase())}
+    phases = (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase())
+    assert "explore" not in {p.id for p in phases}
     try:
         get_phase("nope")
         assert False, "expected KeyError"

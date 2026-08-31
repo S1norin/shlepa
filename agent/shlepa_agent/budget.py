@@ -54,7 +54,8 @@ TOML_PROBE_PATHS = (
 )
 
 _TIME_RE = re.compile(
-    r"(?:time\s+limit|time\s+budget|limit\s+of|finish(?:\s+the\s+task)?\s+within|you\s+have|within)\s*[:=]?\s+"
+    r"(?:time\s+limit|time\s+budget|limit\s+of|finish(?:\s+the\s+task)?\s+within|you\s+have|"
+    r"within)\s*[:=]?\s+"
     r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|min|minutes)\b",
     re.IGNORECASE,
 )
