@@ -156,6 +156,9 @@ class AgentConfig(BaseModel):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
+    # Resolved toolset arm (see toolsets.py): "baseline" when AGENT_TOOLSET
+    # is unset or invalid. Data only — never rendered into the prompt.
+    arm: str = "baseline"
     phases: dict[str, PhaseConfig] = Field(min_length=1)
     template: TemplateConfig = Field(
         default_factory=lambda: TemplateConfig(blocks=["system", "tools", "task"])
@@ -213,28 +216,24 @@ def _apply_env_overrides(cfg: AgentConfig) -> None:
             setattr(node, last, value)
 
 
-#: The one deliberate AGENT_* env var (the legacy set was dropped in v2):
-#: dev switch for the code-search toolset arms (#51). Valid values only.
+#: The two deliberate AGENT_* env vars (the legacy set was dropped in v2):
+#: AGENT_CODE_SEARCH is the legacy dev switch for the code-search tools;
+#: AGENT_TOOLSET is the named-arm selector (see toolsets.py) and wins over
+#: it when set.
 CODE_SEARCH_ENV = "AGENT_CODE_SEARCH"
 CODE_SEARCH_ENGINES = ("rg", "sifs")
+TOOLSET_ENV = "AGENT_TOOLSET"
 
 
-def _apply_code_search_env(cfg: AgentConfig) -> None:
-    """Enable code_search/file_outline from AGENT_CODE_SEARCH (rg | sifs).
+def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
+    """Enable code_search/file_outline on the given engine.
 
-    Unset or an invalid value leaves the config untouched (tools off,
-    baseline byte-identical). When set, both tools are enabled, the engine
-    is stored (``cfg.code_search.engine``), and the tool names are appended
-    to every phase's tool list — their notes then render into the system
-    prompt automatically. Shaped for the named toolset arms (#51): an arm
-    is exactly this config mutation.
+    Shared mutation for the legacy AGENT_CODE_SEARCH switch and the named
+    toolset arms (``toolsets.apply_arm``): both tools enabled, engine
+    stored, and the tool names appended to every phase's tool list (their
+    notes then render into the system prompt automatically). Deduped, so
+    it is safe if a phase list ever names them explicitly.
     """
-    raw = os.environ.get(CODE_SEARCH_ENV)
-    if raw is None or not raw.strip():
-        return
-    engine = raw.strip().lower()
-    if engine not in CODE_SEARCH_ENGINES:
-        return  # invalid value: ignore, tools stay off
     cfg.code_search.engine = engine
     cfg.tools.code_search.enabled = True
     cfg.tools.file_outline.enabled = True
@@ -244,11 +243,50 @@ def _apply_code_search_env(cfg: AgentConfig) -> None:
                 phase.tools.append(name)
 
 
+def _apply_code_search_env(cfg: AgentConfig) -> None:
+    """Enable code_search/file_outline from AGENT_CODE_SEARCH (rg | sifs).
+
+    Unset or an invalid value leaves the config untouched (tools off,
+    baseline byte-identical). Superseded by AGENT_TOOLSET when that is
+    set (see :func:`_apply_toolset_env`).
+    """
+    raw = os.environ.get(CODE_SEARCH_ENV)
+    if raw is None or not raw.strip():
+        return
+    engine = raw.strip().lower()
+    if engine not in CODE_SEARCH_ENGINES:
+        return  # invalid value: ignore, tools stay off
+    _enable_search_tools(cfg, engine)
+
+
+def _apply_toolset_env(cfg: AgentConfig) -> None:
+    """Arm selection: the AGENT_TOOLSET env var (named toolset arms).
+
+    When set (and non-empty) it is the SOLE driver of the code-search
+    toolset — the legacy AGENT_CODE_SEARCH switch is skipped even if it
+    is also set (so arm=baseline forces the tools off). A valid arm
+    applies its config mutation and is recorded in ``cfg.arm``; an
+    invalid value is ignored (the config stays at the baseline) so arm
+    selection can never crash the run.
+    """
+    raw = os.environ.get(TOOLSET_ENV)
+    if raw is None or not raw.strip():
+        _apply_code_search_env(cfg)
+        return
+    from shlepa_agent.toolsets import apply_arm, resolve_arm
+
+    try:
+        arm = resolve_arm(raw)
+    except ValueError:
+        return
+    apply_arm(cfg, arm)
+
+
 def load_config(path: Path | str | None = None) -> AgentConfig:
     """Load the agent config: packaged config.toml + env overrides."""
     p = Path(path) if path else DEFAULT_CONFIG_PATH
     data = tomllib.loads(p.read_text(encoding="utf-8"))
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
-    _apply_code_search_env(cfg)
+    _apply_toolset_env(cfg)
     return cfg
