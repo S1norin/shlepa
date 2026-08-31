@@ -25,3 +25,6 @@ tmp/*
 # editor / OS
 .DS_Store
 *.swp
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
