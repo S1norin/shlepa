@@ -27,16 +27,26 @@ class PlanPhase(Phase):
             "extra": self.limits_note(state),
             "output_schema": output_schema_note(PlanResult),
         }
+        parts: list[str] = []
         prev = state.results.get("work")
         if prev is not None:
             if prev.output is not None:
-                contents["previous_results"] = (
-                    "work phase (previous cycle) result:\n" + prev.summary
-                )
+                parts.append("work phase (previous cycle) result:\n" + prev.summary)
             elif prev.error:
-                contents["previous_results"] = (
+                parts.append(
                     "work phase (previous cycle) failed with:\n" + prev.error
                 )
+        review = state.results.get("commit")
+        if review is not None and review.output is not None:
+            hints = getattr(review.output, "hints", None) or []
+            if hints:
+                parts.append(
+                    "review phase verdict (previous cycle): next_round — "
+                    "follow these hints in the new plan:\n"
+                    + "\n".join(f"- {h}" for h in hints)
+                )
+        if parts:
+            contents["previous_results"] = "\n\n".join(parts)
         return render_user(cfg, self.id, contents)
 
     def history(self, state: RunState) -> list[Any] | None:

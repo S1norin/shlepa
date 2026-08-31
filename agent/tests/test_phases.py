@@ -253,6 +253,27 @@ def test_plan_prompt_on_replan_carries_previous_work_result():
     assert "tried" in prompt
 
 
+def test_plan_prompt_on_replan_carries_review_hints():
+    state = _state()
+    work = WorkResult(summary="tried")
+    state.results["work"] = PhaseResult(
+        status="done", summary=work.model_dump_json(), output=work,
+    )
+    review = ReviewResult(
+        status="partial",
+        verdict="next_round",
+        artifact="/app/out.json",
+        hints=["ip_addresses must be sorted descending", "add the port field"],
+    )
+    state.results["commit"] = PhaseResult(
+        status="done", summary=review.model_dump_json(), output=review,
+    )
+    prompt = PlanPhase().prompt(state)
+    assert "review phase verdict (previous cycle): next_round" in prompt
+    assert "ip_addresses must be sorted descending" in prompt
+    assert "add the port field" in prompt
+
+
 def test_work_prompt_carries_plan_result():
     state = _state()
     plan = PlanResult(goal="write /app/out.txt", steps=["echo"], decision="work")

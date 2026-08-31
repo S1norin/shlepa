@@ -4,12 +4,14 @@ Continues the CURRENT conversation (trimmed message history) so the model
 keeps its full context (the work run, or the plan run on the trivial
 plan->commit shortcut). The user message asks to verify the deliverable
 mechanically, repair it if broken, and decide: ``verdict='done'`` stops the
-run, ``verdict='next_round'`` starts a new plan/work cycle when a full cycle
-still fits the remaining time. Full tools (read/write/edit/bash) so the
-reviewer can fix the deliverable itself. Typed output (``ReviewResult``:
-status/verdict/artifact/checks/hints/notes) via the final_result tool;
-hard-capped by the budget review cap (the runner caps it, ``time`` omitted
-in config). Never retried.
+run, ``verdict='next_round'`` starts a new plan/work cycle (always — no time
+or cycle cap; the hints for the next plan ride along in ``state.results``
+and are rendered by the next plan prompt). Full tools
+(read/write/edit/bash) so the reviewer can fix the deliverable itself.
+Typed output (``ReviewResult``: status/verdict/artifact/checks/hints/notes)
+via the final_result tool; hard-capped by the fixed review cap
+(``budget.py``, the runner enforces it, ``time`` omitted in config). Never
+retried.
 """
 
 from __future__ import annotations
