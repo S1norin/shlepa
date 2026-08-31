@@ -21,6 +21,9 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BIN="$HERE/sifs"
 PROV="$HERE/PROVENANCE.md"
 CRATE="sifs@0.4.0"
+# When bumping CRATE above, also update SIFS_PINNED_VERSION in
+# agent/shlepa_agent/code_search.py (the runtime version-mismatch warning
+# compares against it).
 
 mode="install"
 case "${1:-}" in
