@@ -1,20 +1,19 @@
-"""Budgeted OpenAI model wrapper.
+"""Tracked OpenAI model wrapper (v5).
 
 TrackedModel wraps OpenAIChatModel with:
-- per-request usage logging (``usage`` events),
-- hard wall-clock budgeting (breach raises BudgetExceeded; the soft time is
-  advisory only — rendered into prompts/status, never enforced here),
-- a per-request wall-clock cap on stream consumption (_WallCappedStream),
+- per-request usage logging (``usage`` events) — tokens are counted for
+  telemetry / tie-break analysis only, never limited,
+- per-operation time bounds (the only bounds in the agent): the per-request
+  open timeout (``[budget].request_timeout``) and the per-request
+  wall-clock cap on stream consumption (``budget.LLM_WALL``, open -> last
+  chunk),
 - one retry for transient network errors,
-- context-overflow detection mapped to BudgetExceeded,
-- an adaptive per-run budget (``budget.Budget``): when passed, the hard stop,
-  the per-request timeout/wall and the request-start gate are derived from
-  the task time limit T instead of the static [budget] reference values.
+- context-overflow detection mapped to BudgetExceeded (a normal hand-off,
+  never a retryable error).
 
-The fixed per-run budget (``budget.Budget``, v5 regime) provides the hard
-stop, the per-request wall (``llm_wall``) and the request-start gate. There
-is NO token budget and NO request-count limit: token usage is logged per
-request (telemetry / tie-break analysis) but never enforced.
+There is NO task time limit T, NO global hard stop and NO request-start
+gate: the agent works in cycles until the review verdict is "done" or the
+container is killed at the task's own limit.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from shlepa_agent.budget import Budget
+from shlepa_agent.budget import LLM_WALL
 from shlepa_agent.config import AgentConfig
 from shlepa_agent.log import _log_event
 
@@ -44,8 +43,8 @@ CONTEXT_ERROR_MARKERS = (
 
 
 class BudgetExceeded(Exception):
-    """Raised inside the model when the global budget is exceeded (hard time,
-    context overflow). The runner routes the current phase out on it."""
+    """Raised inside the model on a context-overflow error. The runner
+    treats it as a normal hand-off (never retryable)."""
 
 
 def _looks_like_context_error(text: str) -> bool:
@@ -60,9 +59,9 @@ class _WallCappedStream:
     in _open_stream only covers opening the stream (up to the first bytes). A
     single request that keeps generating forever (runaway loop) or a server
     that stops sending chunks mid-stream (zombie) would otherwise hang the
-    agent until harbor kills the container. This proxy makes every __anext__
+    agent until the container is killed. This proxy makes every __anext__
     respect the shared deadline (open -> last chunk) and raises ModelAPIError
-    when it is exceeded, which routes the run into the commit phase.
+    when it is exceeded, which hands the phase off to the review phase.
     """
 
     def __init__(self, inner: Any, deadline: float, model_name: str, wall: float) -> None:
@@ -98,11 +97,12 @@ class _WallCappedStream:
 
 
 class TrackedModel(OpenAIChatModel):
-    """OpenAIChatModel with wall-clock budgeting and per-request usage logs.
+    """OpenAIChatModel with per-request time caps and usage logs.
 
     Tokens are counted and logged only (tie-break analysis); they are never
-    limited. Requests are only gated by time (hard stop, per-request wall,
-    request-start gate).
+    limited. Every operation is bounded by time (per-request open timeout +
+    wall cap); the run itself is bounded by the phase caps (runner) and the
+    review verdict.
     """
 
     def __init__(
@@ -110,19 +110,11 @@ class TrackedModel(OpenAIChatModel):
         model_name: str,
         provider: OpenAIProvider,
         agent_cfg: AgentConfig,
-        budget: Budget | None = None,
     ):
         super().__init__(model_name, provider=provider)
         self.cfg = agent_cfg.budget
-        self.budget = budget
-        if budget is not None:
-            self.hard = budget.hard
-            self.gate_min: float | None = budget.gate_min
-            self.llm_wall = budget.llm_wall
-        else:
-            self.hard = agent_cfg.budget.hard_time
-            self.gate_min = None
-            self.llm_wall = agent_cfg.budget.request_wall
+        self.request_timeout = self.cfg.request_timeout
+        self.llm_wall = LLM_WALL
         self.t0 = time.monotonic()
         self.last_messages: list[Any] = []
         self._pending_stream: Any = None
@@ -130,32 +122,8 @@ class TrackedModel(OpenAIChatModel):
         self._cum_input = 0
         self._cum_output = 0
 
-    # -- dynamic budget helpers ------------------------------------------
-    def _time_left(self) -> float:
-        return max(0.0, self.hard - self.elapsed())
-
-    def _margin(self) -> float:
-        """Safety margin (15s) reserved for the run tail (0 in legacy mode)."""
-        return self.budget.margin if self.budget is not None else 0.0
-
-    def _request_timeout(self) -> float:
-        """Per-request open timeout: static cap, shrunk by remaining time.
-
-        v4: ``min(request_timeout, time_left - margin)`` so a slow request
-        can never eat into the finalize tail.
-        """
-        return max(
-            5.0, min(self.cfg.request_timeout, self._time_left() - self._margin())
-        )
-
-    def _request_wall(self) -> float:
-        """Per-request wall (open -> last chunk): regime cap (180s),
-        shrunk by the remaining time minus the margin."""
-        return max(5.0, min(self.llm_wall, self._time_left() - self._margin()))
-
-    def _gate_blocked(self) -> bool:
-        """True when not enough time remains for a new request to be useful."""
-        return self.gate_min is not None and self._time_left() < self.gate_min
+    def elapsed(self) -> float:
+        return time.monotonic() - self.t0
 
     # -- helpers ----------------------------------------------------------
     def _capped_settings(self, model_settings: Any) -> dict:
@@ -164,12 +132,6 @@ class TrackedModel(OpenAIChatModel):
         if self.cfg.max_tokens and not ms.get("max_tokens"):
             ms["max_tokens"] = self.cfg.max_tokens
         return ms
-
-    def elapsed(self) -> float:
-        return time.monotonic() - self.t0
-
-    def _hard_expired(self) -> bool:
-        return self.elapsed() > self.hard
 
     def log_pending_usage(self) -> None:
         """Log the usage of the previous (now-finalized) streamed response."""
@@ -204,23 +166,11 @@ class TrackedModel(OpenAIChatModel):
 
         Returns (streamed_response, context_manager); the caller must close the CM.
         """
-        if self._gate_blocked():
-            raise BudgetExceeded(
-                f"request gate: {self._time_left():.0f}s left < "
-                f"{self.gate_min:.0f}s — not enough time for a request"
-            )
         cm: Any = None
         last_err: Exception | None = None
         for attempt in (1, 2):
-            if self._hard_expired():
-                raise BudgetExceeded(f"hard time limit {self.hard:.0f}s exceeded")
-            if self._gate_blocked():
-                raise BudgetExceeded(
-                    f"request gate: {self._time_left():.0f}s left < "
-                    f"{self.gate_min:.0f}s — not enough time for a request"
-                )
             try:
-                async with asyncio.timeout(self._request_timeout()):
+                async with asyncio.timeout(self.request_timeout):
                     cm = super(TrackedModel, self).request_stream(
                         messages, model_settings, model_request_parameters, run_context
                     )
@@ -275,7 +225,7 @@ class TrackedModel(OpenAIChatModel):
         self._pending_stream = sr
         # Consumption happens in pydantic-ai's drain loop, outside any timeout
         # we set in _open_stream; enforce the request wall around the stream.
-        wall = self._request_wall()
+        wall = self.llm_wall
         wall_deadline = time.monotonic() + wall
         try:
             yield _WallCappedStream(sr, wall_deadline, self.model_name, wall)
@@ -294,22 +244,10 @@ class TrackedModel(OpenAIChatModel):
         self.log_pending_usage()
         self.last_messages = list(messages)
         model_settings = self._capped_settings(model_settings)
-        if self._gate_blocked():
-            raise BudgetExceeded(
-                f"request gate: {self._time_left():.0f}s left < "
-                f"{self.gate_min:.0f}s — not enough time for a request"
-            )
         last_err: Exception | None = None
         for attempt in (1, 2):
-            if self._hard_expired():
-                raise BudgetExceeded(f"hard time limit {self.hard:.0f}s exceeded")
-            if self._gate_blocked():
-                raise BudgetExceeded(
-                    f"request gate: {self._time_left():.0f}s left < "
-                    f"{self.gate_min:.0f}s — not enough time for a request"
-                )
             try:
-                async with asyncio.timeout(self._request_timeout()):
+                async with asyncio.timeout(self.request_timeout):
                     return await super(TrackedModel, self).request(
                         messages, model_settings, model_request_parameters
                     )

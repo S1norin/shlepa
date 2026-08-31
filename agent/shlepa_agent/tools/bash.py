@@ -20,9 +20,10 @@ async def bash(
     ctx: "RunContext[AgentDeps]", command: str, timeout: float | None = None
 ) -> str:
     """Run a shell command in the working directory. ``timeout`` is the
-    per-call limit in seconds (default 30, max 120; out-of-range values are
-    clamped and reported). Use absolute paths; combine steps with && where
-    sensible. Start servers with nohup + & then verify they respond."""
+    per-call limit in seconds (default 30, max 30 — the fixed regime bash
+    cap; out-of-range values are clamped and reported). Use absolute paths;
+    combine steps with && where sensible. Start servers with nohup + &
+    then verify they respond."""
     t0 = time.monotonic()
     tcfg = ctx.deps.cfg.tools.bash
     max_timeout = tcfg.max_timeout or DEFAULT_MAX_TIMEOUT
@@ -49,15 +50,6 @@ async def bash(
     elif t < MIN_TIMEOUT:
         note = f"timeout clamped to {MIN_TIMEOUT:.0f}s (min)"
         t = MIN_TIMEOUT
-    # Fixed regime: a single command must never eat into the margin or the
-    # run's hard stop, and never exceed the bash cap (30s).
-    budget = ctx.deps.budget
-    if budget is not None:
-        dyn = max(MIN_TIMEOUT, budget.hard - ctx.deps.clock() - budget.margin)
-        cap = min(budget.bash_cap, dyn)
-        if t > cap:
-            note = (note + "; " if note else "") + f"timeout clamped to {cap:.0f}s (time budget)"
-            t = cap
 
     try:
         proc = await asyncio.create_subprocess_shell(

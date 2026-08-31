@@ -85,7 +85,7 @@ def test_bash_timeout_clamped_to_max_and_announced(tmp_path):
     from shlepa_agent.tools.bash import bash
 
     out = asyncio.run(bash(_ctx(tmp_path), command="echo ok", timeout=9999))
-    assert "timeout clamped to 120s (max)" in out
+    assert "timeout clamped to 30s (max)" in out
     assert "[exit_code] 0" in out and "ok" in out
 
 
@@ -366,8 +366,8 @@ def test_result_header_has_timing(tmp_path):
     assert out.startswith("[tool] bash(")
     assert "spent=" in out
     assert "ended_at=100.0s" in out
-    hard = load_config().budget.hard_time
-    assert f"time_left={hard - 100.0:.1f}s" in out
+    # no time_left: v5 has no global hard deadline
+    assert "time_left" not in out
 
 
 def test_untrusted_framing_on_read_and_bash_only(tmp_path):

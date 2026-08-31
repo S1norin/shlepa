@@ -5,51 +5,38 @@
 # here; see docs/agent-config.md for the full mapping.
 
 [agent]
-# Pipeline: plan -> work -> (commit | replan). Entry phase, emergency phase,
-# commit deadline, total step guard, temperature.
+# Pipeline: plan -> work -> review (commit), in cycles. Entry phase, total
+# step guard, temperature.
 #
-# Zero/empty values are DERIVED per run from the task time limit T (v5 fixed
-# regime, budget.py / config.build_budget). Explicit positive values act as
-# overrides (mainly for dev/testing).
-#
-# v5: there is NO plan->work cycle cap — a new round starts only when a full
-# cycle (plan + work + review) fits the remaining time.
-#
-# commit_deadline: if the clock has passed this point at a phase boundary and
-# the next phase is not commit, the emergency phase runs instead (until
-# hard). Derived value: plan + work + review cap, capped by hard.
+# v5: there is NO task time limit T and NO cycle cap — the agent cycles
+# plan -> work -> review until the review verdict is "done" (a "next_round"
+# verdict starts a new round). The container itself is killed at the
+# task's own limit; the emergency phase name is UNUSED (kept for compat).
 entry = ""
 emergency = "emergency"
-commit_deadline = 0.0
+# Total phase-run guard (dev knob). 0 = off — the run cycles until done.
 max_steps = 0
 temp = 0.2
 
 [budget]
-# Per-request caps + reference values. The runtime budget is DERIVED per run
-# from the task time limit T (env SLEPA_AGENT_TIMEOUT/TASK_TIMEOUT_SEC ->
-# task.toml probe -> instruction text -> t_fallback); the phase caps are the
-# FIXED v5 regime constants (plan 60 / work 120 / review 45 / margin 15 /
-# bash 30 / llm wall 180 — see budget.py). hard_time/soft_time are legacy
-# reference values. There is NO global token budget and NO request-count
-# limit: token usage is logged per request for analysis only.
-hard_time = 585.0
-soft_time = 500.0
-t_fallback = 600.0
+# Per-request caps. The phase caps are the FIXED regime constants in
+# budget.py (plan 60 / work 120 / review 45 / bash 30 / llm wall 180).
+# There is NO task time limit T, NO global hard stop, NO request-start
+# gate, NO global token budget and NO request-count limit: token usage is
+# logged per request for analysis only.
 # Hard per-request output cap. Without it a single request can loop for
-# tens of thousands of tokens and eat the whole trial before commit.
+# tens of thousands of tokens and eat the whole trial.
 max_tokens = 16384
+# Per-request open timeout (up to the first bytes).
 request_timeout = 180.0
-# Kill a single in-flight request if it runs this long (open -> last chunk);
-# legacy fallback for runs without a derived budget (the v5 regime uses
-# budget.llm_wall = 180).
-request_wall = 180.0
 
 [tools.bash]
-# Per-call timeout in seconds: default 30, hard cap 120 (out-of-range values
-# are clamped and announced to the model). max_output caps the result text.
+# Per-call timeout in seconds: default 30, hard cap 30 (the fixed regime
+# bash cap; out-of-range values are clamped and announced to the model).
+# max_output caps the result text.
 enabled = true
 timeout = 30.0
-max_timeout = 120.0
+max_timeout = 30.0
 max_output = 16000
 
 [tools.read]
@@ -69,10 +56,9 @@ enabled = true
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
-# structured plan. Hard cap is DERIVED from the budget (plan = 30/45/60s by
-# T, 0 = phase disabled). An explicit `time` value would override the
-# derived cap (dev knob; omitted here). Soft values are advisory (rendered
-# into the prompt).
+# structured plan. Hard cap is the fixed regime constant (plan = 60s,
+# budget.py). An explicit `time` value would override the cap (dev knob;
+# omitted here). Soft values are advisory (rendered into the prompt).
 tools = ["read", "write", "edit", "bash"]
 requests = 25
 soft_time = 45.0
@@ -80,9 +66,9 @@ soft_tokens = 15000
 max_retries = 1
 
 [phases.work]
-# Execute the plan, do not invent new approaches, self-review the result,
-# decide: commit or replan. Hard cap per cycle is DERIVED from the budget
-# (work = min(180, ...); an explicit `time` would override it).
+# Execute the plan, do not invent new approaches, keep the deliverable file
+# fresh, hand off to review. Hard cap per cycle is the fixed regime constant
+# (work = 120s, budget.py; an explicit `time` would override it).
 tools = ["read", "write", "edit", "bash"]
 requests = 100
 soft_time = 150.0
@@ -90,8 +76,9 @@ soft_tokens = 80000
 max_retries = 1
 
 [phases.commit]
-# Terminal: receive the work result, finalize and verify the deliverables.
-# Omitted time = runs until the global hard_time (takes the remainder).
+# Terminal REVIEW phase: verify the deliverable mechanically, repair it if
+# broken, decide done|next_round. Hard cap is the fixed regime constant
+# (review = 45s, budget.py).
 tools = ["read", "write", "edit", "bash"]
 requests = 20
 soft_time = 45.0
@@ -100,9 +87,8 @@ reasoning_effort = "low"
 max_retries = 0
 
 [phases.emergency]
-# Terminal rescue: time is almost over, write whatever exists now. Runs only
-# when the (derived) commit deadline is passed before commit started, or
-# when <30s remain for commit.
+# UNUSED in v5 (kept for compatibility): the v4 terminal rescue. The runner
+# never routes to it.
 tools = ["read", "write", "edit", "bash"]
 requests = 20
 soft_tokens = 20000

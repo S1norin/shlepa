@@ -17,57 +17,40 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from shlepa_agent.budget import Budget, derive_budget, extract_time_limit
-
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 class AgentSection(BaseModel):
-    """Run-level settings: pipeline entry, emergency phase, deadline.
+    """Run-level settings: pipeline entry, emergency phase, step guard.
 
-    Zero/empty values mean "derive from the per-task budget" (see
-    ``build_budget``); explicit positive values are overrides.
-    v5: there is NO plan->work cycle cap — the cycle count is time-driven
-    (a new round only starts when a full cycle fits the remaining time).
+    v5: there is NO task time limit T and NO cycle cap — the agent works in
+    plan/work/review cycles until the review verdict is "done"; a new round
+    starts on every "next_round" verdict.
     """
 
-    #: Entry phase. Empty = derived: "plan" when a full cycle (plan + work
-    #: + review) fits the remaining time, otherwise "work".
+    #: Entry phase. Empty = "plan".
     entry: str = ""
+    #: Name of the emergency phase (UNUSED in v5, kept for compatibility).
     emergency: str = "emergency"
-    # Commit deadline: if the clock has passed this point at a phase boundary
-    # and the next phase is not commit, the emergency phase runs instead.
-    # 0 = derived (plan + work + review cap, capped by hard).
-    commit_deadline: float = 0.0
-    # Total phase-run guard (dev knob). 0 = off — time is the bound (v5).
+    # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
     max_steps: int = Field(default=0, ge=0)
     temp: float = 0.2
 
 
 class BudgetConfig(BaseModel):
-    """Global budget: static reference values for the fixed v5 regime.
+    """Per-request caps for the fixed v5 regime.
 
-    The runtime budget is DERIVED per run from the task time limit T via
-    ``build_budget`` (env / task.toml / instruction text / ``t_fallback``);
-    the phase caps are fixed constants (``budget.py``). ``hard_time`` /
-    ``soft_time`` are reference values for legacy runs without a derived
-    budget; ``max_tokens``, ``request_timeout`` and ``request_wall`` are
-    per-request caps. There is NO global token budget and NO request-count
-    limit (token usage is logged for analysis only).
+    The phase caps are fixed constants (``budget.py``); there is NO task
+    time limit T, NO global hard stop and NO request-start gate. There is
+    NO global token budget and NO request-count limit (token usage is
+    logged for analysis only).
     """
 
-    hard_time: float = 585.0
-    soft_time: float = 500.0
-    #: Task limit T used when no limit is detected from env / task.toml /
-    #: instruction text.
-    t_fallback: float = 600.0
     # Hard per-request output cap; without it a single request can loop for
-    # tens of thousands of tokens and eat the whole trial before commit.
+    # tens of thousands of tokens and eat the whole trial.
     max_tokens: int = 16_384
+    # Per-request open timeout (up to the first bytes).
     request_timeout: float = 180.0
-    # Per-request wall (open -> last chunk) for legacy runs without a derived
-    # budget; with a budget the regime constant budget.llm_wall (180s) is used.
-    request_wall: float = 180.0
 
 
 class ToolConfig(BaseModel):
@@ -110,9 +93,8 @@ class PhaseConfig(BaseModel):
     """One phase of the pipeline: toolset, hard/advisory limits, template
     overrides.
 
-    - ``time``: hard wall-clock cap for the phase run. ``None`` (omitted) means
-      "until the global hard_time" — used by the terminal phases (commit,
-      emergency) which take the remainder of the trial.
+    - ``time``: explicit hard wall-clock cap for the phase run. ``None``
+      (omitted) = the fixed regime constant for the phase (``budget.py``).
     - ``soft_time`` / ``soft_tokens``: advisory only. Rendered into the phase
       prompt and status lines; they never cut the phase.
     """
@@ -155,13 +137,8 @@ class AgentConfig(BaseModel):
 ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_TEMP": ("agent.temp", float),
     "SHLEPA_MAX_STEPS": ("agent.max_steps", int),
-    "SHLEPA_COMMIT_DEADLINE": ("agent.commit_deadline", float),
-    "SHLEPA_BUDGET_HARD_TIME": ("budget.hard_time", float),
-    "SHLEPA_BUDGET_SOFT_TIME": ("budget.soft_time", float),
-    "SHLEPA_BUDGET_T_FALLBACK": ("budget.t_fallback", float),
     "SHLEPA_BUDGET_MAX_TOKENS": ("budget.max_tokens", int),
     "SHLEPA_BUDGET_REQUEST_TIMEOUT": ("budget.request_timeout", float),
-    "SHLEPA_BUDGET_REQUEST_WALL": ("budget.request_wall", float),
     "SHLEPA_BASH_TIMEOUT": ("tools.bash.timeout", float),
     "SHLEPA_BASH_MAX_TIMEOUT": ("tools.bash.max_timeout", float),
     "SHLEPA_BASH_MAX_OUTPUT": ("tools.bash.max_output", int),
@@ -202,16 +179,3 @@ def load_config(path: Path | str | None = None) -> AgentConfig:
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
     return cfg
-
-
-def build_budget(cfg: AgentConfig, instruction: str = "") -> Budget:
-    """Derive the per-run budget: resolve T, apply the fixed v5 regime.
-
-    T resolution: env (``SLEPA_AGENT_TIMEOUT`` first) -> task.toml probe ->
-    instruction text -> ``budget.t_fallback``. The phase caps are fixed
-    constants (see ``budget.derive_budget``); there is no token limit.
-    """
-    t, source = extract_time_limit(instruction)
-    if source == "fallback":
-        t, source = cfg.budget.t_fallback, "config:default"
-    return derive_budget(t, source=source)

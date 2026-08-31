@@ -12,8 +12,6 @@ if TYPE_CHECKING:
 
     from shlepa_agent.config import AgentConfig
 
-from shlepa_agent.budget import Budget
-
 
 @dataclass(frozen=True)
 class AgentDeps:
@@ -21,12 +19,9 @@ class AgentDeps:
 
     workdir: Path
     cfg: "AgentConfig"
-    #: Wall-clock elapsed seconds since the run started (same clock as the
-    #: global budget, i.e. ``TrackedModel.elapsed``).
+    #: Wall-clock elapsed seconds since the run started (the
+    #: ``TrackedModel.elapsed`` clock).
     clock: Callable[[], float]
-    #: Adaptive per-run budget (derived from the task time limit T). None in
-    #: legacy/test contexts — code must fall back to ``cfg.budget`` values.
-    budget: "Budget | None" = None
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.
@@ -57,8 +52,8 @@ def format_tool_result(
     Layout (one result per tool call):
 
     - header line: ``[tool] name(arg1=..., arg2=...)``
-    - timing line: ``spent`` (tool wall time), ``ended_at`` (seconds into the
-      run), ``time_left`` (until the global hard-time deadline)
+    - timing line: ``spent`` (tool wall time), ``ended_at`` (seconds into
+      the run)
     - optional ``NOTE:`` line (e.g. clamped parameters)
     - optional ``FAILED:`` line (only on tool failure)
     - the tool output: wrapped in ``UNTRUSTED TEXT`` markers when it carries
@@ -68,12 +63,10 @@ def format_tool_result(
     """
     spent = time.monotonic() - started
     ended = ctx.deps.clock()
-    hard = ctx.deps.budget.hard if ctx.deps.budget is not None else ctx.deps.cfg.budget.hard_time
-    time_left = max(0.0, hard - ended)
     argstr = ", ".join(f"{k}={_short(v)}" for k, v in (args or {}).items())
     lines = [
         f"[tool] {name}({argstr})",
-        f"  spent={spent:.2f}s ended_at={ended:.1f}s time_left={time_left:.1f}s",
+        f"  spent={spent:.2f}s ended_at={ended:.1f}s",
     ]
     if note:
         lines.append(f"  NOTE: {note}")

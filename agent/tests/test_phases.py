@@ -19,7 +19,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from shlepa_agent.budget import derive_budget
 from shlepa_agent.config import load_config
 from shlepa_agent.outputs import PlanResult, ReviewResult, WorkResult
 from shlepa_agent.phases import (
@@ -41,7 +40,6 @@ def _state(task="Create hello.txt with the exact content hello", last_messages=N
         workdir=Path("/tmp"),
         cfg=cfg,
         clock=lambda: 0.0,
-        budget=derive_budget(600.0),
     )
     model = SimpleNamespace(
         last_messages=last_messages if last_messages is not None else [],
@@ -72,10 +70,10 @@ def test_phase_result_carries_typed_output():
 
 def test_run_state_holds_one_result_per_phase_and_cycles():
     state = _state()
-    state.results["work"] = PhaseResult(status="budget", summary="cut off")
+    state.results["work"] = PhaseResult(status="timeout", summary="cut off")
     state.results["commit"] = PhaseResult(status="done")
     assert state.cfg is state.deps.cfg
-    assert state.results["work"].status == "budget"
+    assert state.results["work"].status == "timeout"
     assert state.cycles == 0
     state.cycles += 1
     assert state.cycles == 1
@@ -84,7 +82,7 @@ def test_run_state_holds_one_result_per_phase_and_cycles():
 # -- registry ------------------------------------------------------------------
 def test_registry_resolves_all_four_phase_ids():
     cfg = load_config()
-    # packaged config derives the entry from the budget (empty entry)
+    # packaged config: empty entry = always start at the plan phase (v5)
     assert cfg.agent.entry == ""
     assert isinstance(get_phase("plan"), PlanPhase)
     assert isinstance(get_phase("work"), WorkPhase)
@@ -169,20 +167,20 @@ def test_phase_limits_from_config():
     cfg = load_config()
     plan = PlanPhase().limits(cfg)
     assert plan.requests == 25
-    assert plan.time is None  # derived from the adaptive budget
+    assert plan.time is None  # cap = regime constant (budget.py)
     assert plan.soft_time == 45.0
     assert plan.soft_tokens == 15000
     assert plan.reasoning_effort is None
 
     work = WorkPhase().limits(cfg)
     assert work.requests == 100
-    assert work.time is None  # derived from the adaptive budget
+    assert work.time is None  # cap = regime constant (budget.py)
     assert work.soft_time == 150.0
     assert work.soft_tokens == 80000
 
     commit = CommitPhase().limits(cfg)
     assert commit.requests == 20
-    assert commit.time is None  # takes the remainder until hard_time
+    assert commit.time is None  # cap = regime constant (budget.py)
     assert commit.soft_time == 45.0
     assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
@@ -193,27 +191,30 @@ def test_phase_limits_from_config():
     assert emergency.reasoning_effort == "low"
 
 
-def test_limits_note_rendered_budget_values():
+def test_limits_note_rendered_regime_caps():
     state = _state()
     plan_note = PlanPhase().limits_note(state)
-    # budget-derived caps (T=600: plan 60s) + advisory token budget
-    assert "T=600s" in plan_note
+    # fixed regime caps (plan 60s) + advisory soft values
     assert "hard-capped at 60s" in plan_note
+    assert "45s" in plan_note
     assert "15000" in plan_note
+    work_note = WorkPhase().limits_note(state)
+    assert "hard-capped at 120s" in work_note
+    assert "cycle 1" in work_note  # state.cycles == 0 -> "this is cycle 1"
     commit_note = CommitPhase().limits_note(state)
     # the review (commit) phase gets its fixed regime cap (45s)
     assert "hard-capped at 45s" in commit_note
 
 
-def test_limits_note_legacy_without_budget():
-    cfg = load_config()
+def test_limits_note_time_override():
+    # an explicit [phases.*].time override (dev knob) beats the regime cap
+    cfg = load_config().model_copy(deep=True)
+    cfg.phases["plan"].time = 12.0
     deps = AgentDeps(workdir=Path("/tmp"), cfg=cfg, clock=lambda: 0.0)
     model = SimpleNamespace(last_messages=[])
     state = RunState(task="t", deps=deps, model=model)
     note = PlanPhase().limits_note(state)
-    # without a budget and with no static phase time, only advisories render
-    assert "hard-capped" not in note
-    assert "45s" in note
+    assert "hard-capped at 12s" in note
 
 
 def test_max_retries_from_config():

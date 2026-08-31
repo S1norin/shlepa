@@ -1,10 +1,9 @@
-"""t6: runner tests — 4-phase pipeline, handoffs, final_ask, deadlines, retries.
+"""t6: runner tests — v5 pipeline, handoffs, final_ask, retries.
 
-The runner (shlepa_agent.runner) walks the 4-phase pipeline:
-plan -> work -> (commit | replan -> plan), with per-phase hard time caps,
-the one-shot toolless final_ask after a phase time-out, the 520s commit
-deadline -> emergency, per-phase error retries, and a stable log contract
-for the CLI.
+The runner (shlepa_agent.runner) walks the plan -> work -> review cycle
+(no task time limit T, no cycle cap): per-phase fixed time caps, the
+one-shot toolless final_ask after a phase time-out, per-phase error
+retries, and a stable log contract for the CLI.
 """
 
 import asyncio
@@ -53,8 +52,8 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg=None, task="create hello.
     )
 
 
-def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, max_steps=8):
-    """Small test config for the 4-phase pipeline (short budgets)."""
+def _cfg(tmp_path, plan_time=60.0, work_time=180.0, max_steps=8):
+    """Small test config for the v5 pipeline (short phase caps)."""
     p = tmp_path / "cfg.toml"
     p.write_text(
         f"""
@@ -62,15 +61,11 @@ def _cfg(tmp_path, plan_time=60.0, work_time=180.0, hard=600.0, deadline=520.0, 
 temp = 0.2
 entry = "plan"
 emergency = "emergency"
-commit_deadline = {deadline}
 max_steps = {max_steps}
 
 [budget]
-hard_time = {hard}
-soft_time = 450.0
 max_tokens = 16384
 request_timeout = 30.0
-request_wall = 60.0
 
 [tools.bash]
 enabled = true
@@ -263,42 +258,18 @@ def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, 
     assert len(stub_state["bodies"]) == 6
 
 
-def test_review_next_round_without_time_stops_with_budget(
+# -- final_ask handoff on phase hard timeout ---------------------------------
+def test_plan_time_cap_triggers_final_ask_then_review(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    # T=120s: a full cycle (225s in the fixed regime) does not fit, so a
-    # "next_round" verdict stops the run with status "budget".
-    monkeypatch.setenv("SLEPA_AGENT_TIMEOUT", "120")
-    stub_state["script"] = [
-        _plan_step("work"),
-        _work_step(),
-        _review_step(verdict="next_round"),
-    ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "budget"
-    assert any(
-        e.get("event") == "budget" and e.get("reason") == "next_round_no_time"
-        for e in events
-    )
-    assert not _phase_starts(events, "emergency")
-    assert len(_phase_starts(events, "plan")) == 1
-    assert len(stub_state["bodies"]) == 3
-
-
-# -- final_ask handoff on phase hard timeout ---------------------------------
-def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tmp_path, events):
-    import shlepa_agent.runner as runner_mod
-
-    # shrink the minimum run window so a 1.0s plan cap is honored, not skipped
-    monkeypatch.setattr(runner_mod, "MIN_RUN_WINDOW_S", 0.5)
     stub_state["script"] = [
         {"delay": 2.5, "final": "too slow — plan timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
         _review_step(),  # v5: a plan breach hands off straight to the review
     ]
-    cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0, hard=60.0)
+    cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "budget"  # plan was cut by its cap
+    assert _status(events) == "timeout"  # plan was cut by its cap
     # plan was cut by its hard cap (budget), NOT retried
     assert any(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
@@ -325,18 +296,15 @@ def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tm
 
 
 def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, tmp_path, events):
-    import shlepa_agent.runner as runner_mod
-
-    monkeypatch.setattr(runner_mod, "MIN_RUN_WINDOW_S", 0.5)
     stub_state["script"] = [
         _plan_step("work"),
         {"delay": 2.5, "final": "too slow — work timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
         _review_step(),
     ]
-    cfg = _cfg(tmp_path, work_time=1.0, hard=60.0)
+    cfg = _cfg(tmp_path, work_time=1.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "budget"  # work was cut by its cap
+    assert _status(events) == "timeout"  # work was cut by its cap
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "work"]
     assert asks and asks[-1].get("ok") is True
     assert len(_phase_starts(events, "work")) == 1  # work was NOT rerun
@@ -344,29 +312,13 @@ def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, 
     assert len(stub_state["bodies"]) == 4
 
 
-# -- v5: the commit deadline routes nothing (emergency is hard-off) -----------
-def test_commit_deadline_no_longer_routes_to_emergency(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # v5: the deadline is a logged legacy field only — the walk keeps going
-    # plan -> work -> review and the emergency phase never starts.
-    cfg = _cfg(tmp_path, deadline=0.001, hard=60.0)
-    stub_state["script"] = [_plan_step("work"), _work_step(), _review_step()]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "done"
-    assert not _phase_starts(events, "emergency")
-    assert _phase_starts(events, "work")
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 3
-
-
 def test_step_guard_exhaustion_stops_run(monkeypatch, stub_openai, tmp_path, events):
     # max_steps=1 (dev knob): the plan phase runs, then the guard stops the
-    # walk at the work boundary — with "budget", no emergency routing.
-    cfg = _cfg(tmp_path, max_steps=1, hard=60.0)
+    # walk at the work boundary — with "timeout", no emergency routing.
+    cfg = _cfg(tmp_path, max_steps=1)
     stub_state["script"] = [_plan_step("work")]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "budget"
+    assert _status(events) == "timeout"
     assert any(
         e.get("event") == "budget" and e.get("reason") == "max_steps" for e in events
     )
@@ -429,20 +381,23 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "workdir",
         "prompt",
         "temp",
-        "soft_time",
-        "hard_time",
+        "entry",
     ):
         assert field in start, f"agent_start lost stable field {field}"
-    # v5 fixed-regime details are additive (unknown to the CLI, but logged)
-    assert start["hard_time"] == pytest.approx(585.0)  # derived from T=600
-    assert {"t", "t_source", "plan_cap", "work_cap", "review_cap",
-            "bash_cap", "llm_wall"} <= set(start)
+    # v5 fixed-regime details are additive (unknown to the CLI, but logged);
+    # there is NO t / t_source / hard_time / soft_time / commit_deadline
+    assert {"plan_cap", "work_cap", "review_cap", "bash_cap", "llm_wall"} <= set(start)
+    assert start["plan_cap"] == pytest.approx(60.0)
+    assert start["work_cap"] == pytest.approx(120.0)
+    assert start["review_cap"] == pytest.approx(45.0)
+    assert start["bash_cap"] == pytest.approx(30.0)
+    assert start["llm_wall"] == pytest.approx(180.0)
     usage = next(e for e in events if e.get("event") == "usage")
     for field in ("request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"):
         assert field in usage
-    # v3 pipeline events
+    # v5 pipeline events
     assert {"phase", "phase_done"} <= names
     assert "llm_tool_call" in names  # the bash round-trip in the plan phase
     done = next(e for e in events if e.get("event") == "agent_done" and "status" in e)
-    assert done["status"] in ("done", "budget", "error")
+    assert done["status"] in ("done", "timeout", "error")
     assert "elapsed_s" in done and "output" in done

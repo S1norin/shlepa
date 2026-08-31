@@ -20,13 +20,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from shlepa_agent.budget import PLAN_CAP, REVIEW_CAP, WORK_CAP
 from shlepa_agent.config import AgentConfig
 from shlepa_agent.model import TrackedModel
 from shlepa_agent.tools import AgentDeps
-
-#: Minimum useful commit window (seconds): below this, the commit phase is
-#: not worth running and the emergency rescue takes over instead.
-COMMIT_MIN_S = 30.0
 
 
 class PhaseResult(BaseModel):
@@ -34,8 +31,8 @@ class PhaseResult(BaseModel):
 
     ``status``:
       - "done": the phase finished its job;
-      - "budget": the phase was cut off by a budget/limit breach (a normal
-        hand-off, never retried);
+      - "timeout": the phase was cut off by its time cap / a model context
+        limit breach (a normal hand-off, never retried);
       - "error": the phase failed after its retries.
     """
 
@@ -52,8 +49,8 @@ class PhaseResult(BaseModel):
 class PhaseLimits:
     """Limits for one phase, from ``[phases.<id>]``.
 
-    ``time``: hard wall-clock cap for the phase run; ``None`` = until the
-    global hard_time (terminal phases take the remainder). ``soft_time`` /
+    ``time``: explicit hard wall-clock cap override; ``None`` = the fixed
+    regime constant for the phase (``budget.py``). ``soft_time`` /
     ``soft_tokens``: advisory only — rendered into the prompt/status, never
     enforced.
     """
@@ -108,32 +105,29 @@ class Phase(ABC):
         )
 
     def limits_note(self, state: RunState) -> str:
-        """Time-budget line rendered into the phase prompt.
+        """Time-cap line rendered into the phase prompt (fixed regime).
 
-        With an adaptive budget (``state.deps.budget``) the caps are derived
-        from the task limit T; without one (legacy/test context) the static
-        phase config values are used.
+        The caps are the regime constants (``budget.py``); an explicit
+        ``[phases.<id>].time`` value overrides them (dev knob).
         """
         cfg = state.cfg
-        b = state.deps.budget
         l = self.limits(cfg)
         parts: list[str] = []
-        if b is not None:
-            parts.append(f"task time limit T={b.T:.0f}s")
-            if self.id == "plan":
-                parts.append(f"this phase is hard-capped at {b.plan:.0f}s")
-                parts.append(f"aim to finish within {max(10.0, b.plan - 10.0):.0f}s")
-            elif self.id == "work":
-                parts.append(f"this cycle is hard-capped at {b.work:.0f}s")
-                parts.append(f"this is cycle {state.cycles + 1}")
-            elif self.id == "commit":  # review phase
-                cap = min(b.review, max(0.0, b.hard - state.model.elapsed()))
-                parts.append(f"this phase is hard-capped at {max(cap, 1.0):.0f}s")
+        if self.id == "plan":
+            cap = l.time if l.time is not None else PLAN_CAP
+            parts.append(f"this phase is hard-capped at {cap:.0f}s")
+        elif self.id == "work":
+            cap = l.time if l.time is not None else WORK_CAP
+            parts.append(f"this cycle is hard-capped at {cap:.0f}s")
+            parts.append(f"this is cycle {state.cycles + 1}")
+        elif self.id == "commit":  # review phase
+            cap = l.time if l.time is not None else REVIEW_CAP
+            parts.append(f"this phase is hard-capped at {cap:.0f}s")
         else:
             if l.time is not None:
                 parts.append(f"this phase is hard-capped at {l.time:.0f}s")
-            if l.soft_time is not None:
-                parts.append(f"aim to finish within {l.soft_time:.0f}s")
+        if l.soft_time is not None:
+            parts.append(f"aim to finish within {l.soft_time:.0f}s")
         if l.soft_tokens is not None:
             parts.append(f"keep the output lean (soft budget ~{l.soft_tokens} tokens)")
         return "; ".join(parts)
