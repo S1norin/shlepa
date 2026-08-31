@@ -7,7 +7,10 @@
    previous phase's word — check the file itself.
 2. If it is missing or broken: fix it NOW. You have full tools
    (read/write/edit/bash) — repair the file, write it best-effort if it
-   does not exist. A partial deliverable scores better than nothing.
+   does not exist. A partial deliverable scores better than nothing. In
+   particular, on the trivial plan->review shortcut the file does not exist
+   yet: write it from the known answer (it is in the plan's goal, earlier in
+   this conversation), then verify it as usual.
 3. Decide:
    - status: "ok" — the deliverable exists and ALL mechanical checks
      passed; "partial" — something is missing, broken or unchecked.
