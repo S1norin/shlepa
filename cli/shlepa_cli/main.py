@@ -154,6 +154,55 @@ def trace_export(
     )
 
 
+@app.command("search-bench")
+def search_bench(
+    families: str = typer.Option(
+        "",
+        "--families",
+        help=(
+            "Comma-separated family filter (contest-sqli,seccodebench,ctf-c,"
+            "synthetic). Default: all families."
+        ),
+    ),
+    engines: str = typer.Option(
+        "read-all,rg,sifs",
+        "--engines",
+        help="Comma-separated engines (read-all,rg,sifs). Default: all three.",
+    ),
+    out: Path = typer.Option(
+        None,
+        "--out",
+        help="Output dir (default research/code_search/analysis/).",
+    ),
+    synthetic_files: int = typer.Option(
+        10500,
+        "--synthetic-files",
+        help="Files in the generated scale corpus (0 skips it; need >=10000).",
+    ),
+) -> None:
+    """Measure search engines (read-all baseline, rg, sifs) on the query set.
+
+    Runs the annotated query set (research/code_search/analysis/queries.json)
+    plus a generated >=10k-file synthetic corpus and writes a CSV + markdown
+    report (tokens-to-locate, hit@1/hit@3, latency per engine and family).
+    """
+    from shlepa_cli import search_bench as search_bench_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    out_dir = out or settings.repo_root / "research" / "code_search" / "analysis"
+    csv_path, md_path = search_bench_module.run_bench(
+        settings.repo_root,
+        out_dir,
+        settings.repo_root / "research" / "code_search" / "analysis" / "queries.json",
+        families=[f.strip() for f in families.split(",") if f.strip()] or None,
+        engines=[e.strip() for e in engines.split(",") if e.strip()] or None,
+        synthetic_files=synthetic_files,
+    )
+    typer.echo(f"csv: {csv_path}")
+    typer.echo(f"report: {md_path}")
+
+
 @app.command()
 def smoke(
     ci: bool = typer.Option(
