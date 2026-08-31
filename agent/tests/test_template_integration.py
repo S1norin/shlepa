@@ -88,21 +88,22 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
         },
         {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # work req 1
         {
-            "tool_call": {  # work req 2 (typed WorkResult)
+            "tool_call": {  # work req 2 (typed WorkResult; no decision in v5)
                 "name": "final_result",
                 "arguments": {
                     "summary": "wrote hello.txt",
                     "findings": "",
                     "deliverable": "/app/hello.txt",
-                    "decision": "commit",
+                    "confidence": 1.0,
                 },
             }
         },
         {
-            "tool_call": {  # the commit request (typed CommitResult)
+            "tool_call": {  # the review request (typed ReviewResult)
                 "name": "final_result",
                 "arguments": {
                     "status": "ok",
+                    "verdict": "done",
                     "artifact": "/app/hello.txt",
                     "checks": ["re-read -> matches"],
                     "notes": "wrote hello.txt",
@@ -113,16 +114,16 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
     # v5: phases are bounded by time, not by request counts — the plan phase
     # ends with its typed PlanResult. The work phase makes a tool call first
     # so its conversation (prompt + tool call) survives trim_history into the
-    # commit request.
+    # review request.
     _run(monkeypatch, stub_openai, tmp_path)
     bodies = stub_state["bodies"]
     assert len(bodies) == 4, (
-        f"expected plan + work x2 + commit, got {len(bodies)}"
+        f"expected plan + work x2 + review, got {len(bodies)}"
     )
     messages = bodies[-1]["messages"]
     last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-    # commit text (commit.md) in the final user message
-    assert "COMMIT PHASE" in last_user
+    # review text (commit.md) in the final user message
+    assert "REVIEW PHASE" in last_user
     assert "PHASE INSTRUCTIONS" in last_user
     # resumed history: the work user message is still in the request
     assert any(

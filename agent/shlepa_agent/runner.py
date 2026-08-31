@@ -1,24 +1,30 @@
-"""4-phase pipeline runner (v3).
+"""Pipeline runner (v5): the plan -> work -> review cycle.
 
-Walks the phase graph:
+Walks the phase graph (phase ids: plan, work, commit — the commit phase is
+the REVIEWER):
 
-    plan -> work -> (commit | replan -> plan, max N cycles)
+    plan -> work -> review (commit)
+        ^                |
+        |                | verdict = "next_round" AND a full cycle fits
+        +----------------+
 
-with two escape valves:
+with the escape valves:
 
 - a phase hard-timeout (or any budget breach) triggers ONE extra toolless
   ``final_ask`` request on the same conversation ("write the deliverable
-  now"), then hands off (plan -> work, work -> commit);
-- crossing the commit deadline at a phase boundary while the next phase is
-  not commit runs the emergency phase instead (terminal, full tools, until
-  the global hard stop). The deadline is DERIVED from the task time limit
-  T by the adaptive budget (plan + work + commit cap, capped by hard -
-  reserve); ``[agent].commit_deadline`` overrides it when > 0.
+  now"), then hands off to the review phase (terminal);
+- the review phase is terminal: it stops the run. A ``next_round`` verdict
+  starts a new plan/work cycle ONLY when a full cycle (plan + work +
+  review, 225s in the fixed regime) still fits before the hard stop —
+  there is NO cycle cap, rounds are time-driven.
 
-All phase caps, the entry phase, cycle count and deadlines come from the
-adaptive budget (``budget.build_budget``) derived from the task time limit
-T at run start; explicit positive ``[agent]``/``[phases.*].time`` values
-act as overrides (dev knob).
+The fixed v5 regime (``budget.build_budget``) derives the hard stop
+(T - 15s margin) from the task time limit T detected at run start; the
+phase caps are constants (plan 60s / work 120s / review 45s) clamped to
+the remaining time. Explicit positive ``[agent]``/``[phases.*].time``
+values act as overrides (dev knob). The emergency phase (v4 terminal
+rescue) is UNUSED in v5 — routing to it is hard-off; the class and its
+config section are kept for compatibility.
 
 Rules:
 - A budget breach (``BudgetExceeded`` / ``UsageLimitExceeded`` / persistent
@@ -27,14 +33,11 @@ Rules:
 - A phase ERROR (any other exception) in plan/work is retried up to the
   phase's ``max_retries`` (fresh run per attempt; the retried phase shares
   the global ``TrackedModel`` budget — no extra wall-clock allowance), then
-  routes to commit. Terminal phases (commit, emergency) are never retried.
-- The step guard (derived ``max_steps`` = 2*cycles+2, or
-  ``[agent].max_steps`` when > 0) bounds total phase runs; when exhausted
-  the emergency phase runs, then the run stops.
-- A replan is only taken when the budget still fits one more full cycle
-  (plan + work + a 30s commit) — otherwise the run goes straight to commit.
-- Commit starts only when >=30s remain; below that the emergency rescue
-  takes over.
+  routes to the review phase. The review phase is never retried.
+- The step guard (``[agent].max_steps`` when > 0, dev knob, off by default)
+  bounds total phase runs; when exhausted the run stops (budget).
+- The review phase starts only when >=30s remain; below that the run stops
+  with what exists (the hard stop + final_ask already did the rescue).
 - A phase is skipped when its wall-clock window is below
   ``MIN_RUN_WINDOW_S`` (there is nothing left to do).
 - Never crash: any unexpected failure is logged as ``agent_error`` and the
@@ -204,9 +207,10 @@ def _phase_cap(
     """Wall-clock cap for a phase run.
 
     An explicit ``[phases.*].time`` value overrides the budget (dev knob).
-    Otherwise the cap comes from the adaptive budget: plan/work reserve the
-    finalize + commit windows, commit gets its cap, emergency runs until the
-    hard stop. Without a budget (legacy context) the remainder applies.
+    Otherwise the cap comes from the fixed v5 regime: plan/work reserve the
+    finalize + review windows, review (commit) gets its cap, unknown ids
+    (legacy emergency) run until the hard stop. Without a budget (legacy
+    context) the remainder applies.
     """
     if limits.time is not None:
         return max(0.0, min(float(limits.time), remaining))
@@ -417,20 +421,18 @@ async def _pipeline(
     instrument: bool,
     phase_factory: Callable[[str], Phase],
     entry: str,
-    max_cycles: int | None,
-    commit_deadline: float,
-    max_steps: int,
+    max_steps: int | None,
 ) -> tuple[str, str]:
-    """Walk the 4-phase pipeline; returns (status, last_output).
+    """Walk the v5 pipeline (plan -> work -> review); returns (status, output).
 
-    status is the decisive phase's status: "done" (the pipeline reached
-    commit/emergency with a completed work/plan), "budget" (breach, cycle
-    cap, or step-guard exhaustion), or "error" (a phase failed after its
-    retries).
+    status is the decisive outcome: "done" (the review phase decided
+    done, or the pipeline finished normally), "budget" (a time breach, a
+    step-guard stop, or a next_round verdict without a fitting cycle), or
+    "error" (a phase failed after its retries).
 
-    ``entry``/``max_cycles``/``commit_deadline``/``max_steps`` are the
-    budget-derived pipeline values (see ``run_prompt``); the phase caps are
-    budget-driven inside ``_run_phase``.
+    ``entry``/``max_steps`` are the budget-derived pipeline values (see
+    ``run_prompt``); the phase caps are fixed-regime values applied inside
+    ``_run_phase``. There is NO cycle cap and NO emergency routing (v5).
     """
     cfg = state.cfg
     budget = state.deps.budget
@@ -439,46 +441,44 @@ async def _pipeline(
     steps = 0
     final_status = "done"
     output = ""
+
+    def _full_cycle_fits() -> bool:
+        """A new plan + work + review cycle fits before the hard stop."""
+        if budget is None:
+            return True
+        return (
+            budget.hard - state.model.elapsed()
+        ) >= budget.plan + budget.work + budget.review
+
     while True:
         elapsed = state.model.elapsed()
         time_left = max(0.0, hard - elapsed)
-        # Commit window boundary: <COMMIT_MIN_S left -> the commit phase is
-        # not worth running; the emergency rescue writes whatever exists.
+        # Review window boundary: <COMMIT_MIN_S left -> the review phase is
+        # not worth running; stop with whatever exists on disk.
         if phase_id == "commit" and time_left < COMMIT_MIN_S:
             _log_event(
                 "deadline",
                 phase="commit",
-                reason="commit_min_window",
+                reason="review_min_window",
                 time_left_s=round(time_left, 1),
                 elapsed_s=round(elapsed, 1),
             )
-            phase_id = cfg.agent.emergency
-        # Commit deadline at a phase boundary: past it and not heading to
-        # commit -> emergency (until the hard stop).
-        if (
-            phase_id not in ("commit", cfg.agent.emergency)
-            and elapsed >= commit_deadline
-        ):
-            _log_event(
-                "deadline",
-                phase=phase_id,
-                elapsed_s=round(elapsed, 1),
-                commit_deadline=commit_deadline,
-                hard_time=hard,
+            return (
+                final_status if final_status in ("budget", "error") else "done",
+                output,
             )
-            phase_id = cfg.agent.emergency
         # Step guard (dev knob only; v5 default: off — time is the bound).
         if (
             max_steps is not None
             and steps >= max_steps
-            and phase_id not in ("commit", cfg.agent.emergency)
+            and phase_id != "commit"
         ):
             _log_event(
                 "budget",
                 reason="max_steps",
                 detail=f"step guard {max_steps} exhausted",
             )
-            phase_id = cfg.agent.emergency
+            return "budget", output
         steps += 1
         phase = phase_factory(phase_id)
         _log_event(
@@ -516,76 +516,63 @@ async def _pipeline(
             elif phase.id != "plan":
                 output = result.summary
         if phase.terminal:
-            return (
-                final_status if final_status in ("budget", "error") else "done",
-                output,
-            )
-        decision = getattr(result.output, "decision", None)
-        if phase.id == "plan":
-            if result.status == "budget":
-                # Hard timeout / budget breach: one toolless final_ask on the
-                # same conversation, then execute whatever the plan knows.
-                await _final_ask(state, phase)
-                final_status = "budget"
-                phase_id = "work"
-                continue
-            if result.status == "error":
-                final_status = "error"
-                phase_id = "commit"
-                continue
-            if decision == "commit":
-                # Trivial task: the plan already knows the answer.
-                final_status = "done"
-                phase_id = "commit"
-                continue
-            final_status = "done"
-            phase_id = "work"
-            continue
-        if phase.id == "work":
-            if result.status == "budget":
-                await _final_ask(state, phase)
-                final_status = "budget"
-                phase_id = "commit"
-                continue
-            if result.status == "error":
-                final_status = "error"
-                phase_id = "commit"
-                continue
-            if decision == "replan":
-                state.cycles += 1
-                # A replan is only taken when a full cycle (plan + work +
-                # review) still fits before the hard stop. There is NO cycle
-                # cap: rounds are time-driven.
-                if budget is not None:
-                    replan_fits = (
-                        (budget.hard - state.model.elapsed())
-                        >= budget.plan + budget.work + budget.review
+            # Review phase: honor a "next_round" verdict only when a full
+            # cycle still fits before the hard stop — otherwise the run
+            # finalizes here (the review is the terminal handler).
+            verdict = getattr(result.output, "verdict", None)
+            if verdict == "next_round":
+                if _full_cycle_fits():
+                    state.cycles += 1
+                    _log_event(
+                        "cycle",
+                        reason="next_round",
+                        cycle=state.cycles,
+                        elapsed_s=round(state.model.elapsed(), 1),
                     )
-                else:
-                    replan_fits = True
-                if replan_fits and (max_cycles is None or state.cycles < max_cycles):
                     final_status = "done"
                     phase_id = "plan"
                     continue
                 _log_event(
                     "budget",
-                    reason="replan_no_time",
+                    reason="next_round_no_time",
                     detail=(
-                        f"replan not taken: not enough time left for a "
-                        f"full cycle (plan {budget.plan:.0f}s + work "
-                        f"{budget.work:.0f}s + {budget.review:.0f}s review)"
+                        f"review asked for next_round but a full cycle "
+                        f"(plan {budget.plan:.0f}s + work {budget.work:.0f}s "
+                        f"+ review {budget.review:.0f}s) does not fit"
                         if budget is not None
-                        else "replan not taken: no time left"
+                        else "review asked for next_round but no time left"
                     ),
                 )
-                final_status = "budget"
-                phase_id = "commit"
-                continue
-            final_status = "done"
+                return "budget", output
+            return (
+                final_status if final_status in ("budget", "error") else "done",
+                output,
+            )
+        if result.status == "budget":
+            # Hard timeout / budget breach: one toolless final_ask on the
+            # same conversation, then hand off to the terminal review.
+            await _final_ask(state, phase)
+            final_status = "budget"
             phase_id = "commit"
             continue
-        # Unknown phase id: stop the walk (defensive).
-        return result.status, output
+        if result.status == "error":
+            final_status = "error"
+            phase_id = "commit"
+            continue
+        if phase.id == "plan":
+            if getattr(result.output, "decision", None) == "commit":
+                # Trivial task: the plan already knows the answer — the
+                # review verifies it (terminal).
+                phase_id = "commit"
+            else:
+                phase_id = "work"
+            final_status = "done"
+            continue
+        # work -> review. The review's verdict is honored at decision time
+        # (only when a full cycle fits); there is no decision in WorkResult.
+        phase_id = "commit"
+        final_status = "done"
+        continue
 
 
 async def run_prompt(
@@ -613,7 +600,8 @@ async def run_prompt(
         # cycle cap — rounds are time-driven.
         full_cycle = budget.plan + budget.work + budget.review
         entry = cfg.agent.entry or ("plan" if budget.hard >= full_cycle else "work")
-        max_cycles: int | None = None  # v5: no cycle cap
+        # commit_deadline is logged for the CLI (stable agent_start field);
+        # in v5 it routes nothing — the emergency phase is hard-off.
         commit_deadline = (
             cfg.agent.commit_deadline
             if cfg.agent.commit_deadline > 0
@@ -669,7 +657,7 @@ async def run_prompt(
         save_state(state, budget)
         factory = phase_factory or get_phase
         status, output = await _pipeline(
-            state, instrument, factory, entry, max_cycles, commit_deadline, max_steps
+            state, instrument, factory, entry, max_steps
         )
         model.log_pending_usage()
         _log_event(

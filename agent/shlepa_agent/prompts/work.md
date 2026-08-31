@@ -7,19 +7,21 @@ Rules:
 - If a step fails twice, adapt within the plan's scope with the smallest
   change; never switch strategy wholesale.
 - Write the deliverable to the exact path in the exact format.
+- FRESHNESS: after each significant step, update the deliverable file with
+  the current best result — never finish the phase with an empty or
+  stale file. A partial deliverable on disk beats a perfect one only in
+  your head.
 - Self-review before finishing: re-read the deliverable, validate the format
   mechanically (jq / python -c json.load / wc -l), compare names, values, and
   order against the spec. Fix any mismatch.
 
+You do NOT decide when the run ends: a review phase always follows this one.
+It verifies the file and decides done vs next_round. Your job is to leave
+the best possible deliverable on disk.
+
 Finish via the final_result tool:
-- decision="commit" — the deliverable is ready and verified (or you have the
-  best possible result with what remains of the budget).
-- decision="replan" — only if the PLAN ITSELF was wrong or incomplete (wrong
-  target, wrong format, missing information you cannot recover). Explain what
-  was wrong in summary.
+- summary: what was done and how it was verified.
+- deliverable: the path of the file written (empty if nothing was written).
+- findings: new facts not known at planning time (empty if none).
 - confidence: how sure you are (0-1) that the deliverable is complete and
   correct. Be honest: 1.0 only after a passing mechanical check.
-- next_hints: for decision="replan" only — concrete hints for the next plan
-  (what was wrong, what must change); empty list for "commit".
-- summary: what was done and how it was verified; deliverable: the path of
-  the file written; findings: new facts not known at planning time.

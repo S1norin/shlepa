@@ -133,7 +133,9 @@ def _plan_step(decision="work"):
     }
 
 
-def _work_step(decision="commit"):
+def _work_step():
+    # v5: WorkResult has no decision — the work phase always hands off to
+    # the review phase.
     return {
         "tool_call": {
             "name": "final_result",
@@ -142,21 +144,21 @@ def _work_step(decision="commit"):
                 "findings": "",
                 "deliverable": "/app/hello.txt",
                 "confidence": 1.0,
-                "next_hints": [] if decision == "commit" else ["re-examine the target"],
-                "decision": decision,
             },
         }
     }
 
 
-def _commit_step(status="ok"):
+def _review_step(status="ok", verdict="done"):
     return {
         "tool_call": {
             "name": "final_result",
             "arguments": {
                 "status": status,
+                "verdict": verdict,
                 "artifact": "/app/hello.txt",
                 "checks": ["re-read the file -> content matches"],
+                "hints": [] if verdict == "done" else ["re-examine the target"],
                 "notes": "wrote hello.txt",
             },
         }
@@ -194,7 +196,7 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
 
     from shlepa_agent.config import load_config
     from shlepa_agent.model import TrackedModel
-    from shlepa_agent.outputs import CommitResult, PlanResult
+    from shlepa_agent.outputs import PlanResult, ReviewResult
     from shlepa_agent.phases import get_phase
     from shlepa_agent.runner import build_phase_agent
 
@@ -209,18 +211,18 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     assert not plain.instrument  # untouched default is None
     # plan and commit are typed-output phases
     assert plan.output_type is PlanResult
-    assert get_phase("commit").output_type is CommitResult
+    assert get_phase("commit").output_type is ReviewResult
 
 
 # -- pipeline graph ---------------------------------------------------------
 def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
         _plan_step("work"),
-        _work_step("commit"),
-        _commit_step(),
+        _work_step(),
+        _review_step(),
     ]
     output = _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert output == "wrote hello.txt"  # CommitResult.notes
+    assert output == "wrote hello.txt"  # ReviewResult.notes
     assert _status(events) == "done"
     starts = [(e["id"], e["cycle"]) for e in events if e.get("event") == "phase" and e.get("start")]
     assert [i for i, _ in starts] == ["plan", "work", "commit"]
@@ -232,7 +234,7 @@ def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
 
 
 def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [_plan_step("commit"), _commit_step()]
+    stub_state["script"] = [_plan_step("commit"), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
     assert not _phase_starts(events, "work")  # work was skipped
@@ -240,24 +242,47 @@ def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_pa
     assert len(stub_state["bodies"]) == 2
 
 
-def test_replan_without_cycle_cap(monkeypatch, stub_openai, tmp_path, events):
-    # v5: there is NO cycle cap — replans are only gated by the remaining
-    # time, so a second replan is still taken before the run ends.
+def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, events):
+    # v5: no cycle cap — a "next_round" verdict starts a new plan/work
+    # cycle while a full cycle (plan + work + review) fits the time left.
     stub_state["script"] = [
-        _plan_step("work"),      # plan, cycle 1
-        _work_step("replan"),    # replan allowed (time left)
-        _plan_step("work"),      # plan, cycle 2
-        _work_step("replan"),    # replan still allowed (no cycle cap)
-        _plan_step("work"),      # plan, cycle 3
-        _work_step("commit"),
-        _commit_step(),
+        _plan_step("work"),          # plan, cycle 0
+        _work_step(),
+        _review_step(verdict="next_round"),
+        _plan_step("work"),          # plan, cycle 1 (review asked for it)
+        _work_step(),
+        _review_step(),              # done
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
     plan_starts = _phase_starts(events, "plan")
-    assert [e["cycle"] for e in plan_starts] == [0, 1, 2]
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 7
+    assert [e["cycle"] for e in plan_starts] == [0, 1]
+    assert any(
+        e.get("event") == "cycle" and e.get("reason") == "next_round" for e in events
+    )
+    assert len(stub_state["bodies"]) == 6
+
+
+def test_review_next_round_without_time_stops_with_budget(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # T=120s: a full cycle (225s in the fixed regime) does not fit, so a
+    # "next_round" verdict stops the run with status "budget".
+    monkeypatch.setenv("SLEPA_AGENT_TIMEOUT", "120")
+    stub_state["script"] = [
+        _plan_step("work"),
+        _work_step(),
+        _review_step(verdict="next_round"),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "budget"
+    assert any(
+        e.get("event") == "budget" and e.get("reason") == "next_round_no_time"
+        for e in events
+    )
+    assert not _phase_starts(events, "emergency")
+    assert len(_phase_starts(events, "plan")) == 1
+    assert len(stub_state["bodies"]) == 3
 
 
 # -- final_ask handoff on phase hard timeout ---------------------------------
@@ -269,23 +294,23 @@ def test_plan_time_cap_triggers_final_ask_then_work(monkeypatch, stub_openai, tm
     stub_state["script"] = [
         {"delay": 2.5, "final": "too slow — plan timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
-        _work_step("commit"),
-        _commit_step(),
+        _review_step(),  # v5: a plan breach hands off straight to the review
     ]
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0, hard=60.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "done"
+    assert _status(events) == "budget"  # plan was cut by its cap
     # plan was cut by its hard cap (budget), NOT retried
     assert any(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
     )
     assert not [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
-    # one toolless final_ask on the plan conversation, then work and commit
+    # one toolless final_ask on the plan conversation, then the terminal review
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
     assert asks[0].get("start") is True
     assert asks[-1].get("ok") is True
-    assert _phase_starts(events, "work") and _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 4
+    assert not _phase_starts(events, "work")
+    assert _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 3
     # KV-cache reuse: the final_ask request prefix is byte-identical to the
     # plan phase's last request (same system message, same history prefix).
     bodies = stub_state["bodies"]
@@ -307,7 +332,7 @@ def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, 
         _plan_step("work"),
         {"delay": 2.5, "final": "too slow — work timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
-        _commit_step(),
+        _review_step(),
     ]
     cfg = _cfg(tmp_path, work_time=1.0, hard=60.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
@@ -319,28 +344,36 @@ def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, 
     assert len(stub_state["bodies"]) == 4
 
 
-# -- commit deadline -> emergency ---------------------------------------------
-def test_commit_deadline_routes_to_emergency(monkeypatch, stub_openai, tmp_path, events):
-    # deadline ~0: at the first boundary (next = work) the clock is past it.
+# -- v5: the commit deadline routes nothing (emergency is hard-off) -----------
+def test_commit_deadline_no_longer_routes_to_emergency(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # v5: the deadline is a logged legacy field only — the walk keeps going
+    # plan -> work -> review and the emergency phase never starts.
     cfg = _cfg(tmp_path, deadline=0.001, hard=60.0)
-    stub_state["script"] = [_plan_step("work"), {"final": "EMERGENCY: wrote hello.txt"}]
+    stub_state["script"] = [_plan_step("work"), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert _status(events) == "done"
-    assert any(e.get("event") == "deadline" for e in events)
-    assert not _phase_starts(events, "work")
-    assert _phase_starts(events, "emergency")
-    assert len(stub_state["bodies"]) == 2
+    assert not _phase_starts(events, "emergency")
+    assert _phase_starts(events, "work")
+    assert _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 3
 
 
-def test_step_guard_exhaustion_routes_to_emergency(monkeypatch, stub_openai, tmp_path, events):
+def test_step_guard_exhaustion_stops_run(monkeypatch, stub_openai, tmp_path, events):
+    # max_steps=1 (dev knob): the plan phase runs, then the guard stops the
+    # walk at the work boundary — with "budget", no emergency routing.
     cfg = _cfg(tmp_path, max_steps=1, hard=60.0)
-    stub_state["script"] = [_plan_step("work"), {"final": "EMERGENCY: wrote hello.txt"}]
+    stub_state["script"] = [_plan_step("work")]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    assert _status(events) == "budget"
     assert any(
         e.get("event") == "budget" and e.get("reason") == "max_steps" for e in events
     )
-    assert _phase_starts(events, "emergency")
-    assert len(stub_state["bodies"]) == 2
+    assert not _phase_starts(events, "work")
+    assert not _phase_starts(events, "commit")
+    assert not _phase_starts(events, "emergency")
+    assert len(stub_state["bodies"]) == 1
 
 
 # -- retries -----------------------------------------------------------------
@@ -361,8 +394,8 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
 
     stub_state["script"] = [
         _plan_step("work"),  # attempt 2 (attempt 1 dies before the request)
-        _work_step("commit"),
-        _commit_step(),
+        _work_step(),
+        _review_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), phase_factory=factory)
     assert _status(events) == "done"
@@ -378,8 +411,8 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "echo hi"}}},
         _plan_step("work"),
-        _work_step("commit"),
-        _commit_step(),
+        _work_step(),
+        _review_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     names = {e.get("event") for e in events}

@@ -1,9 +1,10 @@
-"""Structured phase outputs for the 4-phase pipeline.
+"""Structured phase outputs for the v5 pipeline (plan -> work -> review).
 
 Every pipeline phase ends with a typed result (pydantic-ai output tool
 ``final_result``); these models are the machine-readable hand-off between
-phases (and the structured contract of the run). Emergency stays free text —
-it is the last-resort rescue, not a contract phase.
+phases (and the structured contract of the run). The review (commit) phase
+is the only terminal typed phase; the emergency phase (kept in code, unused
+in v5) stays free text.
 """
 
 from __future__ import annotations
@@ -79,39 +80,50 @@ class WorkResult(BaseModel):
             "correct. Be honest: 1.0 only after a passing mechanical check."
         ),
     )
-    next_hints: list[str] = Field(
-        default_factory=list,
-        description=(
-            "For decision='replan' only: concrete hints for the next plan — "
-            "what was wrong and what must change. Ignored for 'commit'."
-        ),
-    )
-    decision: Literal["commit", "replan"] = Field(
-        description=(
-            "'commit' — the deliverable is ready (or best-effort ready); "
-            "'replan' — the plan itself was wrong or incomplete."
-        )
-    )
 
 
-class CommitResult(BaseModel):
-    """Structured output of the terminal commit phase."""
+class ReviewResult(BaseModel):
+    """Structured output of the terminal review phase (v5).
 
-    status: Literal["ok", "partial", "unverified"] = Field(
+    The review phase (phase id ``commit``) verifies — and, when needed,
+    repairs — the deliverable with full tools, then decides the run:
+    ``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
+    plan/work cycle if a full cycle still fits the remaining time.
+    """
+
+    status: Literal["ok", "partial"] = Field(
         description=(
             "'ok' — the deliverable exists and ALL mechanical checks passed; "
-            "'partial' — best-effort written, some checks failed or missing; "
-            "'unverified' — written, but not checked."
+            "'partial' — best-effort: something is missing, broken or "
+            "unchecked."
+        )
+    )
+    verdict: Literal["done", "next_round"] = Field(
+        description=(
+            "'done' — stop now with the current deliverable (best effort if "
+            "partial); 'next_round' — a new plan/work round would materially "
+            "improve the result."
         )
     )
     artifact: str = Field(
-        description="Absolute path of the deliverable file."
+        description=(
+            "Absolute path of the deliverable file (empty if none was "
+            "written)."
+        )
     )
     checks: list[str] = Field(
         default_factory=list,
         description=(
             "Each mechanical check run and its outcome, e.g. "
             "'jq . /app/out.json -> valid'. Empty if nothing was checked."
+        ),
+    )
+    hints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "For verdict='next_round' only: concrete hints for the next "
+            "plan/work round — what was wrong and what must change. Empty "
+            "for 'done'."
         ),
     )
     notes: str = Field(

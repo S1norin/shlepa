@@ -32,7 +32,7 @@ PIPELINE_SCRIPT = [
                 "summary": "wrote hello.txt and verified it",
                 "findings": "",
                 "deliverable": "hello.txt",
-                "decision": "commit",
+                "confidence": 1.0,
             },
         }
     },
@@ -41,6 +41,7 @@ PIPELINE_SCRIPT = [
             "name": "final_result",
             "arguments": {
                 "status": "ok",
+                "verdict": "done",
                 "artifact": "hello.txt",
                 "checks": ["re-read the file -> content matches"],
                 "notes": FINAL_ANSWER,

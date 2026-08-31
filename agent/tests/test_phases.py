@@ -21,7 +21,7 @@ from pydantic_ai.messages import (
 
 from shlepa_agent.budget import derive_budget
 from shlepa_agent.config import load_config
-from shlepa_agent.outputs import CommitResult, PlanResult, WorkResult
+from shlepa_agent.outputs import PlanResult, ReviewResult, WorkResult
 from shlepa_agent.phases import (
     CommitPhase,
     EmergencyPhase,
@@ -109,7 +109,7 @@ def test_terminal_flags():
 def test_output_types():
     assert PlanPhase.output_type is PlanResult
     assert WorkPhase.output_type is WorkResult
-    assert CommitPhase.output_type is CommitResult
+    assert CommitPhase.output_type is ReviewResult
     assert EmergencyPhase.output_type is None
 
 
@@ -241,7 +241,7 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
 
 def test_plan_prompt_on_replan_carries_previous_work_result():
     state = _state()
-    work = WorkResult(summary="tried", decision="replan")
+    work = WorkResult(summary="tried")
     state.results["work"] = PhaseResult(
         status="done", summary=work.model_dump_json(), output=work,
     )
@@ -276,10 +276,10 @@ def test_work_prompt_on_retry_carries_previous_attempt_error():
     assert "tool exploded" in prompt
 
 
-def test_commit_prompt_never_repeats_task():
+def test_review_prompt_never_repeats_task():
     phase = CommitPhase()
     # the task is in the system message (and in the resumed history), so the
-    # commit user prompt carries only the phase instructions
+    # review user prompt carries only the phase instructions
     no_history = _state(last_messages=[])
     with_history = _state(
         last_messages=[
@@ -290,7 +290,7 @@ def test_commit_prompt_never_repeats_task():
     for state in (no_history, with_history):
         prompt = phase.prompt(state)
         assert "Create hello.txt" not in prompt
-        assert "COMMIT PHASE" in prompt
+        assert "REVIEW PHASE" in prompt
 
 
 def test_emergency_prompt_is_the_rescue_instruction():
