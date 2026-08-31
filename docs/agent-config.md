@@ -130,9 +130,10 @@ Routing rules (runner):
   `commit` 0, `emergency` 0. Budget results (time caps, request slices,
   token/usage limits) are never retried — they hand off per the rules
   above.
-- **State hand-off**: after every phase the runner writes
-  `.shlepa_state.json` to the workdir (elapsed, cycles, budget, per-phase
-  results) — the structured bridge between phases and cycles.
+- **State hand-off**: after every phase the runner writes the run-state
+  file (elapsed, cycles, budget, per-phase results) to
+  `$SHLEPA_STATE_FILE` (default `/tmp/shlepa_state.json`) — never into the
+  task workdir.
 
 ## Env-var overrides
 
@@ -142,6 +143,7 @@ Routing rules (runner):
 | `SHLEPA_SEND_TEMP` | `agent.send_temp` | 1/0 (bool) |
 | `SHLEPA_MAX_STEPS` | `agent.max_steps` | int (0 = derive) |
 | `SHLEPA_MAX_CYCLES` | `agent.max_cycles` | int (0 = derive) |
+| `SHLEPA_STATE_FILE` | — | run-state file path (default `/tmp/shlepa_state.json`, never the workdir) |
 | `SHLEPA_COMMIT_DEADLINE` | `agent.commit_deadline` | float (0 = derive) |
 | `SHLEPA_BUDGET_HARD_TIME` | `budget.hard_time` | float (reference) |
 | `SHLEPA_BUDGET_T_FALLBACK` | `budget.t_fallback` | float |
