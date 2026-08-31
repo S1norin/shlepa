@@ -1,5 +1,5 @@
 ⚠️ REVIEW PHASE. The run ends after this phase unless you decide
-'next_round' AND a full new cycle still fits the remaining time.
+'next_round' — every 'next_round' starts a new plan/work cycle.
 
 1. Verify the deliverable MECHANICALLY against the task spec: re-read the
    file at the exact path, validate the format (jq / python -c json.load /

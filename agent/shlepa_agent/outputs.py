@@ -88,7 +88,7 @@ class ReviewResult(BaseModel):
     The review phase (phase id ``commit``) verifies — and, when needed,
     repairs — the deliverable with full tools, then decides the run:
     ``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
-    plan/work cycle if a full cycle still fits the remaining time.
+    plan/work cycle (always — there is no time or cycle cap).
     """
 
     status: Literal["ok", "partial"] = Field(
