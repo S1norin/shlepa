@@ -170,6 +170,10 @@ def build_phase_agent(
         model,
         deps_type=AgentDeps,
         system_prompt=_system_prompt(agent_cfg, phase, task),
+        # Named after the phase so the instrumentation's agent-run spans
+        # are 'invoke_agent <phase-id>' (per-phase token attribution) instead
+        # of indistinguishable 'invoke_agent agent' spans. Issue #72.
+        name=phase.id,
         **kwargs,
     )
     if instrument:

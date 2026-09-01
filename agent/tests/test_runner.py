@@ -213,6 +213,29 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     # plan and commit are typed-output phases
     assert plan.output_type is PlanResult
     assert get_phase("commit").output_type is ReviewResult
+    # Agents are named after their phase so the instrumentation's
+    # invoke_agent spans are per-phase (agent_name=<phase-id>).
+    assert instrumented.name == "plan"
+
+
+def test_build_phase_agent_named_per_phase(tmp_path):
+    """Each phase's agent carries the phase id as its name, so agent-run
+    spans are 'invoke_agent <phase-id>' instead of indistinguishable
+    'invoke_agent agent' spans. Issue #72."""
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.runner import build_phase_agent
+
+    cfg = load_config()
+    model = TrackedModel(
+        "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+    for phase_id in ("plan", "work", "commit"):
+        agent = build_phase_agent(model, cfg, get_phase(phase_id), "some task")
+        assert agent.name == phase_id
 
 
 # -- pipeline graph ---------------------------------------------------------
