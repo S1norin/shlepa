@@ -486,7 +486,6 @@ def parse_agent_metrics(stderr: str) -> dict:
     a crash). Cache fields and phase_tokens default to 0/{} for legacy
     markers.
     """
-    defaults = _default_metrics()
     for line in reversed((stderr or "").splitlines()):
         line = line.strip()
         if not line.startswith(METRICS_MARKER):

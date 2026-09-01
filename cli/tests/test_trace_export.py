@@ -235,7 +235,7 @@ def _llm_span_dict(prompt, completion, i=0):
 
 
 def _phase_agent_span(name, i=0, input_tokens=0, output_tokens=0,
-                       cache_read=0):
+                      cache_read=0):
     """An invoke_agent span carrying aggregated per-phase usage.
 
     Mirrors pydantic-ai's agent-run spans: name 'invoke_agent <agent>',
