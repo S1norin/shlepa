@@ -123,6 +123,9 @@ class TrackedModel(OpenAIChatModel):
         self._cum_output = 0
         self._cum_cache_read = 0
         self._cum_cache_write = 0
+        #: Id of the phase currently running (set/rotated by the runner);
+        #: usage events are tagged with it for per-phase token attribution.
+        self.current_phase: str | None = None
 
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
@@ -175,6 +178,10 @@ class TrackedModel(OpenAIChatModel):
         reasoning = details.get("reasoning_tokens")
         if reasoning:
             fields["reasoning_tokens"] = int(reasoning)
+        # Phase id (set by the runner before each phase run); absent when no
+        # phase is set so legacy consumers see an unchanged event shape.
+        if self.current_phase is not None:
+            fields["phase"] = self.current_phase
         _log_event("usage", **fields)
 
     async def _open_stream(self, messages, model_settings, model_request_parameters, run_context):

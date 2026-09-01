@@ -226,6 +226,9 @@ async def _run_phase(
     model = state.model
     limits = phase.limits(cfg)
     cap = _phase_cap(phase.id, limits, cfg)
+    # Tag this run's usage events with the phase id (per-phase token
+    # attribution for the CLI); rotated on every phase run, incl. retries.
+    model.current_phase = phase.id
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort

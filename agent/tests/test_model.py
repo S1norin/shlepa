@@ -240,3 +240,45 @@ def test_llm_thinking_event_carries_full_text(monkeypatch, stub_openai, tmp_path
     assert len(events) == 1, f"expected one llm_thinking event, got {len(events)}"
     assert events[0]["content"] == REASONING
     assert "... [output truncated" not in events[0]["content"]
+
+
+# -- per-phase usage tagging (issue #73) ------------------------------------
+
+
+def test_usage_event_carries_current_phase(tmp_path):
+    """usage events are tagged with the model's current phase (per-phase
+    token attribution for the CLI). Issue #73."""
+    from pydantic_ai.usage import RequestUsage
+
+    model = _make_model(tmp_path)
+    model.current_phase = "plan"
+    _pending(model, RequestUsage(input_tokens=100, output_tokens=10))
+    event = _capture_events(model)
+    assert event["phase"] == "plan"
+
+
+def test_usage_event_phase_rotates_across_runs(tmp_path):
+    """Rotating the phase between log calls updates subsequent events
+    (plan -> work). Issue #73."""
+    from pydantic_ai.usage import RequestUsage
+
+    model = _make_model(tmp_path)
+    model.current_phase = "plan"
+    _pending(model, RequestUsage(input_tokens=100, output_tokens=10))
+    first = _capture_events(model)
+    model.current_phase = "work"
+    _pending(model, RequestUsage(input_tokens=200, output_tokens=20))
+    second = _capture_events(model)
+    assert first["phase"] == "plan"
+    assert second["phase"] == "work"
+
+
+def test_usage_event_without_phase_has_no_phase_field(tmp_path):
+    """Usages logged before any phase is set carry no phase field (no
+    crash, legacy consumers unaffected). Issue #73."""
+    from pydantic_ai.usage import RequestUsage
+
+    model = _make_model(tmp_path)
+    _pending(model, RequestUsage(input_tokens=42, output_tokens=7))
+    event = _capture_events(model)
+    assert "phase" not in event

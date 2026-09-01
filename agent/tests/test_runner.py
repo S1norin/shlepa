@@ -515,3 +515,95 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     done = next(e for e in events if e.get("event") == "agent_done" and "status" in e)
     assert done["status"] in ("done", "timeout", "error")
     assert "elapsed_s" in done and "output" in done
+
+
+# -- per-phase usage tagging (issue #73) -------------------------------------
+
+
+class _StubStreamACM:
+    """Async context manager mimicking ``agent.run_stream_events(...)``."""
+
+    def __init__(self, events, on_enter):
+        self._events = list(events)
+        self._on_enter = on_enter
+
+    async def __aenter__(self):
+        self._on_enter()
+
+        async def _gen():
+            for ev in self._events:
+                yield ev
+
+        return _gen()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _StubAgent:
+    name = "stub"
+
+    def __init__(self, on_enter, events=()):
+        self._on_enter = on_enter
+        self._events = events
+
+    def run_stream_events(self, prompt, **kwargs):
+        return _StubStreamACM(self._events, self._on_enter)
+
+
+class _StubPhase:
+    """Free-text phase with a fixed cap (no output_type, not terminal)."""
+
+    output_type = None
+    terminal = False
+
+    def __init__(self, phase_id):
+        self.id = phase_id
+
+    def limits(self, cfg):
+        from shlepa_agent.phases.base import PhaseLimits
+
+        return PhaseLimits(requests=10, time=30.0)
+
+    def history(self, state):
+        return None
+
+    def prompt(self, state):
+        return "stub prompt"
+
+
+def test_run_phase_sets_and_rotates_current_phase(tmp_path):
+    """_run_phase sets the current phase on the shared model *before* the
+    agent runs (so the phase's usage events carry it) and rotates it
+    between phase runs (plan -> work). Issue #73."""
+    from pathlib import Path
+
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases.base import RunState
+    from shlepa_agent.runner import _run_phase
+    from shlepa_agent.tools.base import AgentDeps
+
+    cfg = load_config()
+    model = TrackedModel(
+        "stub-model",
+        OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"),
+        cfg,
+    )
+    state = RunState(
+        task="stub task",
+        deps=AgentDeps(workdir=Path(tmp_path), cfg=cfg, clock=model.elapsed),
+        model=model,
+    )
+    assert model.current_phase is None
+
+    seen: list = []
+    for phase_id in ("plan", "work"):
+        agent = _StubAgent(lambda: seen.append(model.current_phase))
+        result = asyncio.run(_run_phase(state, _StubPhase(phase_id), agent))
+        assert result.status == "done"
+    # The phase was set BEFORE each agent run, and rotated across phases.
+    assert seen == ["plan", "work"]
+    assert model.current_phase == "work"
