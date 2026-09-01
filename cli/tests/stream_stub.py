@@ -6,12 +6,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FINAL_ANSWER = "Done: the file was created."
 
-# The 4-phase pipeline: plan -> work -> commit. The stub is pipeline-aware:
-# the plan request (user message with "PLAN PHASE") gets a final_result tool
-# call with decision="commit" (trivial task shortcut), the commit request
-# ("COMMIT PHASE") gets a typed final_result(CommitResult) with
-# notes=FINAL_ANSWER, everything else (emergency) gets the plain FINAL_ANSWER
-# text.
+# The 4-phase pipeline: plan -> work -> commit (the review phase). The stub
+# is pipeline-aware: the plan request (user message with "PLAN PHASE") gets a
+# final_result tool call with decision="commit" (trivial task shortcut), the
+# commit/review request ("REVIEW PHASE", the phase prompt's current header)
+# gets a typed final_result(ReviewResult) with notes=FINAL_ANSWER,
+# everything else (emergency) gets the plain FINAL_ANSWER text.
 PLAN_RESULT_ARGS = {
     "goal": "write the requested file",
     "findings": "",
@@ -21,6 +21,7 @@ PLAN_RESULT_ARGS = {
 
 COMMIT_RESULT_ARGS = {
     "status": "ok",
+    "verdict": "done",
     "artifact": "hello.txt",
     "checks": ["re-read the file -> content matches"],
     "notes": FINAL_ANSWER,
@@ -36,7 +37,7 @@ def _is_plan_request(body: dict) -> bool:
 
 def _is_commit_request(body: dict) -> bool:
     for m in body.get("messages", []):
-        if m.get("role") == "user" and "COMMIT PHASE" in (m.get("content") or ""):
+        if m.get("role") == "user" and "REVIEW PHASE" in (m.get("content") or ""):
             return True
     return False
 
