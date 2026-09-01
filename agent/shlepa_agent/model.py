@@ -121,6 +121,8 @@ class TrackedModel(OpenAIChatModel):
         self._request_no = 0
         self._cum_input = 0
         self._cum_output = 0
+        self._cum_cache_read = 0
+        self._cum_cache_write = 0
 
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
@@ -148,18 +150,32 @@ class TrackedModel(OpenAIChatModel):
         self._request_no += 1
         inp = int(usage.input_tokens or 0)
         out = int(usage.output_tokens or 0)
+        cache_read = int(getattr(usage, "cache_read_tokens", 0) or 0)
+        cache_write = int(getattr(usage, "cache_write_tokens", 0) or 0)
+        details = getattr(usage, "details", None) or {}
         self._cum_input += inp
         self._cum_output += out
-        _log_event(
-            "usage",
+        self._cum_cache_read += cache_read
+        self._cum_cache_write += cache_write
+        fields = dict(
             request=self._request_no,
             input_tokens=inp,
             output_tokens=out,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
             cumulative_input=self._cum_input,
             cumulative_output=self._cum_output,
             cumulative_total=self._cum_input + self._cum_output,
+            cumulative_cache_read=self._cum_cache_read,
+            cumulative_cache_write=self._cum_cache_write,
             elapsed_s=round(self.elapsed(), 1),
         )
+        # Reasoning tokens are only present when the endpoint reports them
+        # (via completion_tokens_details.reasoning_tokens); absent otherwise.
+        reasoning = details.get("reasoning_tokens")
+        if reasoning:
+            fields["reasoning_tokens"] = int(reasoning)
+        _log_event("usage", **fields)
 
     async def _open_stream(self, messages, model_settings, model_request_parameters, run_context):
         """Open the upstream stream, retrying transient network errors once.
