@@ -226,6 +226,7 @@ def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> d
         (digests_dir / f"{task}.md").write_text(
             trace_digest.build_digest(data)
         )
+        phase_tokens = trace_digest.trace_phase_tokens(data)
         line = {
             "task": task,
             "trace_id": data.get("trace_id"),
@@ -238,6 +239,10 @@ def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> d
         # the exact previous manifest shape.
         if cache_read:
             line["tokens_cache_read"] = cache_read
+        # Per-phase token totals (absent for legacy traces without
+        # phase-named agent spans). Issue #73.
+        if phase_tokens:
+            line["phase_tokens"] = phase_tokens
         manifest_lines.append(line)
     (out_dir / "manifest.jsonl").write_text(
         "".join(json.dumps(line) + "\n" for line in manifest_lines)
