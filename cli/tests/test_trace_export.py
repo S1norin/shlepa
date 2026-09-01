@@ -234,6 +234,40 @@ def _llm_span_dict(prompt, completion, i=0):
     )
 
 
+def _phase_agent_span(name, i=0, input_tokens=0, output_tokens=0,
+                      cache_read=0):
+    """An invoke_agent span carrying aggregated per-phase usage.
+
+    Mirrors pydantic-ai's agent-run spans: name 'invoke_agent <agent>',
+    gen_ai.aggregated_usage.* attributes (absent when zero).
+    """
+    attrs = {
+        "agent_name": name,
+        "gen_ai.agent.name": name,
+        "gen_ai.operation.name": "invoke_agent",
+    }
+    if input_tokens:
+        attrs["gen_ai.aggregated_usage.input_tokens"] = str(input_tokens)
+    if output_tokens:
+        attrs["gen_ai.aggregated_usage.output_tokens"] = str(output_tokens)
+    if cache_read:
+        attrs["gen_ai.aggregated_usage.cache_read.input_tokens"] = str(cache_read)
+    return _Span(
+        span_id=f"agent-{i}",
+        parent_id=None,
+        name=f"invoke_agent {name}",
+        span_type="AGENT",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=i * 10 * 1_000_000_000,
+        end_time_ns=(i + 1) * 10 * 1_000_000_000,
+        attributes=attrs,
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
 def _llm_span_no_usage():
     return _Span(
         span_id="llm-0",
@@ -316,6 +350,60 @@ def test_manifest_carries_tokens_missing_signal(tmp_path):
     trace_export.export_batch(client, _settings(), "batch-2", out)
     line = json.loads((out / "manifest.jsonl").read_text())
     assert "tokens_missing" in line["signals"]
+
+
+def _llm_span_with_cache(cache_read):
+    return _Span(
+        span_id="llm-cache",
+        parent_id=None,
+        name="chat model",
+        span_type="LLM",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=0,
+        end_time_ns=1_000_000_000,
+        attributes={
+            "gen_ai.usage.input_tokens": "1000",
+            "gen_ai.usage.output_tokens": "50",
+            "gen_ai.usage.cache_read.input_tokens": str(cache_read),
+        },
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
+def test_manifest_carries_tokens_cache_read_when_reported(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-c",
+                [_agent_span("batch-c", "task-a"), _llm_span_with_cache(750)],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-c", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert line["tokens_cache_read"] == 750
+
+
+def test_manifest_no_cache_field_for_legacy_traces(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-l",
+                [_agent_span("batch-l", "task-a"),
+                 _llm_span("batch-l", "task-a")],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-l", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "tokens_cache_read" not in line
 
 
 def _llm_span_with_output_messages(parts):
@@ -476,6 +564,167 @@ def test_export_batch_writes_manifest_traces_and_digests(tmp_path):
     assert "batch-1" in summary_md
     assert summary["batch_id"] == "batch-1"
     assert summary["traces"] == 2
+
+
+# --- per-phase token table (issue #73) ---------------------------------
+
+
+def test_phase_tokens_parsed_from_phase_agent_spans():
+    from shlepa_cli import trace_digest
+
+    data = {
+        "trace_id": "tr-ph",
+        "task": "task-ph",
+        "spans": trace_export.trace_to_dict(
+                _Trace(
+                    "tr-ph",
+                    [
+                        _phase_agent_span("plan", 0, 120, 30, 100),
+                        _phase_agent_span("work", 1, 800, 200, 500),
+                    ],
+                )
+            )["spans"],
+    }
+    assert trace_digest.trace_phase_tokens(data) == {
+        "plan": {"in": 120, "out": 30, "cache_read": 100},
+        "work": {"in": 800, "out": 200, "cache_read": 500},
+    }
+
+
+def test_phase_tokens_sums_spans_of_the_same_phase():
+    from shlepa_cli import trace_digest
+
+    # A retried plan phase runs again: both invoke_agent spans belong
+    # to the same phase and their usage must be summed.
+    data = {
+        "trace_id": "tr-ph2",
+        "task": "task-ph2",
+        "spans": trace_export.trace_to_dict(
+                _Trace(
+                    "tr-ph2",
+                    [
+                        _phase_agent_span("plan", 0, 100, 10),
+                        _phase_agent_span("plan", 1, 50, 5),
+                        _phase_agent_span("work", 2, 700, 90),
+                    ],
+                )
+            )["spans"],
+    }
+    assert trace_digest.trace_phase_tokens(data) == {
+        "plan": {"in": 150, "out": 15, "cache_read": 0},
+        "work": {"in": 700, "out": 90, "cache_read": 0},
+    }
+
+
+def test_phase_tokens_empty_for_legacy_traces():
+    from shlepa_cli import trace_digest
+
+    # Legacy agent runs used the default agent name 'agent': no phase
+    # attribution is possible, so no table is emitted.
+    data = {
+        "trace_id": "tr-leg",
+        "task": "task-leg",
+        "spans": trace_export.trace_to_dict(
+                _Trace(
+                    "tr-leg",
+                    [
+                        _phase_agent_span("agent", 0, 900, 230),
+                        _llm_span_dict(900, 230),
+                    ],
+                )
+            )["spans"],
+    }
+    assert trace_digest.trace_phase_tokens(data) == {}
+
+
+def test_digest_includes_phase_token_table():
+    from shlepa_cli import trace_digest
+
+    data = {
+        "trace_id": "tr-dig",
+        "task": "task-dig",
+        "state": "OK",
+        "spans": trace_export.trace_to_dict(
+                _Trace(
+                    "tr-dig",
+                    [
+                        _phase_agent_span("plan", 0, 120, 30, 100),
+                        _phase_agent_span("work", 1, 800, 200, 500),
+                        _llm_span_dict(120, 30, 0),
+                        _llm_span_dict(800, 200, 1),
+                    ],
+                )
+            )["spans"],
+    }
+    digest = trace_digest.build_digest(data)
+    assert "plan: 120 in / 30 out / 100 cache read" in digest
+    assert "work: 800 in / 200 out / 500 cache read" in digest
+    # The run totals line stays the sum over LLM spans, untouched.
+    assert "- tokens: 920 in / 230 out" in digest
+
+
+def test_digest_has_no_phase_table_for_legacy_trace():
+    from shlepa_cli import trace_digest
+
+    data = {
+        "trace_id": "tr-leg2",
+        "task": "task-leg2",
+        "state": "OK",
+        "spans": trace_export.trace_to_dict(
+                _Trace(
+                    "tr-leg2",
+                    [
+                        _phase_agent_span("agent", 0, 900, 230),
+                        _llm_span_dict(900, 230),
+                    ],
+                )
+            )["spans"],
+    }
+    digest = trace_digest.build_digest(data)
+    assert "- phase tokens:" not in digest
+    assert "- tokens: 900 in / 230 out" in digest
+
+
+def test_manifest_carries_phase_tokens(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-mph",
+                [
+                    _agent_span("batch-p", "task-p"),
+                    _phase_agent_span("plan", 0, 120, 30, 100),
+                    _phase_agent_span("work", 1, 800, 200, 500),
+                ],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-p", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert line["phase_tokens"] == {
+        "plan": {"in": 120, "out": 30, "cache_read": 100},
+        "work": {"in": 800, "out": 200, "cache_read": 500},
+    }
+
+
+def test_manifest_no_phase_tokens_for_legacy_traces(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-leg3",
+                [
+                    _agent_span("batch-l3", "task-l3"),
+                    _phase_agent_span("agent", 0, 900, 230),
+                ],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-l3", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "phase_tokens" not in line
 
 
 # --- CLI command -------------------------------------------------------

@@ -168,8 +168,23 @@ def test_parse_agent_metrics() -> None:
         "tokens_in": 5,
         "tokens_out": 7,
         "tool_calls": 2,
+        # legacy markers carry no cache fields -> stable 0s
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
+        "phase_tokens": {},
         "termination": "ok",
     }
+
+
+def test_parse_agent_metrics_carries_cache_fields() -> None:
+    stderr = (
+        'SLEPA_AGENT_METRICS_JSON={"final_output": "hello", '
+        '"tokens_in": 1000, "tokens_out": 50, "tool_calls": 1, '
+        '"tokens_cache_read": 750, "tokens_cache_write": 30}\n'
+    )
+    parsed = dev_env.parse_agent_metrics(stderr)
+    assert parsed["tokens_cache_read"] == 750
+    assert parsed["tokens_cache_write"] == 30
 
 
 def test_parse_agent_metrics_missing_or_broken() -> None:
@@ -178,6 +193,9 @@ def test_parse_agent_metrics_missing_or_broken() -> None:
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
+        "phase_tokens": {},
         "termination": "ok",
     }
     assert dev_env.parse_agent_metrics("no marker") == defaults
@@ -192,6 +210,28 @@ def test_dev_run_source_sanity() -> None:
     assert '"/agent"' in dev_env.DEV_RUN_SOURCE
     # Telemetry on: the run must be wrapped in the agent.run root span.
     assert "root_span" in dev_env.DEV_RUN_SOURCE
+    # The entrypoint must capture the cumulative cache fields from usage
+    # events and report them in the metrics marker.
+    assert "cumulative_cache_read" in dev_env.DEV_RUN_SOURCE
+    assert "cumulative_cache_write" in dev_env.DEV_RUN_SOURCE
+    assert '"tokens_cache_read"' in dev_env.DEV_RUN_SOURCE
+    assert '"tokens_cache_write"' in dev_env.DEV_RUN_SOURCE
+
+
+def test_run_agent_in_container_propagates_cache_metrics() -> None:
+    from shlepa_cli.run_engine import AgentRun
+
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "done", "tokens_in": 1000, "tokens_out": 50, '
+        '"tool_calls": 1, "tokens_cache_read": 750, '
+        '"tokens_cache_write": 30}\n'
+    )
+    fake = _ExecFakeDocker(rc=0, stderr=marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {}, timeout_sec=120)
+    assert isinstance(run, AgentRun)
+    assert run.tokens_cache_read == 750
+    assert run.tokens_cache_write == 30
 
 
 class _ExecFakeDocker:
@@ -301,6 +341,9 @@ def test_parse_agent_metrics_reports_termination() -> None:
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
+        "phase_tokens": {},
         "termination": "ok",
     }
 
@@ -326,6 +369,9 @@ def test_run_agent_in_container_success_termination_is_ok() -> None:
     fake = _ExecFakeDocker(rc=0, stderr=marker)
     run = dev_env.run_agent_in_container(fake, "c", "p", {})
     assert run.termination == "ok"
+    # legacy marker without cache fields -> 0s, not a crash
+    assert run.tokens_cache_read == 0
+    assert run.tokens_cache_write == 0
 
 
 def test_dev_run_source_marks_internal_timeout() -> None:
@@ -334,3 +380,100 @@ def test_dev_run_source_marks_internal_timeout() -> None:
     # v1 main-phase status 'done' must map to the engine's 'ok'.
     assert '"termination": "timeout"' in dev_env.DEV_RUN_SOURCE
     assert '"done": "ok"' in dev_env.DEV_RUN_SOURCE
+
+
+# --- per-phase token capture (issue #73) -------------------------------------
+
+
+def _dev_run_ns() -> dict:
+    """Exec the baked dev entrypoint; return its module namespace."""
+    ns = {"__name__": "dev_run_under_test"}
+    exec(compile(dev_env.DEV_RUN_SOURCE, "dev_run.py", "exec"), ns)
+    return ns
+
+
+def _feed_capture(capture, event: str, **fields) -> None:
+    import json
+    import logging
+
+    payload = {"event": event, **fields}
+    rec = logging.LogRecord(
+        "shlepa-agent", logging.INFO, "dev_run.py", 0, json.dumps(payload), None, None
+    )
+    capture.emit(rec)
+
+
+def test_dev_run_capture_tracks_phase_token_deltas() -> None:
+    """The baked entrypoint aggregates per-phase token deltas from
+    phase-tagged cumulative usage events. Issue #73."""
+    ns = _dev_run_ns()
+    capture = ns["_MetricsCapture"]()
+    # plan: two requests (cumulative counters are run-wide)
+    _feed_capture(capture, "usage", phase="plan", cumulative_input=100,
+                  cumulative_output=10, cumulative_cache_read=50,
+                  cumulative_cache_write=5)
+    _feed_capture(capture, "usage", phase="plan", cumulative_input=300,
+                  cumulative_output=40, cumulative_cache_read=150,
+                  cumulative_cache_write=20)
+    # work: one request
+    _feed_capture(capture, "usage", phase="work", cumulative_input=800,
+                  cumulative_output=90, cumulative_cache_read=250,
+                  cumulative_cache_write=20)
+    # Totals keep their cumulative-last-value semantics
+    assert (capture.tokens_in, capture.tokens_out) == (800, 90)
+    assert capture.cache_read == 250
+    assert capture.phase_tokens == {
+        "plan": {"in": 300, "out": 40, "cache_read": 150},
+        "work": {"in": 500, "out": 50, "cache_read": 100},
+    }
+    # per-phase tokens_in sums to the run total
+    assert sum(p["in"] for p in capture.phase_tokens.values()) == capture.tokens_in
+
+
+def test_dev_run_capture_legacy_usage_events_have_no_phase_buckets() -> None:
+    """Legacy usage events (no phase field) produce no per-phase buckets
+    and leave the totals unchanged. Issue #73."""
+    ns = _dev_run_ns()
+    capture = ns["_MetricsCapture"]()
+    _feed_capture(capture, "usage", cumulative_input=100, cumulative_output=10)
+    assert capture.phase_tokens == {}
+    assert capture.tokens_in == 100
+
+
+def test_parse_agent_metrics_carries_phase_tokens() -> None:
+    stderr = (
+        'SLEPA_AGENT_METRICS_JSON={"final_output": "hello", '
+        '"tokens_in": 800, "tokens_out": 90, "tool_calls": 1, '
+        '"phase_tokens": {"plan": {"in": 300, "out": 40, "cache_read": 150}, '
+        '"work": {"in": 500, "out": 50, "cache_read": 100}}}\n'
+    )
+    parsed = dev_env.parse_agent_metrics(stderr)
+    assert parsed["phase_tokens"]["plan"]["in"] == 300
+    assert parsed["phase_tokens"]["work"]["cache_read"] == 100
+
+
+def test_parse_agent_metrics_legacy_marker_phase_tokens_fresh_empty() -> None:
+    """Legacy markers / missing markers yield an empty phase_tokens, with a
+    fresh dict per call (no shared mutable default). Issue #73."""
+    a = dev_env.parse_agent_metrics("")
+    b = dev_env.parse_agent_metrics(
+        'SLEPA_AGENT_METRICS_JSON={"final_output": "x", "tokens_in": 1, '
+        '"tokens_out": 1, "tool_calls": 0}\n'
+    )
+    assert a["phase_tokens"] == {} and b["phase_tokens"] == {}
+    assert a["phase_tokens"] is not b["phase_tokens"]
+
+
+def test_run_agent_in_container_propagates_phase_tokens() -> None:
+    from shlepa_cli.run_engine import AgentRun
+
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "done", "tokens_in": 800, "tokens_out": 90, '
+        '"tool_calls": 1, "phase_tokens": '
+        '{"plan": {"in": 300, "out": 40, "cache_read": 150}}}\n'
+    )
+    fake = _ExecFakeDocker(rc=0, stderr=marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {}, timeout_sec=120)
+    assert isinstance(run, AgentRun)
+    assert run.phase_tokens == {"plan": {"in": 300, "out": 40, "cache_read": 150}}

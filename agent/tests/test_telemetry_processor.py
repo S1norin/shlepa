@@ -37,6 +37,61 @@ def test_child_llm_span_updates_root_cumulative_tokens():
     assert attrs.get("shlepa.llm.cumulative_completion_tokens") == 15
 
 
+def test_child_llm_span_updates_root_cache_totals():
+    """cache_read / cache_creation attrs on LLM spans accumulate onto the
+    root span as shlepa.llm.cumulative_cache_*_tokens."""
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("llm call 1") as child:
+                child.set_attribute("gen_ai.usage.input_tokens", 1000)
+                child.set_attribute("gen_ai.usage.output_tokens", 10)
+                child.set_attribute(
+                    "gen_ai.usage.cache_read.input_tokens", 100
+                )
+                child.set_attribute(
+                    "gen_ai.usage.cache_creation.input_tokens", 50
+                )
+            with tracer.start_as_current_span("llm call 2") as child:
+                child.set_attribute("llm.token_count.prompt", 50)
+                child.set_attribute("llm.token_count.completion", 5)
+                child.set_attribute(
+                    "gen_ai.usage.cache_read.input_tokens", 150
+                )
+    finally:
+        provider.shutdown()
+
+    roots = _root_spans(exporter)
+    assert roots, "no agent.run root span"
+    attrs = roots[0].attributes
+    assert attrs.get("shlepa.llm.cumulative_prompt_tokens") == 1050
+    assert attrs.get("shlepa.llm.cumulative_cache_read_tokens") == 250
+    assert attrs.get("shlepa.llm.cumulative_cache_write_tokens") == 50
+
+
+def test_no_cache_attrs_no_cache_stamps():
+    """LLM spans without cache attributes: no cache attrs stamped on root."""
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("llm call") as child:
+                child.set_attribute("gen_ai.usage.input_tokens", 100)
+                child.set_attribute("gen_ai.usage.output_tokens", 10)
+    finally:
+        provider.shutdown()
+
+    roots = _root_spans(exporter)
+    assert roots, "no agent.run root span"
+    attrs = roots[0].attributes
+    assert attrs.get("shlepa.llm.cumulative_prompt_tokens") == 100
+    assert "shlepa.llm.cumulative_cache_read_tokens" not in attrs
+    assert "shlepa.llm.cumulative_cache_write_tokens" not in attrs
+
+
 def test_batch_attr_copied_to_child_spans(monkeypatch):
     monkeypatch.setenv("SLEPA_BATCH_ID", "20260828-000000-abc123")
     monkeypatch.setenv("SLEPA_TASK_SLUG", "task-x")

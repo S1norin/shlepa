@@ -150,6 +150,30 @@ def test_log_task_to_mlflow_file_store(tmp_path):
     assert run.info.run_name == "contest-hello-file"
 
 
+def test_log_task_to_mlflow_logs_cache_metrics(tmp_path):
+    """Cache metrics are always logged (stable schema; 0 when the
+    endpoint doesn't report cache). Issue #71."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "quick", None,
+        _result(tmp_path, tokens_cache_read=750, tokens_cache_write=30),
+    )
+    run = client.get_run(run_id)
+    assert run.data.metrics["tokens_cache_read"] == 750
+    assert run.data.metrics["tokens_cache_write"] == 30
+
+    # legacy result (no cache fields) -> the metrics exist as 0
+    run_id0 = run_engine.log_task_to_mlflow(
+        client, settings, "quick", None, _result(tmp_path)
+    )
+    run0 = client.get_run(run_id0)
+    assert run0.data.metrics["tokens_cache_read"] == 0
+    assert run0.data.metrics["tokens_cache_write"] == 0
+
+
 def test_log_task_unsolved_metrics(tmp_path):
     tracking_uri = f"file://{tmp_path / 'mlstore'}"
     client = MlflowClient(tracking_uri=tracking_uri)
@@ -481,3 +505,55 @@ def test_log_task_missing_trace_warns_and_still_logs(tmp_path, capsys):
     assert "mlflow_trace_id" not in [k for (_r, k) in client.tags]
     out = capsys.readouterr().out
     assert "trace" in out.lower()
+
+
+def test_log_task_to_mlflow_logs_per_phase_metrics(tmp_path):
+    """Per-phase metrics are logged for every phase present in the event
+    stream and for no others; per-phase tokens_in sums to the total.
+    Issue #73."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client,
+        settings,
+        "quick",
+        None,
+        _result(
+            tmp_path,
+            phase_tokens={
+                "plan": {"in": 6, "out": 3, "cache_read": 2},
+                "work": {"in": 4, "out": 2, "cache_read": 1},
+            },
+        ),
+    )
+    m = client.get_run(run_id).data.metrics
+    assert m["tokens_in.plan"] == 6
+    assert m["tokens_out.plan"] == 3
+    assert m["tokens_cache_read.plan"] == 2
+    assert m["tokens_in.work"] == 4
+    assert m["tokens_out.work"] == 2
+    assert m["tokens_cache_read.work"] == 1
+    # phases that did not run produce no entries at all
+    per_phase = {k for k in m if "." in k}
+    assert per_phase == {
+        "tokens_in.plan", "tokens_out.plan", "tokens_cache_read.plan",
+        "tokens_in.work", "tokens_out.work", "tokens_cache_read.work",
+    }
+    # consistency: per-phase tokens_in sums to the total tokens_in
+    assert m["tokens_in.plan"] + m["tokens_in.work"] == m["tokens_in"]
+
+
+def test_log_task_to_mlflow_legacy_result_has_no_per_phase_metrics(tmp_path):
+    """Results without phase data log no dotted metrics (legacy runs keep
+    their metric shape). Issue #73."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "quick", None, _result(tmp_path)
+    )
+    m = client.get_run(run_id).data.metrics
+    assert not any("." in k for k in m)

@@ -102,3 +102,22 @@ def test_run_agent_on_host_timeout(monkeypatch, tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_run_agent_on_host_carries_phase_tokens(monkeypatch, tmp_path):
+    """Host-mode capture aggregates phase-tagged usage events into per-phase
+    deltas; the per-phase tokens_in sums to the total. Issue #73."""
+    server, url = start_stream_stub()
+    monkeypatch.setenv("OPENAI_BASE_URL", url)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    try:
+        run = run_engine.run_agent_on_host(
+            "Create hello.txt", tmp_path, "stub-model", 60, False
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    # The stub flow runs plan (decision=commit) + commit only.
+    assert set(run.phase_tokens) == {"plan", "commit"}
+    assert sum(p["in"] for p in run.phase_tokens.values()) == run.tokens_in

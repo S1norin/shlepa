@@ -170,6 +170,10 @@ def build_phase_agent(
         model,
         deps_type=AgentDeps,
         system_prompt=_system_prompt(agent_cfg, phase, task),
+        # Named after the phase so the instrumentation's agent-run spans
+        # are 'invoke_agent <phase-id>' (per-phase token attribution) instead
+        # of indistinguishable 'invoke_agent agent' spans. Issue #72.
+        name=phase.id,
         **kwargs,
     )
     if instrument:
@@ -222,6 +226,9 @@ async def _run_phase(
     model = state.model
     limits = phase.limits(cfg)
     cap = _phase_cap(phase.id, limits, cfg)
+    # Tag this run's usage events with the phase id (per-phase token
+    # attribution for the CLI); rotated on every phase run, incl. retries.
+    model.current_phase = phase.id
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort

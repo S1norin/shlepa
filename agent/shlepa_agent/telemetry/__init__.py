@@ -65,6 +65,11 @@ _COMPLETION_TOKEN_KEYS = (
     "llm.token_count.completion",
     "gen_ai.usage.output_tokens",
 )
+# Cache tokens, first-class gen_ai usage attributes (emitted by pydantic-ai
+# when the endpoint reports them; OpenAI-compatible endpoints report reads
+# via prompt_tokens_details.cached_tokens).
+_CACHE_READ_KEYS = ("gen_ai.usage.cache_read.input_tokens",)
+_CACHE_WRITE_KEYS = ("gen_ai.usage.cache_creation.input_tokens",)
 
 
 class _ShlepaSpanProcessor(SpanProcessor):
@@ -83,6 +88,8 @@ class _ShlepaSpanProcessor(SpanProcessor):
     def __init__(self) -> None:
         self._prompt_tokens = 0
         self._completion_tokens = 0
+        self._cache_read_tokens = 0
+        self._cache_write_tokens = 0
 
     def on_start(self, span: Any, parent_context: Any = None) -> None:
         try:
@@ -117,6 +124,12 @@ class _ShlepaSpanProcessor(SpanProcessor):
             self._prompt_tokens += int(prompt)
         if completion is not None:
             self._completion_tokens += int(completion)
+        cache_read = self._first_present(attrs, _CACHE_READ_KEYS)
+        cache_write = self._first_present(attrs, _CACHE_WRITE_KEYS)
+        if cache_read is not None:
+            self._cache_read_tokens += int(cache_read)
+        if cache_write is not None:
+            self._cache_write_tokens += int(cache_write)
         root_ref = _ROOT_SPAN_REF
         root = root_ref() if root_ref is not None else None
         if root is not None and root.is_recording():
@@ -129,6 +142,18 @@ class _ShlepaSpanProcessor(SpanProcessor):
                 "shlepa.llm.cumulative_completion_tokens",
                 self._completion_tokens,
             )
+            # Cache attrs only when non-zero: endpoints without cache
+            # reporting keep the root span clean.
+            if self._cache_read_tokens:
+                root.set_attribute(
+                    "shlepa.llm.cumulative_cache_read_tokens",
+                    self._cache_read_tokens,
+                )
+            if self._cache_write_tokens:
+                root.set_attribute(
+                    "shlepa.llm.cumulative_cache_write_tokens",
+                    self._cache_write_tokens,
+                )
 
     @staticmethod
     def _first_present(attrs: Any, keys: tuple[str, ...]) -> int | None:

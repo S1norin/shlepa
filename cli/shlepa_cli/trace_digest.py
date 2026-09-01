@@ -19,8 +19,11 @@ import json
 __all__ = [
     "build_digest",
     "detect_loops",
+    "span_cache_read_tokens",
     "thinking_parts_count",
     "tool_signature",
+    "trace_cache_read_tokens",
+    "trace_phase_tokens",
     "trace_signals",
 ]
 
@@ -36,12 +39,25 @@ _COMPLETION_KEYS = (
     "llm.token_count.completion",
     "gen_ai.usage.output_tokens",
 )
+#: Cache-read tokens (a subset of the prompt tokens; OpenAI-compatible
+#: endpoints report them via prompt_tokens_details.cached_tokens).
+_CACHE_READ_KEYS = ("gen_ai.usage.cache_read.input_tokens",)
 #: OpenInference serializes LLM output messages (with typed parts, incl.
 #: type:thinking) under this key; pre-v1 traces carry it not at all.
 _OUTPUT_MESSAGES_KEY = "gen_ai.output.messages"
 _TOOL_NAME_KEY = "tool.name"
 _TOOL_ARGS_KEY = "tool.call.arguments"
 _TOOL_RESULT_KEY = "tool.call.result"
+# pydantic-ai names agent-run spans 'invoke_agent <agent name>' and puts
+# the run's CUMULATIVE usage on that span under gen_ai.aggregated_usage.*
+# (per-request chat spans carry gen_ai.usage.* and are not aggregated
+# here to avoid double counting). Pre-phase-naming runs used the default
+# agent name 'agent' and cannot be attributed to a phase.
+_AGENT_RUN_NAME_PREFIX = "invoke_agent "
+_LEGACY_AGENT_RUN_NAME = "agent"
+_AGENT_USAGE_INPUT_KEY = "gen_ai.aggregated_usage.input_tokens"
+_AGENT_USAGE_OUTPUT_KEY = "gen_ai.aggregated_usage.output_tokens"
+_AGENT_USAGE_CACHE_READ_KEY = "gen_ai.aggregated_usage.cache_read.input_tokens"
 
 
 def _norm(value) -> str:
@@ -75,6 +91,41 @@ def span_prompt_tokens(span: dict) -> int:
 
 def span_completion_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
+
+
+def span_cache_read_tokens(span: dict) -> int:
+    return _attr_first(span.get("attributes") or {}, _CACHE_READ_KEYS)
+
+
+def trace_cache_read_tokens(trace: dict) -> int:
+    return sum(span_cache_read_tokens(s) for s in _llm_spans(trace))
+
+
+def trace_phase_tokens(trace: dict) -> dict:
+    """Per-phase token totals from the phase agent-run spans.
+
+    Returns {phase: {"in", "out", "cache_read"}} aggregated over the
+    'invoke_agent <phase>' spans in start-time order (retries of a phase
+    are summed). Runs that predate phase naming (agent name 'agent')
+    yield an empty dict: the digest then shows totals only, no phase
+    table. Issue #73.
+    """
+    by_phase: dict[str, dict[str, int]] = {}
+    for span in _sorted_spans(trace):
+        name = span.get("name") or ""
+        if not name.startswith(_AGENT_RUN_NAME_PREFIX):
+            continue
+        phase = name[len(_AGENT_RUN_NAME_PREFIX):].strip()
+        if not phase or phase == _LEGACY_AGENT_RUN_NAME:
+            continue
+        attrs = span.get("attributes") or {}
+        bucket = by_phase.setdefault(
+            phase, {"in": 0, "out": 0, "cache_read": 0}
+        )
+        bucket["in"] += _tokens(attrs.get(_AGENT_USAGE_INPUT_KEY))
+        bucket["out"] += _tokens(attrs.get(_AGENT_USAGE_OUTPUT_KEY))
+        bucket["cache_read"] += _tokens(attrs.get(_AGENT_USAGE_CACHE_READ_KEY))
+    return by_phase
 
 
 def _output_messages(span: dict):
@@ -289,6 +340,28 @@ def build_digest(trace: dict) -> str:
         f"- tokens: {prompt_tokens} in / {completion_tokens} out "
         f"(total {prompt_tokens + completion_tokens})"
     )
+    # Cache reads are a subset of the prompt tokens; the line shows how
+    # much of the input was actually new (paid) versus served from cache.
+    # Omitted for legacy traces / endpoints without cache reporting.
+    cache_read = trace_cache_read_tokens(trace)
+    if cache_read:
+        new_input = max(0, prompt_tokens - cache_read)
+        ratio = cache_read / prompt_tokens if prompt_tokens else 0.0
+        lines.append(
+            f"- cache: {cache_read} read / {new_input} new input "
+            f"({ratio:.0%} of input was cached)"
+        )
+    # Per-phase token totals from the phase agent-run spans; absent for
+    # legacy traces (no phase-named spans) and single-phase runs without
+    # aggregated usage on the span.
+    phase_tokens = trace_phase_tokens(trace)
+    if phase_tokens:
+        lines.append("- phase tokens:")
+        for phase, tokens in phase_tokens.items():
+            lines.append(
+                f"  - {phase}: {tokens['in']} in / {tokens['out']} out / "
+                f"{tokens['cache_read']} cache read"
+            )
     lines.append(f"- llm_calls: {len(llm)}")
     if llm:
         if any(_span_has_output_messages(s) for s in llm):

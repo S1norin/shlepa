@@ -169,11 +169,12 @@ def _span_dict(span) -> dict:
     return data
 
 
-def _trace_tokens(trace: dict) -> tuple[int, int]:
+def _trace_tokens(trace: dict) -> tuple[int, int, int]:
     spans = [s for s in trace.get("spans") or [] if s.get("span_type") == "LLM"]
     return (
         sum(trace_digest.span_prompt_tokens(s) for s in spans),
         sum(trace_digest.span_completion_tokens(s) for s in spans),
+        sum(trace_digest.span_cache_read_tokens(s) for s in spans),
     )
 
 
@@ -216,7 +217,7 @@ def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> d
     for trace in traces:
         data = trace_to_dict(trace)
         task = str(data.get("task") or "unknown")
-        prompt_tokens, completion_tokens = _trace_tokens(data)
+        prompt_tokens, completion_tokens, cache_read = _trace_tokens(data)
         total_in += prompt_tokens
         total_out += completion_tokens
         (traces_dir / f"{task}.json").write_text(
@@ -225,16 +226,24 @@ def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> d
         (digests_dir / f"{task}.md").write_text(
             trace_digest.build_digest(data)
         )
-        manifest_lines.append(
-            {
-                "task": task,
-                "trace_id": data.get("trace_id"),
-                "state": data.get("state"),
-                "tokens_in": prompt_tokens,
-                "tokens_out": completion_tokens,
-                "signals": trace_digest.trace_signals(data),
-            }
-        )
+        phase_tokens = trace_digest.trace_phase_tokens(data)
+        line = {
+            "task": task,
+            "trace_id": data.get("trace_id"),
+            "state": data.get("state"),
+            "tokens_in": prompt_tokens,
+            "tokens_out": completion_tokens,
+            "signals": trace_digest.trace_signals(data),
+        }
+        # Only when the endpoint reports cache reads; legacy traces keep
+        # the exact previous manifest shape.
+        if cache_read:
+            line["tokens_cache_read"] = cache_read
+        # Per-phase token totals (absent for legacy traces without
+        # phase-named agent spans). Issue #73.
+        if phase_tokens:
+            line["phase_tokens"] = phase_tokens
+        manifest_lines.append(line)
     (out_dir / "manifest.jsonl").write_text(
         "".join(json.dumps(line) + "\n" for line in manifest_lines)
     )
