@@ -77,7 +77,11 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 - Experiment name = task **family** derived from the slug
   (`bench-<x>-*` → `bench-<x>`, `contest-*` → `contest`, otherwise the
   first dash component, fallback `misc`); run name = task display name;
-  metrics: `duration_sec`, `tokens_in/out/total`, `tool_calls`, `solved`;
+  metrics: `duration_sec`, `tokens_in/out/total`,
+  `tokens_cache_read`/`tokens_cache_write` (0 when the endpoint does not
+  report cache), per-phase `tokens_in.<phase>`/`tokens_out.<phase>`/
+  `tokens_cache_read.<phase>` (only for phases that ran; the sum of
+  `tokens_in.<phase>` equals `tokens_in`), `tool_calls`, `solved`;
   tags: `preset`, `model`, `agent_version`, `git_sha`, `endpoint_class`
   (the preset stays a tag, so preset-scoped filtering still works).
   Legacy preset-named experiments (`all`, `ctf`, `socbench`, …) are kept
@@ -100,11 +104,25 @@ See `.env.example` for the full list; `.env` itself is gitignored.
   MLflow runs with `batch_id` + `mlflow_trace_id`; the agent's root span
   carries `shlepa.batch_id`/`shlepa.preset`/`git.commit`/`task` and, when
   the run doesn't finish cleanly, `shlepa.termination_reason`
-  (`timeout`/`crash`).
+  (`timeout`/`crash`). The root span also accumulates the run's token
+  totals: `shlepa.llm.cumulative_prompt_tokens`/
+  `shlepa.llm.cumulative_completion_tokens`/
+  `shlepa.llm.cumulative_cache_read_tokens`/
+  `shlepa.llm.cumulative_cache_write_tokens` (cache attributes only when
+  non-zero). Each phase runs under a phase-labeled
+  `invoke_agent <phase-id>` span carrying the phase's cumulative
+  `gen_ai.aggregated_usage.*` token attributes.
+- Per-phase metrics in a run come from usage events tagged with the
+  phase id by the runner (`runner.py` sets it on the shared model before
+  each phase); the same phase names appear in the trace spans, so the
+  MLflow per-phase metrics and the trace-export per-phase table can be
+  cross-checked.
 - Second-LLM analysis workflow: `shlepa trace-export --batch <id>` writes
-  `manifest.jsonl` (one line per task: state, tokens, signal tags),
+  `manifest.jsonl` (one line per task: state, tokens, `tokens_cache_read`
+  and `phase_tokens` when available, signal tags),
   per-task `traces/<task>.json` (full dump) and `digests/<task>.md`
-  (compact timeline + failure signals), plus `summary.md`. Feed the
+  (compact timeline, cache-read + per-phase token summary, failure
+  signals), plus `summary.md`. Feed the
   analysis LLM the **manifest + digests first** (cheap, one context each);
   pull the full `traces/<task>.json` only for tasks flagged in the
   manifest (loop / tool_errors / repeated_results signals, or state !=
