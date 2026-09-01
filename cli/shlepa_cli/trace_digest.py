@@ -19,8 +19,10 @@ import json
 __all__ = [
     "build_digest",
     "detect_loops",
+    "span_cache_read_tokens",
     "thinking_parts_count",
     "tool_signature",
+    "trace_cache_read_tokens",
     "trace_signals",
 ]
 
@@ -36,6 +38,9 @@ _COMPLETION_KEYS = (
     "llm.token_count.completion",
     "gen_ai.usage.output_tokens",
 )
+#: Cache-read tokens (a subset of the prompt tokens; OpenAI-compatible
+#: endpoints report them via prompt_tokens_details.cached_tokens).
+_CACHE_READ_KEYS = ("gen_ai.usage.cache_read.input_tokens",)
 #: OpenInference serializes LLM output messages (with typed parts, incl.
 #: type:thinking) under this key; pre-v1 traces carry it not at all.
 _OUTPUT_MESSAGES_KEY = "gen_ai.output.messages"
@@ -75,6 +80,14 @@ def span_prompt_tokens(span: dict) -> int:
 
 def span_completion_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
+
+
+def span_cache_read_tokens(span: dict) -> int:
+    return _attr_first(span.get("attributes") or {}, _CACHE_READ_KEYS)
+
+
+def trace_cache_read_tokens(trace: dict) -> int:
+    return sum(span_cache_read_tokens(s) for s in _llm_spans(trace))
 
 
 def _output_messages(span: dict):
@@ -289,6 +302,17 @@ def build_digest(trace: dict) -> str:
         f"- tokens: {prompt_tokens} in / {completion_tokens} out "
         f"(total {prompt_tokens + completion_tokens})"
     )
+    # Cache reads are a subset of the prompt tokens; the line shows how
+    # much of the input was actually new (paid) versus served from cache.
+    # Omitted for legacy traces / endpoints without cache reporting.
+    cache_read = trace_cache_read_tokens(trace)
+    if cache_read:
+        new_input = max(0, prompt_tokens - cache_read)
+        ratio = cache_read / prompt_tokens if prompt_tokens else 0.0
+        lines.append(
+            f"- cache: {cache_read} read / {new_input} new input "
+            f"({ratio:.0%} of input was cached)"
+        )
     lines.append(f"- llm_calls: {len(llm)}")
     if llm:
         if any(_span_has_output_messages(s) for s in llm):

@@ -318,6 +318,60 @@ def test_manifest_carries_tokens_missing_signal(tmp_path):
     assert "tokens_missing" in line["signals"]
 
 
+def _llm_span_with_cache(cache_read):
+    return _Span(
+        span_id="llm-cache",
+        parent_id=None,
+        name="chat model",
+        span_type="LLM",
+        model_name="Qwen",
+        status="OK",
+        start_time_ns=0,
+        end_time_ns=1_000_000_000,
+        attributes={
+            "gen_ai.usage.input_tokens": "1000",
+            "gen_ai.usage.output_tokens": "50",
+            "gen_ai.usage.cache_read.input_tokens": str(cache_read),
+        },
+        events=[],
+        inputs=None,
+        outputs=None,
+    )
+
+
+def test_manifest_carries_tokens_cache_read_when_reported(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-c",
+                [_agent_span("batch-c", "task-a"), _llm_span_with_cache(750)],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-c", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert line["tokens_cache_read"] == 750
+
+
+def test_manifest_no_cache_field_for_legacy_traces(tmp_path):
+    client = _FakeClient(
+        [
+            _Trace(
+                "tr-l",
+                [_agent_span("batch-l", "task-a"),
+                 _llm_span("batch-l", "task-a")],
+                tags={"service.name": "shlepa-agent"},
+            )
+        ]
+    )
+    out = tmp_path / "e"
+    trace_export.export_batch(client, _settings(), "batch-l", out)
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert "tokens_cache_read" not in line
+
+
 def _llm_span_with_output_messages(parts):
     return _Span(
         span_id="llm-msg",
