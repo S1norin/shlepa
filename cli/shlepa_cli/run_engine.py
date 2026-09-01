@@ -50,6 +50,10 @@ class AgentRun:
     tokens_out: int
     tool_calls: int
     termination: str = "ok"
+    # Cache subset of the input tokens (0 when the endpoint doesn't
+    # report them); appended so positional constructors stay valid.
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,8 @@ class TaskResult:
     score_detail: str
     workspace: Path
     termination: str = "ok"
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
 
 
 def make_workspace(repo_root: Path, slug: str) -> Path:
@@ -100,6 +106,8 @@ class _HostMetricsCapture(logging.Handler):
         super().__init__()
         self.tokens_in = 0
         self.tokens_out = 0
+        self.cache_read = 0
+        self.cache_write = 0
         self.tool_calls = 0
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -111,6 +119,8 @@ class _HostMetricsCapture(logging.Handler):
         if event == "usage":
             self.tokens_in = int(data.get("cumulative_input") or 0)
             self.tokens_out = int(data.get("cumulative_output") or 0)
+            self.cache_read = int(data.get("cumulative_cache_read") or 0)
+            self.cache_write = int(data.get("cumulative_cache_write") or 0)
         elif event == "llm_tool_call":
             self.tool_calls += 1
 
@@ -168,6 +178,8 @@ def run_agent_on_host(
         final_output=output,
         tokens_in=capture.tokens_in,
         tokens_out=capture.tokens_out,
+        tokens_cache_read=capture.cache_read,
+        tokens_cache_write=capture.cache_write,
         tool_calls=capture.tool_calls,
     )
 
@@ -381,6 +393,10 @@ def log_task_to_mlflow(
     client.log_metric(run_id, "tokens_in", result.tokens_in)
     client.log_metric(run_id, "tokens_out", result.tokens_out)
     client.log_metric(run_id, "tokens_total", result.tokens_total)
+    # Always logged (0 when the endpoint doesn't report cache) so the
+    # runs table schema is stable across endpoint classes.
+    client.log_metric(run_id, "tokens_cache_read", result.tokens_cache_read)
+    client.log_metric(run_id, "tokens_cache_write", result.tokens_cache_write)
     client.log_metric(run_id, "tool_calls", result.tool_calls)
     client.log_param(run_id, "final_output", result.final_output[:2000])
     client.log_param(run_id, "termination", result.termination)
@@ -833,6 +849,8 @@ def run_task(
         tokens_in=agent_run.tokens_in,
         tokens_out=agent_run.tokens_out,
         tokens_total=agent_run.tokens_in + agent_run.tokens_out,
+        tokens_cache_read=agent_run.tokens_cache_read,
+        tokens_cache_write=agent_run.tokens_cache_write,
         tool_calls=agent_run.tool_calls,
         final_output=agent_run.final_output,
         error=error,

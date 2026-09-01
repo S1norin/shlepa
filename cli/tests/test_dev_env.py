@@ -168,8 +168,22 @@ def test_parse_agent_metrics() -> None:
         "tokens_in": 5,
         "tokens_out": 7,
         "tool_calls": 2,
+        # legacy markers carry no cache fields -> stable 0s
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
         "termination": "ok",
     }
+
+
+def test_parse_agent_metrics_carries_cache_fields() -> None:
+    stderr = (
+        'SLEPA_AGENT_METRICS_JSON={"final_output": "hello", '
+        '"tokens_in": 1000, "tokens_out": 50, "tool_calls": 1, '
+        '"tokens_cache_read": 750, "tokens_cache_write": 30}\n'
+    )
+    parsed = dev_env.parse_agent_metrics(stderr)
+    assert parsed["tokens_cache_read"] == 750
+    assert parsed["tokens_cache_write"] == 30
 
 
 def test_parse_agent_metrics_missing_or_broken() -> None:
@@ -178,6 +192,8 @@ def test_parse_agent_metrics_missing_or_broken() -> None:
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
         "termination": "ok",
     }
     assert dev_env.parse_agent_metrics("no marker") == defaults
@@ -192,6 +208,28 @@ def test_dev_run_source_sanity() -> None:
     assert '"/agent"' in dev_env.DEV_RUN_SOURCE
     # Telemetry on: the run must be wrapped in the agent.run root span.
     assert "root_span" in dev_env.DEV_RUN_SOURCE
+    # The entrypoint must capture the cumulative cache fields from usage
+    # events and report them in the metrics marker.
+    assert "cumulative_cache_read" in dev_env.DEV_RUN_SOURCE
+    assert "cumulative_cache_write" in dev_env.DEV_RUN_SOURCE
+    assert '"tokens_cache_read"' in dev_env.DEV_RUN_SOURCE
+    assert '"tokens_cache_write"' in dev_env.DEV_RUN_SOURCE
+
+
+def test_run_agent_in_container_propagates_cache_metrics() -> None:
+    from shlepa_cli.run_engine import AgentRun
+
+    marker = (
+        'SLEPA_AGENT_METRICS_JSON='
+        '{"final_output": "done", "tokens_in": 1000, "tokens_out": 50, '
+        '"tool_calls": 1, "tokens_cache_read": 750, '
+        '"tokens_cache_write": 30}\n'
+    )
+    fake = _ExecFakeDocker(rc=0, stderr=marker)
+    run = dev_env.run_agent_in_container(fake, "c", "p", {}, timeout_sec=120)
+    assert isinstance(run, AgentRun)
+    assert run.tokens_cache_read == 750
+    assert run.tokens_cache_write == 30
 
 
 class _ExecFakeDocker:
@@ -301,6 +339,8 @@ def test_parse_agent_metrics_reports_termination() -> None:
         "tokens_in": 0,
         "tokens_out": 0,
         "tool_calls": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
         "termination": "ok",
     }
 
@@ -326,6 +366,9 @@ def test_run_agent_in_container_success_termination_is_ok() -> None:
     fake = _ExecFakeDocker(rc=0, stderr=marker)
     run = dev_env.run_agent_in_container(fake, "c", "p", {})
     assert run.termination == "ok"
+    # legacy marker without cache fields -> 0s, not a crash
+    assert run.tokens_cache_read == 0
+    assert run.tokens_cache_write == 0
 
 
 def test_dev_run_source_marks_internal_timeout() -> None:

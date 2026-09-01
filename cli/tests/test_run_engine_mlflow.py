@@ -150,6 +150,30 @@ def test_log_task_to_mlflow_file_store(tmp_path):
     assert run.info.run_name == "contest-hello-file"
 
 
+def test_log_task_to_mlflow_logs_cache_metrics(tmp_path):
+    """Cache metrics are always logged (stable schema; 0 when the
+    endpoint doesn't report cache). Issue #71."""
+    tracking_uri = f"file://{tmp_path / 'mlstore'}"
+    client = MlflowClient(tracking_uri=tracking_uri)
+    settings = _settings(tmp_path)
+
+    run_id = run_engine.log_task_to_mlflow(
+        client, settings, "quick", None,
+        _result(tmp_path, tokens_cache_read=750, tokens_cache_write=30),
+    )
+    run = client.get_run(run_id)
+    assert run.data.metrics["tokens_cache_read"] == 750
+    assert run.data.metrics["tokens_cache_write"] == 30
+
+    # legacy result (no cache fields) -> the metrics exist as 0
+    run_id0 = run_engine.log_task_to_mlflow(
+        client, settings, "quick", None, _result(tmp_path)
+    )
+    run0 = client.get_run(run_id0)
+    assert run0.data.metrics["tokens_cache_read"] == 0
+    assert run0.data.metrics["tokens_cache_write"] == 0
+
+
 def test_log_task_unsolved_metrics(tmp_path):
     tracking_uri = f"file://{tmp_path / 'mlstore'}"
     client = MlflowClient(tracking_uri=tracking_uri)
