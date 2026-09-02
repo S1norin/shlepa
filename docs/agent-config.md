@@ -144,8 +144,27 @@ mutation.
 - **Hard, enforced by the runner**: the fixed per-phase time caps (plan
   60s / work 120s / review 45s; `[phases.*].time` overrides) and the
   optional step guard.
-- **Hard, enforced by the environment**: the container kill at the
-  task's own time limit — the only external bound on the cycles.
+- **External budget — developer-owned, never agent-visible**: each task
+  has an official **time limit** (the container kill) and **token limit**
+  (contest README: *"Each task has its own token and time limits"*). The
+  budget value is unknown to the agent runtime — T is not exposed
+  (issue #63) and the token limit is not surfaced at all — and may be
+  configured per task by the developer. A global deadline or a global
+  token budget inside the agent would therefore be pure guessing — there
+  is no point in them. The system accounts for the budget without the
+  agent ever knowing about it:
+  - *system side*: every operation that can run a long time or forever is
+    capped locally (the caps above — phase caps, bash 30s, LLM wall 180s,
+    file tools 5s, code_search 30s per call); per-phase token metrics are
+    logged to MLflow so the developer can watch consumption against the
+    budget; and the work phase keeps the deliverable file fresh on disk,
+    so whichever external cut happens first, a partial deliverable —
+    never an empty one — is what scores;
+  - *agent side*: the agent's prompt mentions only local per-operation
+    caps — never external limits, remaining budget, or budget pressure.
+    No prompt, tool output, or phase message may tell the agent it is
+    tight on budget. (The legacy `emergency` phase, unused in v5, was
+    reworded to carry no deadline language for the same reason.)
 - **Advisory (rendered into prompts/status, never enforced)**:
   per-phase `soft_time`/`soft_tokens` (`plan`: 45s/15k, `work`: 105s — no
   token note for work, `commit`: 35s/20k; every soft time stays under its
