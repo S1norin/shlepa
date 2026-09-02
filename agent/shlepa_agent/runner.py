@@ -549,6 +549,9 @@ async def run_prompt(
             prompt=prompt,
             # reported only when it is actually sent to the endpoint (#65)
             **({"temp": cfg.agent.temp} if cfg.agent.send_temp else {}),
+            # named toolset arm (agent/shlepa_agent/toolsets.py); the
+            # default baseline keeps the log byte-identical
+            **({"arm": cfg.arm} if cfg.arm != "baseline" else {}),
             entry=entry,
             emergency=cfg.agent.emergency,
             # Fixed regime (additive, CLI ignores unknown fields):

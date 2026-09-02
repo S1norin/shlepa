@@ -112,9 +112,28 @@ Routing rules (runner):
 | `SHLEPA_READ_MAX_OUTPUT` | `tools.read.max_output` | int |
 | `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 45s) | float |
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
+| `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
 
 Model/endpoint variables are unchanged (set by the harness, not the
 config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
+
+### AGENT_CODE_SEARCH (deliberate `AGENT_*` exception)
+
+Dev switch for the code-search toolset (the legacy `AGENT_*` set was
+dropped in v2; this one is wired on purpose). Values: `rg` (ripgrep
+fixed-string scan) or `sifs` (bundled SIFS binary, BM25-offline;
+`agent/tools/bin/sifs`). Unset or an invalid value: the tools stay OFF
+and the agent is byte-identical to the baseline (golden fixture:
+`agent/tests/fixtures/default_prompt.txt`). When set, the config layer
+enables `code_search` + `file_outline` in every phase, stores the engine
+(`code_search.engine`), and the tool notes render into the system prompt.
+Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
+BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
+model, dev only); a missing/broken SIFS binary degrades to rg/regex with a
+NOTE line (never crash). Each call runs under a per-call wall
+(`tools.code_search.timeout`, default 30s — the v5 regime bash cap).
+Shaped for the named toolset arms (#51): an arm is exactly this config
+mutation.
 
 ## Bounds: hard vs advisory
 

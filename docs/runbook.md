@@ -58,6 +58,16 @@ derived from the slug — `bench-<x>-*` → `bench-<x>` (e.g. `bench-soc`,
 runs by preset. Legacy preset-named experiments (`all`, `ctf`, …) are
 untouched history; `shlepa-ci` and `smoke` keep their fixed experiments.
 
+**Toolset arms.** `shlepa run --arm <arm>` selects a named toolset for the
+whole batch (design: `research/notes/toolsets-modular.md`): `baseline`
+(the v5 default tool set; the byte-identical reference), `+smart-grep`
+(baseline + code_search/file_outline over ripgrep), `+sifs` (… over the
+bundled SIFS binary). The arm is resolved as flag > `AGENT_TOOLSET` env
+> `baseline` and passed into the container as `AGENT_TOOLSET`; every
+MLflow run is tagged `toolset=<arm>`. A/B analysis filters runs by that
+tag. The agent side lives in `agent/shlepa_agent/toolsets.py` (the arm
+registry; it grows as new tool families land).
+
 ## Command reference
 
 All commands run from the repo root via `uv run --project cli shlepa ...`.
@@ -66,6 +76,7 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | --- | --- | --- |
 | `run [preset]` | Dev-engine run over a preset (default `all`); agent in container, real task env | `shlepa run all` |
 | `run --dry-run [preset]` | Print resolved tasks + model, execute nothing | `shlepa run --dry-run all` |
+| `run --arm <arm> [preset]` | Run a batch with a named toolset arm: `baseline`, `+smart-grep`, `+sifs` (flag > `AGENT_TOOLSET` env > baseline; tagged `toolset` in MLflow) | `shlepa run --arm +sifs all` |
 | `smoke` | Doctor + one real task + MLflow visibility check; exit 0/1 | `shlepa smoke` |
 | `smoke --ci` | Same, but the secondary CI endpoint and the `shlepa-ci` experiment | `shlepa smoke --ci` |
 | `doctor` | Hard checks: endpoint, model name, MLflow, MLflow OTLP ingestion (when `SLEPA_OTEL_ENABLED=1`), docker | `shlepa doctor` |
@@ -73,6 +84,7 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | `zip` | Build `dist/submission-<sha>.zip` (<= 10 MB, no telemetry) | `shlepa zip` |
 | `zip --register` | Also register the submission as a new version of the `shlepa` MLflow model | `shlepa zip --register` |
 | `trace-export --batch <id>` | Export the batch's agent traces from MLflow: manifest + JSON + digests + summary | `shlepa trace-export --batch <id>` |
+| `search-bench` | Research: measure search engines (read-all, rg, sifs) on the annotated query set + generated 10k corpus; CSV + MD report under `research/code_search/analysis/` | `shlepa search-bench --families contest-sqli,ctf-c` |
 | `submit-test [tasks...]` | Contest-faithful check: unzipped submission runs inside Harbor | `shlepa submit-test contest-hello-file` |
 | `submit-test --ci [tasks...]` | Same, CI endpoint + `shlepa-ci` experiment; no args = all tasks | `shlepa submit-test --ci` |
 | `task new <source>-<slug>` | Scaffold a new local task under `tasks/` | `shlepa task new own-math-101` |

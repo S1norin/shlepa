@@ -19,7 +19,29 @@ def _ctx(tmp_path, cfg=None, clock=None):
 
 
 def test_registry_has_all_tools():
-    assert set(ALL_TOOLS) == {"read", "write", "edit", "bash"}
+    assert set(ALL_TOOLS) == {
+        "read",
+        "write",
+        "edit",
+        "bash",
+        # code-search tools: off by default (AGENT_CODE_SEARCH), see
+        # test_code_search_tools.py
+        "code_search",
+        "file_outline",
+    }
+
+
+def test_registry_default_config_hides_code_search_tools(monkeypatch):
+    # baseline behavior: with AGENT_CODE_SEARCH unset the phase tool lists
+    # do not name the code-search tools, so they are never registered
+    from shlepa_agent.phases import get_phase
+
+    monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
+    cfg = _cfg()
+    for phase_id in ("plan", "work", "commit", "emergency"):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "code_search" not in names
+        assert "file_outline" not in names
 
 
 def test_registry_returns_configured_subset():

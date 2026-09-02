@@ -59,10 +59,22 @@ def run(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print resolved tasks and model, do not run."
     ),
+    arm: str = typer.Option(
+        "",
+        "--arm",
+        help=(
+            "Toolset arm for the batch (named toolset, see "
+            "agent/shlepa_agent/toolsets.py): baseline, +smart-grep, +sifs. "
+            "Default: the AGENT_TOOLSET env var, else baseline. Passed into "
+            "the container as AGENT_TOOLSET and tagged on every MLflow run "
+            "as toolset=<arm>."
+        ),
+    ),
 ) -> None:
     """Run the dev experiment loop for a preset."""
     from shlepa_cli import tasks as tasks_module
     from shlepa_cli.config import get_settings
+    from shlepa_agent.toolsets import resolve_arm
 
     settings = get_settings()
     try:
@@ -72,10 +84,20 @@ def run(
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+    # Arm resolution: --arm flag > AGENT_TOOLSET env > baseline. The agent
+    # package is the single source of truth for known arms; an unknown
+    # value is a user error and must fail before any container is built.
+    arm_spec = arm or os.environ.get("AGENT_TOOLSET", "") or "baseline"
+    try:
+        arm = resolve_arm(arm_spec)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1)
     if dry_run:
         model = preset_obj.model or settings.local_agent_model or "(from env)"
         typer.echo(f"preset: {preset_obj.name}")
         typer.echo(f"model: {model}")
+        typer.echo(f"arm: {arm}")
         typer.echo(f"tasks ({len(resolved)}):")
         for task in resolved:
             typer.echo(f"  - {task.slug} ({task.name})")
@@ -87,7 +109,7 @@ def run(
     no_docker = os.environ.get("SLEPA_NO_DOCKER") == "1"
     batch_id = run_engine.make_batch_id()
     typer.echo(
-        f"preset: {preset_obj.name} | model: {model or '(env)'} | "
+        f"preset: {preset_obj.name} | model: {model or '(env)'} | arm: {arm} | "
         f"mode: {'no-docker' if no_docker else 'container'} | "
         f"batch: {batch_id} | tasks: {len(resolved)}"
     )
@@ -107,6 +129,7 @@ def run(
         no_docker=no_docker,
         mlflow_client=mlflow_client,
         batch_id=batch_id,
+        arm=arm,
     )
     typer.echo("")
     typer.echo(run_engine.format_summary(results))
@@ -152,6 +175,55 @@ def trace_export(
     typer.echo(
         f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}"
     )
+
+
+@app.command("search-bench")
+def search_bench(
+    families: str = typer.Option(
+        "",
+        "--families",
+        help=(
+            "Comma-separated family filter (contest-sqli,seccodebench,ctf-c,"
+            "synthetic). Default: all families."
+        ),
+    ),
+    engines: str = typer.Option(
+        "read-all,rg,sifs",
+        "--engines",
+        help="Comma-separated engines (read-all,rg,sifs). Default: all three.",
+    ),
+    out: Path = typer.Option(
+        None,
+        "--out",
+        help="Output dir (default research/code_search/analysis/).",
+    ),
+    synthetic_files: int = typer.Option(
+        10500,
+        "--synthetic-files",
+        help="Files in the generated scale corpus (0 skips it; need >=10000).",
+    ),
+) -> None:
+    """Measure search engines (read-all baseline, rg, sifs) on the query set.
+
+    Runs the annotated query set (research/code_search/analysis/queries.json)
+    plus a generated >=10k-file synthetic corpus and writes a CSV + markdown
+    report (tokens-to-locate, hit@1/hit@3, latency per engine and family).
+    """
+    from shlepa_cli import search_bench as search_bench_module
+    from shlepa_cli.config import get_settings
+
+    settings = get_settings()
+    out_dir = out or settings.repo_root / "research" / "code_search" / "analysis"
+    csv_path, md_path = search_bench_module.run_bench(
+        settings.repo_root,
+        out_dir,
+        settings.repo_root / "research" / "code_search" / "analysis" / "queries.json",
+        families=[f.strip() for f in families.split(",") if f.strip()] or None,
+        engines=[e.strip() for e in engines.split(",") if e.strip()] or None,
+        synthetic_files=synthetic_files,
+    )
+    typer.echo(f"csv: {csv_path}")
+    typer.echo(f"report: {md_path}")
 
 
 @app.command()
