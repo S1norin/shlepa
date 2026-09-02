@@ -300,5 +300,7 @@ recorded here as likely hallucinated; the unnamed "atomic DAG scheduling +
 cross-session persistence" project is unverifiable as cited (the concepts do
 appear in ALAS / R³DAO / FWF).
 
-**Track:** the G4 (stop-signal telemetry) and G1/G2 (prompt + guard) items
-are GitHub-issue candidates via the `backlog` skill when picked up.
+**Track:** filed 2026-09-03 as GitHub issues — G4 → #79 (cycles + verdict
+telemetry), G1 → #80 (diminishing-returns review context), G2 → #81
+(repeat-defect guard), G3 → #82 (family phase-split knob), staged deliverable →
+#83, dev-run budget watchdog → #84.
