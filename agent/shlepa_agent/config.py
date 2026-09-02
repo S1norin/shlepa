@@ -88,6 +88,11 @@ class ToolsConfig(BaseModel):
     # engine's own 60s rg wall is too high for a tool call).
     code_search: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
     file_outline: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
+    # Forensics tools: OFF by default. The AGENT_TOOLSET=+forensics arm
+    # enables them (see _enable_forensics_tools and toolsets.py). The
+    # ``timeout`` is the per-call wall (the v5 regime bash cap); the engine
+    # result is separately capped at ``max_output`` chars.
+    log_triage: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=3500)
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -188,6 +193,8 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_READ_MAX_LIMIT": ("tools.read.max_limit", int),
     "SHLEPA_READ_MAX_OUTPUT": ("tools.read.max_output", int),
     "SHLEPA_CODE_SEARCH_TIMEOUT": ("tools.code_search.timeout", float),
+    "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
+    "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
 }
@@ -241,6 +248,20 @@ def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
         for name in ("code_search", "file_outline"):
             if name not in phase.tools:
                 phase.tools.append(name)
+
+
+def _enable_forensics_tools(cfg: AgentConfig) -> None:
+    """Enable the forensics tool family (the +forensics arm mutation).
+
+    Mirrors :func:`_enable_search_tools`: tools enabled and their names
+    appended to every phase's tool list (their notes then render into the
+    system prompt automatically). Deduped, so it is safe if a phase list
+    ever names them explicitly.
+    """
+    cfg.tools.log_triage.enabled = True
+    for phase in cfg.phases.values():
+        if "log_triage" not in phase.tools:
+            phase.tools.append("log_triage")
 
 
 def _apply_code_search_env(cfg: AgentConfig) -> None:

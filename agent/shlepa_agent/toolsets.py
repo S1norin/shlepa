@@ -14,6 +14,8 @@ Arms (the current set; the registry grows as new tool families land):
   (the rg engine; the "smart grep" primitive from the code-search plan).
 - ``+sifs``: baseline + code_search/file_outline over the bundled SIFS
   binary (BM25 offline).
+- ``+forensics``: baseline + the log_triage tool (deterministic read-only
+  triage of log/evidence files; research/notes/readonly-tools.md option A).
 
 The legacy dev switch ``AGENT_CODE_SEARCH`` (rg | sifs) still works when
 ``AGENT_TOOLSET`` is unset; when both are set, ``AGENT_TOOLSET`` wins
@@ -30,9 +32,15 @@ from shlepa_agent.config import AgentConfig
 ARM_BASELINE = "baseline"
 ARM_SMART_GREP = "+smart-grep"
 ARM_SIFS = "+sifs"
+ARM_FORENSICS = "+forensics"
 
 #: Every known arm, in display order.
-KNOWN_ARMS: tuple[str, ...] = (ARM_BASELINE, ARM_SMART_GREP, ARM_SIFS)
+KNOWN_ARMS: tuple[str, ...] = (
+    ARM_BASELINE,
+    ARM_SMART_GREP,
+    ARM_SIFS,
+    ARM_FORENSICS,
+)
 
 #: Search arms -> the engine their code_search toolset uses.
 _ARM_ENGINE: dict[str, str] = {
@@ -64,9 +72,11 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
     tool list (the same mutation the legacy AGENT_CODE_SEARCH switch
     performs; see :func:`shlepa_agent.config._enable_search_tools`).
     """
-    from shlepa_agent.config import _enable_search_tools
+    from shlepa_agent.config import _enable_forensics_tools, _enable_search_tools
 
     cfg.arm = arm
     engine = _ARM_ENGINE.get(arm)
     if engine is not None:
         _enable_search_tools(cfg, engine)
+    elif arm == ARM_FORENSICS:
+        _enable_forensics_tools(cfg)

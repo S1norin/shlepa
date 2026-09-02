@@ -13,6 +13,7 @@ from shlepa_agent.tools.base import AgentDeps, Tool, resolve_path
 from shlepa_agent.tools.bash import BASH_TOOL
 from shlepa_agent.tools.code_search import CODE_SEARCH_TOOL, FILE_OUTLINE_TOOL
 from shlepa_agent.tools.edit import EDIT_TOOL
+from shlepa_agent.tools.log_triage import LOG_TRIAGE_TOOL
 from shlepa_agent.tools.read import READ_TOOL
 from shlepa_agent.tools.write import WRITE_TOOL
 
@@ -28,6 +29,9 @@ ALL_TOOLS: dict[str, Tool] = {
         # phase tool lists; get_tools skips disabled tools).
         CODE_SEARCH_TOOL,
         FILE_OUTLINE_TOOL,
+        # Off by default: enabled by the +forensics toolset arm
+        # (config._enable_forensics_tools).
+        LOG_TRIAGE_TOOL,
     )
 }
 
