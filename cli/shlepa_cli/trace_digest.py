@@ -39,9 +39,24 @@ _COMPLETION_KEYS = (
 #: OpenInference serializes LLM output messages (with typed parts, incl.
 #: type:thinking) under this key; pre-v1 traces carry it not at all.
 _OUTPUT_MESSAGES_KEY = "gen_ai.output.messages"
-_TOOL_NAME_KEY = "tool.name"
-_TOOL_ARGS_KEY = "tool.call.arguments"
-_TOOL_RESULT_KEY = "tool.call.result"
+# The agent's instrumentation emits two key families on TOOL spans: the
+# OpenTelemetry semantic convention gen_ai.* keys and the legacy
+# OpenInference tool.* keys (both always present in current traces).
+# Accept both, preferring gen_ai.*, so identical calls hash identically.
+# The pre-F3 digest only looked for tool.call.arguments / tool.call.result,
+# keys no trace actually carries: every args normalized to "" and the loop
+# detector flagged ~93% of real traces (issue #68).
+_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
+_TOOL_ARGS_KEYS = (
+    "gen_ai.tool.call.arguments",
+    "tool.parameters",
+    "tool.call.arguments",
+)
+_TOOL_RESULT_KEYS = (
+    "gen_ai.tool.call.result",
+    "output.value",
+    "tool.call.result",
+)
 
 
 def _norm(value) -> str:
@@ -67,6 +82,14 @@ def _attr_first(attrs: dict, keys: tuple[str, ...]) -> int:
         if key in attrs:
             return _tokens(attrs.get(key))
     return 0
+
+
+def _attr_first_raw(attrs: dict, keys: tuple[str, ...]):
+    """First present value among the key family (None when absent)."""
+    for key in keys:
+        if key in attrs:
+            return attrs[key]
+    return None
 
 
 def span_prompt_tokens(span: dict) -> int:
@@ -148,8 +171,11 @@ def _tool_spans(trace: dict) -> list:
 def tool_signature(span: dict) -> str:
     """Tool name + sha256 of the normalized arguments."""
     attrs = span.get("attributes") or {}
-    name = attrs.get(_TOOL_NAME_KEY) or span.get("name") or "tool"
-    return f"{name}:{hashlib.sha256(_norm(attrs.get(_TOOL_ARGS_KEY)).encode()).hexdigest()[:12]}"
+    name = _attr_first_raw(attrs, _TOOL_NAME_KEYS) or span.get("name") or "tool"
+    args = _attr_first_raw(attrs, _TOOL_ARGS_KEYS)
+    return (
+        f"{name}:{hashlib.sha256(_norm(args).encode()).hexdigest()[:12]}"
+    )
 
 
 def detect_loops(tool_spans: list) -> list[dict]:
@@ -191,8 +217,8 @@ def detect_loops(tool_spans: list) -> list[dict]:
             {
                 "signature": sig,
                 "count": total[sig],
-                "tool": attrs.get(_TOOL_NAME_KEY) or "tool",
-                "args": _norm(attrs.get(_TOOL_ARGS_KEY))[:120],
+                "tool": _attr_first_raw(attrs, _TOOL_NAME_KEYS) or "tool",
+                "args": _norm(_attr_first_raw(attrs, _TOOL_ARGS_KEYS))[:120],
             }
         )
     return result
@@ -252,7 +278,7 @@ def _repeated_results(tool_spans: list) -> int:
     counts: dict[str, int] = {}
     for span in tool_spans:
         attrs = span.get("attributes") or {}
-        value = attrs.get(_TOOL_RESULT_KEY)
+        value = _attr_first_raw(attrs, _TOOL_RESULT_KEYS)
         if value is None or not str(value).strip():
             continue
         key = hashlib.sha256(_norm(value).encode()).hexdigest()
@@ -334,7 +360,8 @@ def build_digest(trace: dict) -> str:
             )
         if tool_errors:
             names = ", ".join(
-                ((s.get("attributes") or {}).get(_TOOL_NAME_KEY) or s.get("name"))
+                _attr_first_raw(s.get("attributes") or {}, _TOOL_NAME_KEYS)
+                or s.get("name")
                 for s in tool_errors
             )
             lines.append(f"- **tool errors**: {len(tool_errors)} ({names})")

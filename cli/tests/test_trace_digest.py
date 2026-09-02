@@ -293,3 +293,83 @@ def test_real_fixture_thinking_parts():
     """Golden fixture: the real span (tr-a5420d2d) has a thinking part."""
     span = json.loads((FIXTURES / "llm_span_real.json").read_text())
     assert trace_digest.thinking_parts_count(span) >= 1
+
+
+# --- F3: real gen_ai.* / legacy key families (issue #68) -------------------
+# Current traces carry gen_ai.tool.* + tool.parameters/output.value, never
+# the bare tool.call.arguments / tool.call.result the pre-F3 digest looked
+# for (which collapsed every signature to empty args -> mass false loops).
+
+
+def _tool_span_real_keys(i, name="bash", args=None, result="ok"):
+    """Tool span shaped like the real traces (gen_ai + legacy families)."""
+    span = _tool_span(i, name=name, args=None, result=None)
+    attrs = {
+        "gen_ai.tool.name": name,
+        "gen_ai.tool.call.id": f"call-{i}",
+    }
+    if args is not None:
+        attrs["gen_ai.tool.call.arguments"] = (
+            args if isinstance(args, dict) else json.loads(args)
+        )
+        attrs["tool.parameters"] = attrs["gen_ai.tool.call.arguments"]
+    if result is not None:
+        attrs["gen_ai.tool.call.result"] = result
+        attrs["output.value"] = result
+    attrs["tool.name"] = name
+    span["attributes"] = attrs
+    return span
+
+
+def test_loop_positive_on_repeated_args_genai_keys():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": "curl http://x"})
+        for i in range(5)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    loop = [s for s in signals if s.startswith("loop:bash:5")]
+    assert loop, signals
+    assert "curl http://x" in loop[0]
+
+
+def test_loop_negative_on_distinct_args_genai_keys():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": f"ls dir-{i}"})
+        for i in range(8)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert not [s for s in signals if s.startswith("loop:")], signals
+
+
+def test_repeated_results_uses_genai_result_key():
+    spans = [
+        _tool_span_real_keys(1, "bash", {"command": "a"}, "same output"),
+        _tool_span_real_keys(2, "bash", {"command": "b"}, "same output"),
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert "repeated_results:1" in signals
+
+
+def test_repeated_results_empty_never_counts():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": f"c-{i}"}, "")
+        for i in range(4)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert not [s for s in signals if s.startswith("repeated_results:")], signals
+
+
+def test_legacy_tool_parameters_args_still_supported():
+    # Pre-gen_ai traces: only the legacy tool.name + tool.parameters pair.
+    spans = []
+    for i in range(5):
+        span = _tool_span(i, name="bash", args=None, result=None)
+        span["attributes"] = {
+            "tool.name": "bash",
+            "tool.parameters": {"command": "ping host"},
+        }
+        spans.append(span)
+    signals = trace_digest.trace_signals(_trace(spans))
+    loop = [s for s in signals if s.startswith("loop:bash:5")]
+    assert loop, signals
+    assert "ping host" in loop[0]
