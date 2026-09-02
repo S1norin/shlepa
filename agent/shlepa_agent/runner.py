@@ -48,6 +48,7 @@ import argparse
 import asyncio
 import os
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,6 +74,54 @@ from shlepa_agent.tools import AgentDeps, get_tools
 
 #: Hard cap for the one-shot final_ask request after a phase time-out.
 FINAL_ASK_CAP_S = 30.0
+
+_NULL_CTX = nullcontext()
+
+
+def _telemetry_call(fn: str, *args: Any) -> None:
+    """Best-effort call into shlepa_agent.telemetry (F4 root-span I/O).
+
+    No-op unless SLEPA_OTEL_ENABLED=1; the telemetry module itself only
+    exists in the dev install, so the import is lazy and any failure is
+    swallowed: tracing must never break a run.
+    """
+    if os.environ.get("SLEPA_OTEL_ENABLED") != "1":
+        return
+    try:
+        from shlepa_agent import telemetry
+
+        getattr(telemetry, fn)(*args)
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+def _final_ask_span_ctx(phase_id: str, prompt: str):
+    """Context manager for the final_ask span; nullcontext when tracing is off."""
+    if os.environ.get("SLEPA_OTEL_ENABLED") != "1":
+        return _NULL_CTX
+    try:
+        from shlepa_agent import telemetry
+
+        return telemetry.final_ask_span(phase_id, prompt)
+    except Exception:  # pragma: no cover - defensive, must never raise
+        return _NULL_CTX
+
+
+def _stamp_final_ask(span: Any, *, ok: bool, text: str = "",
+                     reason: str = "", error: str = "") -> None:
+    """Stamp the outcome of a final_ask request on its span (None-safe)."""
+    if span is None:
+        return
+    try:
+        span.set_attribute("shlepa.ok", ok)
+        if text:
+            span.set_attribute("output.value", text[:4000])
+        if reason:
+            span.set_attribute("shlepa.reason", reason)
+        if error:
+            span.set_attribute("shlepa.error", error[:300])
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
 
 FINAL_ASK_MESSAGE = (
     "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. Write the final "
@@ -342,35 +391,42 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
         history_messages=len(history or []),
         elapsed_s=round(model.elapsed(), 1),
     )
-    try:
-        async with asyncio.timeout(cap):
-            async with agent.run_stream_events(
-                FINAL_ASK_MESSAGE,
-                deps=state.deps,
-                model_settings=_model_settings(cfg),
-                message_history=history,
-            ) as events:
-                async for event in events:
-                    _log_stream_event(event)
-        model.log_pending_usage()
-        _log_event("final_ask", phase=phase.id, ok=True, elapsed_s=round(model.elapsed(), 1))
-    except (TimeoutError, asyncio.TimeoutError):
-        model.log_pending_usage()
-        _log_event(
-            "final_ask",
-            phase=phase.id,
-            ok=False,
-            reason="time cap",
-            elapsed_s=round(model.elapsed(), 1),
-        )
-    except Exception as e:
-        model.log_pending_usage()
-        _log_event(
-            "final_ask",
-            phase=phase.id,
-            ok=False,
-            error=f"{type(e).__name__}: {str(e)[:200]}",
-        )
+    with _final_ask_span_ctx(phase.id, FINAL_ASK_MESSAGE) as span:
+        text = ""
+        try:
+            async with asyncio.timeout(cap):
+                async with agent.run_stream_events(
+                    FINAL_ASK_MESSAGE,
+                    deps=state.deps,
+                    model_settings=_model_settings(cfg),
+                    message_history=history,
+                ) as events:
+                    async for event in events:
+                        out = _log_stream_event(event)
+                        if out is not None:
+                            text = str(out)
+            model.log_pending_usage()
+            _stamp_final_ask(span, ok=True, text=text)
+            _log_event("final_ask", phase=phase.id, ok=True, elapsed_s=round(model.elapsed(), 1))
+        except (TimeoutError, asyncio.TimeoutError):
+            model.log_pending_usage()
+            _stamp_final_ask(span, ok=False, reason="time cap")
+            _log_event(
+                "final_ask",
+                phase=phase.id,
+                ok=False,
+                reason="time cap",
+                elapsed_s=round(model.elapsed(), 1),
+            )
+        except Exception as e:
+            model.log_pending_usage()
+            _stamp_final_ask(span, ok=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+            _log_event(
+                "final_ask",
+                phase=phase.id,
+                ok=False,
+                error=f"{type(e).__name__}: {str(e)[:200]}",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +567,7 @@ async def run_prompt(
     0.
     """
     _configure_logging()
+    _telemetry_call("mark_input", prompt)  # F4: root-span input.value
     cfg = agent_cfg or load_config()
     model: TrackedModel | None = None
     try:
@@ -569,11 +626,13 @@ async def run_prompt(
             elapsed_s=round(model.elapsed(), 1),
             output=output,
         )
+        _telemetry_call("mark_outcome", status, output)  # F4: root-span I/O
         return output
     except Exception as e:
         _log_event("agent_error", error=f"{type(e).__name__}: {str(e)[:500]}")
         elapsed = round(model.elapsed(), 1) if model is not None else 0.0
         _log_event("agent_done", status="error", elapsed_s=elapsed, output="")
+        _telemetry_call("mark_outcome", "error", "")  # F4: root-span status
         return ""
 
 

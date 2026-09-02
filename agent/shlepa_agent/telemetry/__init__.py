@@ -313,6 +313,92 @@ def mark_termination(reason: str) -> None:
     span.set_status(Status(StatusCode.ERROR, reason))
 
 
+#: Cap for free-text values stamped onto spans (F4): the trace UI and the
+#: digest builder should stay readable; full transcripts live in the
+#: per-task trace JSON anyway.
+_TEXT_CAP = 16_000
+
+
+def _capped(value: str, limit: int = _TEXT_CAP) -> str:
+    value = str(value)
+    return value if len(value) <= limit else value[:limit] + " [truncated]"
+
+
+def _current_recording_span() -> Any | None:
+    """The active recording span, or None (SDK absent / no span open)."""
+    try:
+        from opentelemetry import trace
+    except ImportError:  # baseline without the otel extra
+        return None
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return None
+    return span
+
+
+def mark_input(value: str) -> None:
+    """Stamp ``input.value`` (the task instruction) on the current span.
+
+    Called from the runner while the agent.run root span is open (F4): the
+    trace then carries the instruction directly instead of hiding it inside
+    the first LLM span. No-op when there is no active recording span or the
+    SDK is not installed. Never raises.
+    """
+    try:
+        span = _current_recording_span()
+        if span is not None:
+            span.set_attribute("input.value", _capped(value))
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+def mark_outcome(status: str, output: str = "") -> None:
+    """Stamp ``shlepa.status`` + ``output.value`` on the current span (F4).
+
+    The final pipeline status (done/timeout/error) and, when present, the
+    final output text. Complements shlepa.termination_reason, which only
+    covers crash/timeout exits. No-op rules as in :func:`mark_input`.
+    Never raises.
+    """
+    try:
+        span = _current_recording_span()
+        if span is not None:
+            span.set_attribute("shlepa.status", status)
+            if output:
+                span.set_attribute("output.value", _capped(output))
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+@contextmanager
+def final_ask_span(phase_id: str, prompt: str, provider: Any | None = None):
+    """Span for one toolless final_ask request (F4).
+
+    Carries the triggering phase id (``shlepa.phase_id``) and the prompt on
+    start; the caller stamps ``shlepa.ok`` / ``output.value`` before
+    exiting. ``provider`` is optional (tests inject their TracerProvider);
+    by default the globally configured one is used. Yields the span, or
+    None when the otel SDK is unavailable (baseline path), so the caller
+    guards attribute writes on a non-None span. A failure to open the span
+    degrades to a None yield, never a raised error: telemetry must not
+    break the run.
+    """
+    try:
+        if provider is not None:
+            tracer = provider.get_tracer("shlepa-agent")
+        else:
+            from opentelemetry import trace
+
+            tracer = trace.get_tracer("shlepa-agent")
+    except Exception:  # pragma: no cover - baseline without the otel extra
+        yield None
+        return
+    with tracer.start_as_current_span("final_ask") as span:
+        span.set_attribute("shlepa.phase_id", phase_id)
+        span.set_attribute("input.value", _capped(prompt, 4000))
+        yield span
+
+
 def configure(exporter: Any | None = None) -> TracerProvider:
     """Set up the global tracer provider and return it.
 
