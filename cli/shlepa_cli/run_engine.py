@@ -739,6 +739,9 @@ def _agent_env(
         env["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
             settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
         )
+        # Span attribute value cap (bytes); keeps exported traces small.
+        if settings.shlepa_otel_attr_limit:
+            env["SLEPA_OTEL_ATTR_LIMIT"] = settings.shlepa_otel_attr_limit
         if batch_id:
             env["SLEPA_BATCH_ID"] = batch_id
         if preset_name:
