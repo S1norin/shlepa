@@ -12,19 +12,34 @@ Covers the readonly-tools option A acceptance criteria:
 """
 
 import json
-import time
 from pathlib import Path
 
 from shlepa_agent.log_triage import DEFAULT_MAX_OUTPUT, log_triage
 
-SOC_JSONL = """\
-{"EventID": 4624, "TimeCreated": "2026-04-17T08:01:00", "SubjectUserName": "t.nguyen", "Computer": "WS-HR-20", "IP": "10.0.0.5", "Process": "logonui.exe"}
-{"EventID": 4688, "TimeCreated": "2026-04-17T08:02:00", "SubjectUserName": "t.nguyen", "Computer": "WS-HR-20", "IP": "10.0.0.5", "Process": "svchost.exe"}
-{"EventID": 4688, "TimeCreated": "2026-04-17T14:03:00", "SubjectUserName": "admin", "Computer": "WS-HR-20", "IP": "10.0.0.5", "Process": "powershell.exe"}
-{"EventID": 4688, "TimeCreated": "2026-04-17T14:04:00", "SubjectUserName": "admin", "Computer": "DC-01", "IP": "203.0.113.9", "Process": "powershell.exe"}
-{"EventID": 4625, "TimeCreated": "2026-04-17T14:05:00", "SubjectUserName": "svc_backup", "Computer": "DC-01", "IP": "198.51.100.23", "Process": "vssadmin.exe"}
-{"EventID": 4624, "TimeCreated": "2026-04-17T14:06:00", "SubjectUserName": "t.nguyen", "Computer": "WS-HR-20", "IP": "10.0.0.5", "Process": "explorer.exe"}
-"""
+
+def _evt(eid, t, user, comp, ip, proc):
+    return json.dumps(
+        {
+            "EventID": eid,
+            "TimeCreated": t,
+            "SubjectUserName": user,
+            "Computer": comp,
+            "IP": ip,
+            "Process": proc,
+        }
+    )
+
+
+SOC_JSONL = "\n".join(
+    [
+        _evt(4624, "2026-04-17T08:01:00", "t.nguyen", "WS-HR-20", "10.0.0.5", "logonui.exe"),
+        _evt(4688, "2026-04-17T08:02:00", "t.nguyen", "WS-HR-20", "10.0.0.5", "svchost.exe"),
+        _evt(4688, "2026-04-17T14:03:00", "admin", "WS-HR-20", "10.0.0.5", "powershell.exe"),
+        _evt(4688, "2026-04-17T14:04:00", "admin", "DC-01", "203.0.113.9", "powershell.exe"),
+        _evt(4625, "2026-04-17T14:05:00", "svc_backup", "DC-01", "198.51.100.23", "vssadmin.exe"),
+        _evt(4624, "2026-04-17T14:06:00", "t.nguyen", "WS-HR-20", "10.0.0.5", "explorer.exe"),
+    ]
+) + "\n"
 
 WEB_LOG = """\
 2026-04-17 09:00:00 10.0.0.5 GET /index.html 200

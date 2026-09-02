@@ -45,12 +45,18 @@ MAX_FILES = 8
 _TS_RE = re.compile(r"\b(\d{4}[-/]\d{2}[-/]\d{2}[ T]\d{2}:\d{2}(?::\d{2})?)")
 
 #: IPv4 (whole tokens only, octets 0-255).
+_OCTET = r"25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d"
 _IP_RE = re.compile(
-    r"(?<![0-9.])((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})(?![0-9.])"
+    r"(?<![0-9.])"
+    + r"((?:" + _OCTET + r")(?:\.(?:" + _OCTET + r")){3})"
+    + r"(?![0-9.])"
 )
 
 #: Log severity levels (word-bounded, case-insensitive).
-_SEV_RE = re.compile(r"\b(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERROR|CRIT(?:ICAL)?|FATAL)\b", re.IGNORECASE)
+_SEV_RE = re.compile(
+    r"\b(DEBUG|INFO|NOTICE|WARN(?:ING)?|ERROR|CRIT(?:ICAL)?|FATAL)\b",
+    re.IGNORECASE,
+)
 
 #: Token extraction for plain-text lines (candidate entities / phrases).
 #: Leading "/" allowed so URL paths survive ("/api/login").
@@ -183,7 +189,8 @@ def _triage_file(path: Path) -> _FileStats | str:
     except OSError as e:
         return f"== {path.name}: unreadable ({e})"
     if size > MAX_FILE_BYTES:
-        return f"== {path.name}: skipped ({size / 1048576:.0f} MB > {MAX_FILE_BYTES // 1048576} MB cap)"
+        cap_mb = MAX_FILE_BYTES // 1048576
+        return f"== {path.name}: skipped ({size / 1048576:.0f} MB > {cap_mb} MB cap)"
     st = _FileStats(path.name, size)
     jsonl = False
     try:
@@ -252,7 +259,9 @@ def _fmt_file(st: _FileStats) -> list[str]:
         if len(keys) > 200:
             keys = keys[:200] + "…"
         lines.append(f"   keys: {keys}")
-    for cat, label in (("event", "events"), ("user", "users"), ("host", "hosts"), ("process", "procs")):
+    for cat, label in (
+        ("event", "events"), ("user", "users"), ("host", "hosts"), ("process", "procs")
+    ):
         top = _fmt_top(st.ents[cat], 8)
         if top:
             lines.append(f"   {label}: {top}")
@@ -299,14 +308,19 @@ def log_triage(path: str, workdir: Path, max_output: int = DEFAULT_MAX_OUTPUT) -
     if p.is_dir():
         files = [
             f for f in sorted(p.iterdir())
-            if f.is_file() and f.suffix.lower() in EVIDENCE_EXTENSIONS and not f.name.startswith(".")
+            if (
+                f.is_file()
+                and f.suffix.lower() in EVIDENCE_EXTENSIONS
+                and not f.name.startswith(".")
+            )
         ]
         if len(files) > MAX_FILES:
             skipped_note = f" ({MAX_FILES} of {len(files)} files shown)"
             files = files[:MAX_FILES]
         targets = files
         if not targets:
-            return f"log_triage: no evidence files in {path} (extensions: {sorted(EVIDENCE_EXTENSIONS)})"
+            exts = ", ".join(sorted(EVIDENCE_EXTENSIONS))
+            return f"log_triage: no evidence files in {path} (extensions: {exts})"
     else:
         targets = [p]
 
