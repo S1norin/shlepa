@@ -1,0 +1,22 @@
+name: forensics
+tasks:
+  - bench-soc-scanner-fp
+  - bench-soc-ntds-vss
+  - bench-soc-rdp-ptt-a
+  - bench-soc-rdp-ptt-b
+  - bench-soc-dll-hijack-a
+  - bench-soc-dll-hijack-b
+  - bench-soc-proc-hollow-a
+  - bench-soc-proc-hollow-b
+  - bench-soc-amsi-bypass-a
+  - bench-soc-amsi-bypass-b
+  - bench-soc-aws-passrole-a
+  - bench-soc-aws-passrole-b
+  - bench-soc-dns-tunnel-a
+  - bench-soc-dns-tunnel-b
+  - bench-soc-https-beacon-a
+  - bench-soc-https-beacon-b
+  - bench-soc-ntds-vss-a
+  - bench-soc-ntds-vss-b
+  - bench-ctf-whyos
+  - contest-incident-log-forensics
