@@ -308,6 +308,18 @@ def _enable_recon_tools(cfg: AgentConfig) -> None:
             phase.tools.append("recon")
 
 
+def _apply_read_only_arm(cfg: AgentConfig) -> None:
+    """Read-only arm mutation: read/write/edit + recon, NO bash.
+
+    The experiment arm proving recon is usable by an agent without a
+    code-execution channel (deliverable writing stays possible via
+    write/edit; 'read-only' = no bash, not a read-only filesystem).
+    """
+    cfg.tools.recon.enabled = True
+    for phase in cfg.phases.values():
+        phase.tools = ["read", "write", "edit", "recon"]
+
+
 def _apply_code_search_env(cfg: AgentConfig) -> None:
     """Enable code_search/file_outline from AGENT_CODE_SEARCH (rg | sifs).
 

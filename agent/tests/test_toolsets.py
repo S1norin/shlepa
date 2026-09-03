@@ -2,7 +2,8 @@
 
 Arms: baseline (no-op, byte-identical default), +smart-grep (rg engine),
 +sifs (SIFS engine), +forensics (log_triage), +mitre-kb (mitre_kb),
-+recon (recon tool + the tool-variant recon prompt block).
++recon (recon tool + the tool-variant recon prompt block), read-only
+(read/write/edit + recon, no bash).
 AGENT_TOOLSET is the sole driver of the code-search toolset when set (it
 wins over the legacy AGENT_CODE_SEARCH switch); an invalid value is
 ignored, never a crash.
@@ -18,6 +19,7 @@ from shlepa_agent.toolsets import (
     ARM_BASELINE,
     ARM_FORENSICS,
     ARM_MITRE_KB,
+    ARM_READONLY,
     ARM_RECON,
     ARM_SIFS,
     ARM_SMART_GREP,
@@ -278,3 +280,38 @@ def test_baseline_prompt_keeps_script_variant(monkeypatch):
         assert "RECON TOOL" not in prompt
         assert "python3 tools/recon.py" in prompt
         assert "{recon}" not in prompt  # the placeholder always resolves
+
+
+# ---------------------------------------------------------------------------
+# the read-only arm (no bash)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_arm_read_only_composes_toolset():
+    cfg = load_config()
+    apply_arm(cfg, ARM_READONLY)
+    assert cfg.arm == ARM_READONLY
+    assert cfg.tools.recon.enabled is True
+    for phase_id in PHASES:
+        assert list(cfg.phases[phase_id].tools) == [
+            "read",
+            "write",
+            "edit",
+            "recon",
+        ]
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert names == ["read", "write", "edit", "recon"]
+        assert "bash" not in names
+
+
+def test_env_arm_read_only_prompt_uses_tool_variant(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_READONLY)
+    cfg = load_config()
+    assert cfg.arm == ARM_READONLY
+    for phase_id in PHASES:
+        prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
+        # the recon block is the tool variant in this arm (issue #109)
+        assert "RECON TOOL" in prompt
+        assert "RECON SCRIPT" not in prompt
+        assert "python3 tools/recon.py" not in prompt
