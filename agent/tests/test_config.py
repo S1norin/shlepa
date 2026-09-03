@@ -59,7 +59,8 @@ def test_phase_values_4_phase_pipeline():
     assert plan.max_retries == 1
 
     work = cfg.phases["work"]
-    assert set(work.tools) == {"read", "write", "edit", "bash"}
+    # v6: recon + search join the work toolset (structured exploration).
+    assert set(work.tools) == {"read", "write", "edit", "bash", "recon", "search"}
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
     assert work.soft_time == 105.0  # advisory, under the 120s cap

@@ -23,7 +23,7 @@ send_temp = false
 
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
-# budget.py (plan 60 / work 120 / review 45 / bash 30 / llm wall 180).
+# budget.py (plan 30 / work 120 / review 45 / bash 30 / llm wall 180).
 # There is NO task time limit T, NO global hard stop, NO request-start
 # gate, NO global token budget and NO request-count limit: token usage is
 # logged per request for analysis only.
@@ -95,7 +95,9 @@ max_retries = 1
 # (work = 120s, budget.py; an explicit `time` would override it). The soft
 # time is advisory and stays under the hard cap; there is NO soft_tokens for
 # work (the "keep the output lean" note applies to plan/review only).
-tools = ["read", "write", "edit", "bash"]
+# v6: recon + search join the work toolset — cheap structured exploration
+# (surface map / grep-glob-ls) instead of ad-hoc bash probes.
+tools = ["read", "write", "edit", "bash", "recon", "search"]
 requests = 100
 soft_time = 105.0
 max_retries = 1

@@ -160,9 +160,11 @@ def test_plan_and_work_are_fresh_runs():
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
     cfg = load_config()
-    # v6: the plan phase is read-only (no bash/write/edit)
+    # v6: the plan phase is read-only (no bash/write/edit); work gains
+    # recon + search (structured exploration).
     assert PlanPhase().tools(cfg) == ["read", "recon", "search"]
-    for phase in (WorkPhase(), CommitPhase(), EmergencyPhase()):
+    assert WorkPhase().tools(cfg) == ["read", "write", "edit", "bash", "recon", "search"]
+    for phase in (CommitPhase(), EmergencyPhase()):
         assert phase.tools(cfg) == ["read", "write", "edit", "bash"]
 
 
