@@ -19,7 +19,7 @@ def _ctx(tmp_path, cfg=None, clock=None):
 
 
 def test_registry_has_all_tools():
-    assert set(ALL_TOOLS) == {"read", "write", "edit", "bash"}
+    assert set(ALL_TOOLS) == {"read", "write", "edit", "bash", "recon", "search"}
 
 
 def test_registry_returns_configured_subset():

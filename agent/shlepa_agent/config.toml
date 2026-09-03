@@ -62,6 +62,19 @@ enabled = true
 enabled = true
 max_file_mb = 100.0
 
+[tools.recon]
+# Deterministic read-only surface map wrapping tools/recon.py (zero-dep,
+# no LLM). Hard 25 s per-call cap inside the tool; max_output caps the
+# result text (the script self-caps to 8192 bytes).
+enabled = true
+max_output = 8192
+
+[tools.search]
+# Stdlib-only read-only search (grep/glob/ls) over the task dir. No
+# ripgrep dependency; large dirs are scanned for at most 10 s.
+enabled = true
+max_output = 8192
+
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
 # structured plan. Hard cap is the fixed regime constant (plan = 60s,

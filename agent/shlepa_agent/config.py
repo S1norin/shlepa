@@ -81,6 +81,10 @@ class ToolsConfig(BaseModel):
     read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
     write: ToolConfig = ToolConfig()
     edit: ToolConfig = ToolConfig()
+    #: Deterministic surface map wrapping tools/recon.py (read-only).
+    recon: ToolConfig = ToolConfig(enabled=True, max_output=8192)
+    #: Stdlib-only read-only grep/glob/ls over the task dir.
+    search: ToolConfig = ToolConfig(enabled=True, max_output=8192)
 
     def get(self, name: str) -> ToolConfig:
         try:
