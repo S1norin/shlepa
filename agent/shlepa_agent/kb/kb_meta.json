@@ -1,6 +1,10 @@
 {
  "alias_entries": 105,
  "attack_version": "19.2",
+ "expansion": {
+  "generated": "2026-09-03",
+  "prompt_version": 1
+ },
  "files": {
   "aliases.json": {
    "bytes": 2426,
@@ -9,6 +13,10 @@
   "cheats.jsonl": {
    "bytes": 207562,
    "sha256": "21cf9e7096b4a585266968f1022e891640214041789be2b91a988475bc2aede5"
+  },
+  "expansion.jsonl": {
+   "bytes": 315891,
+   "sha256": "b4fe5a299045adb6169b627d52f21c0b3ea7ea19c543b27b8a19a46a259ff8ba"
   },
   "index.txt": {
    "bytes": 21231,
