@@ -42,5 +42,7 @@ executes your plan next (even a trivial task — writing the file is the
 work phase's job), and a review phase runs after the work phase and may
 send the run back to you (next_round) with hints — that feedback arrives
 in RESULTS OF PREVIOUS PHASES
-together with the previous work result. Fix the plan accordingly; do not
-repeat what already failed.
+together with the previous work result. If the previous review named
+failed checks, address each named failure FIRST — they are the reason the
+run came back, not background context — and do not repeat what already
+failed.

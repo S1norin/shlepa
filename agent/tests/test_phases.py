@@ -288,6 +288,15 @@ def test_verify_prompt_is_fresh_not_transcript(monkeypatch, tmp_path):
     assert "secret work transcript content" not in prompt
 
 
+def test_plan_prompt_addresses_named_failures():
+    # w2-8: the fresh PLAN is instructed to address the named failures from
+    # the previous review first.
+    from shlepa_agent.template import load_prompt
+
+    prompt = load_prompt("plan.md")
+    assert "address each named failure FIRST" in prompt
+
+
 def test_commit_prompt_binary_framing():
     # w2-7: the REVIEW prompt carries the binary 1/0 scoring framing and
     # the named-check requirement; the old soft "partial is better than

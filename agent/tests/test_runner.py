@@ -305,12 +305,14 @@ def test_trivial_plan_still_flows_through_work(monkeypatch, stub_openai, tmp_pat
 
 
 def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, events):
-    # v5: no cycle cap — a "next_round" verdict starts a new plan/work
-    # cycle while a full cycle (plan + work + review) fits the time left.
+    # v6 (w2-8): a "next_round" verdict with a named failing scope
+    # (needs_next_round) starts a new plan/work cycle — no cycle cap, the
+    # container kill is the only external bound. The fresh PLAN receives
+    # the review hints as a structured block.
     stub_state["script"] = [
         _plan_step(),                # plan, cycle 0
         _work_step(),
-        _review_step(verdict="next_round"),
+        _review_step(verdict="next_round", repair_scope="needs_next_round"),
         _plan_step(),                # plan, cycle 1 (review asked for it)
         _work_step(),
         _review_step(),              # done
@@ -319,9 +321,16 @@ def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, 
     assert _status(events) == "done"
     plan_starts = _phase_starts(events, "plan")
     assert [e["cycle"] for e in plan_starts] == [0, 1]
-    assert any(
-        e.get("event") == "cycle" and e.get("reason") == "next_round" for e in events
-    )
+    cyc = [
+        e
+        for e in events
+        if e.get("event") == "cycle" and e.get("reason") == "next_round"
+    ]
+    assert cyc and cyc[0].get("scope") == "needs_next_round"
+    # the fresh plan (request 4) carries the review hints block
+    plan_text = json.dumps(stub_state["bodies"][3])
+    assert "review phase verdict (previous cycle): next_round" in plan_text
+    assert "re-examine the target" in plan_text
     assert len(stub_state["bodies"]) == 6
 
 
@@ -533,6 +542,20 @@ V6_ROUTING_CASES = [
         # (and no scope at all) never does.
         "name": "review_scope_none_never_repairs",
         "script": [_plan_step(), _work_step(), _review_step(repair_scope="none")],
+        "cfg": {},
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        # w2-8: a "next_round" verdict WITHOUT a named failing scope is
+        # "could be better" — the harness ignores it and ends on the
+        # current deliverable.
+        "name": "review_next_round_without_scope_ends_done",
+        "script": [
+            _plan_step(),
+            _work_step(),
+            _review_step(verdict="next_round", repair_scope="none"),
+        ],
         "cfg": {},
         "phases": ["plan", "work", "commit"],
         "status": "done",

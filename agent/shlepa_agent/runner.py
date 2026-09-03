@@ -839,21 +839,31 @@ async def _pipeline(
                     final_status = "done"
                     continue
                 _log_event("repair_skipped", reason="no_deliverable_path")
-            # Review phase: "done" stops the run; "next_round" always starts
-            # a new cycle (the container kill at the task's own limit is the
-            # only external bound).
+            # Review phase: "done" stops the run. A "next_round" verdict
+            # starts a new cycle ONLY when it names a failing check the
+            # local repair could not close (repair_scope 'local' without a
+            # deliverable path, or 'needs_next_round') — never on "could be
+            # better" (scope 'none'), never on time conditions (the
+            # container kill is the only external bound).
             verdict = getattr(result.output, "verdict", None)
-            if verdict == "next_round":
+            if verdict == "next_round" and scope in ("local", "needs_next_round"):
                 state.cycles += 1
                 _log_event(
                     "cycle",
                     reason="next_round",
                     cycle=state.cycles,
+                    scope=scope,
                     elapsed_s=round(state.model.elapsed(), 1),
                 )
                 final_status = "done"
                 phase_id = "plan"
                 continue
+            if verdict == "next_round":
+                # "could be better" without a named failing scope: the run
+                # ends on the current deliverable.
+                _log_event(
+                    "next_round_ignored", reason="no_named_failure_scope", scope=scope
+                )
             return (
                 final_status if final_status in ("timeout", "error") else "done",
                 output,
