@@ -40,6 +40,7 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
 | `analysis/queries.jsonl` | shared ground-truth query set (40 paraphrase + 8 literal, expected T-IDs) |
 | `analysis/bench.py` | harness: scores BM25 / dense / RRF on the query set (dev-only) |
 | `analysis/bm25-baseline.md` | BM25 baseline results (2026-09-03) |
+| `analysis/cprime-protocol.md` | C′ experiment protocol: hypotheses, run steps, decision matrix for reading the results |
 | `analysis/fit-matrix.md` | cross-cutting option comparison + recommendation |
 
 ## Decision record (2026-09-03)
@@ -66,7 +67,8 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
    measured on the query set first. In parallel: semantic keyword
    expansion (issue #94) and the MiniLM-int8 + endpoint ceiling
    (issue #93); distillation only if the ceiling far exceeds C′+F.
-   Detail and gating: `analysis/fit-matrix.md`.
+   Detail and gating: `analysis/fit-matrix.md`; measurement protocol
+   (what/how/decision matrix): `analysis/cprime-protocol.md`.
 
 Experiments are tracked as GitHub issues: **#93** (ceiling: ONNX +
 endpoint vs BM25), **#94** (semantic keyword expansion).
