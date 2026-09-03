@@ -11,7 +11,6 @@ from typing import Any
 
 from shlepa_agent.outputs import WorkResult, output_schema_note
 from shlepa_agent.phases.base import Phase, RunState
-from shlepa_agent.state import render_last_tools
 from shlepa_agent.template import load_prompt, render_user
 
 
@@ -52,6 +51,8 @@ class WorkPhase(Phase):
                     "PARTIAL HANDOFF (typed summary of the cut-off plan "
                     "phase):\n" + handoff["handoff"]
                 )
+            from shlepa_agent.state import render_last_tools  # lazy: circular
+
             lt = render_last_tools(handoff.get("last_tools") or [])
             if lt:
                 hand_parts.append(lt)

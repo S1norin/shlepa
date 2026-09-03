@@ -36,6 +36,11 @@ def test_regime_snapshot():
         "plan": 30.0,
         "work": 120.0,
         "review": 45.0,
+        # w2-6: review-stage subcaps (VERIFY/REPAIR/decide), summing to the
+        # 45 s envelope.
+        "review_subcap_verify": 15.0,
+        "review_subcap_repair": 20.0,
+        "review_subcap_decide": 10.0,
         "bash": 30.0,
         "llm_wall": 180.0,
     }

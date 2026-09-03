@@ -25,8 +25,7 @@ from typing import Any
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
 from shlepa_agent.outputs import ReviewResult, output_schema_note
-from shlepa_agent.phases.base import Phase, RunState
-from shlepa_agent.state import extract_last_tools, render_last_tools
+from shlepa_agent.phases.base import Phase, PhaseLimits, RunState
 from shlepa_agent.template import load_prompt, render_user
 
 #: Max characters of artifact content preloaded into the verify packet.
@@ -125,6 +124,10 @@ def _summary_block(state: RunState) -> str:
 
 
 def _last_tools_block(state: RunState) -> str:
+    # Lazy import: state -> phases.base -> phases package -> this module
+    # would otherwise form a circular import when state is imported first.
+    from shlepa_agent.state import extract_last_tools, render_last_tools
+
     entries = extract_last_tools(state.model.last_messages)
     rendered = render_last_tools(entries)
     return rendered.strip() if rendered else "(no tool activity recorded)"
@@ -182,6 +185,18 @@ class CommitPhase(Phase):
     id = "commit"
     output_type = ReviewResult
     terminal = True
+
+    def limits(self, cfg: Any) -> PhaseLimits:  # type: ignore[override]
+        lim = super().limits(cfg)
+        # w2-6 A/B: SHLEPA_REVIEW_SUBCAPS=0 restores the v5 single request
+        # under the full 45 s envelope instead of the 15 s VERIFY subcap.
+        if os.environ.get("SHLEPA_REVIEW_SUBCAPS", "1").strip().lower() in (
+            "0",
+            "false",
+            "off",
+        ):
+            return PhaseLimits(lim.requests, time=None)
+        return lim
 
     def history(self, state: RunState) -> list[Any] | None:
         if review_ctx_mode() == "full":

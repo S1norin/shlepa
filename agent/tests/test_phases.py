@@ -305,8 +305,8 @@ def test_phase_limits_from_config():
 
     commit = CommitPhase().limits(cfg)
     assert commit.requests == 20
-    assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 35.0  # advisory, under the 45s cap
+    assert commit.time == 15.0  # VERIFY subcap (w2-6)
+    assert commit.soft_time == 10.0  # advisory, under the 15s subcap
     assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
 
@@ -328,7 +328,7 @@ def test_limits_note_rendered_regime_caps():
     assert "cycle 1" in work_note  # state.cycles == 0 -> "this is cycle 1"
     commit_note = CommitPhase().limits_note(state)
     # the review (commit) phase gets its fixed regime cap (45s)
-    assert "hard-capped at 45s" in commit_note
+    assert "hard-capped at 15s" in commit_note  # VERIFY subcap (w2-6)
 
 
 def test_limits_note_time_override():

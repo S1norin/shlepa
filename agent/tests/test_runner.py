@@ -344,7 +344,9 @@ def test_commit_invalid_verdict_reports_error(
     monkeypatch, stub_openai, tmp_path, events
 ):
     # A review that exhausts output retries with an invalid verdict is an
-    # unexpected error: the run must end as "error", not "done".
+    # unexpected error: the run must end as "error", not "done" (and NOT
+    # fall into a review_fallback cycle — the fallback routes timeouts
+    # only, never model output failures).
     bad_review = _review_step()
     bad_review["tool_call"]["arguments"]["verdict"] = "explode"
     stub_state["script"] = [
@@ -354,19 +356,32 @@ def test_commit_invalid_verdict_reports_error(
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "error"
+    assert not [e for e in events if e.get("event") == "review_fallback"]
 
 
-def test_commit_time_cap_reports_timeout(
+def test_commit_time_cap_falls_back_to_new_cycle(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    # A review cut by its own time cap must end the run as "timeout",
-    # not "done" (the previous work phase had succeeded).
+    # v6 (w2-6): a review cut by its subcap with a missing deliverable is
+    # routed deterministically — a new plan/work cycle starts (the run
+    # still ends "timeout" via the step guard, not "done").
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
         {"delay": 2.5, "tool_call": _review_step()["tool_call"]},
     ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path, commit_time=1.0))
+    _run(
+        monkeypatch,
+        stub_openai,
+        tmp_path,
+        agent_cfg=_cfg(tmp_path, commit_time=1.0, max_steps=4),
+    )
+    fb = [e for e in events if e.get("event") == "review_fallback"]
+    assert fb and fb[0]["reason"] == "timeout" and fb[0]["valid"] is False
+    assert any(
+        e.get("event") == "cycle" and e.get("reason") == "review_fallback"
+        for e in events
+    )
     assert _status(events) == "timeout"
 
 
@@ -708,3 +723,119 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     done = next(e for e in events if e.get("event") == "agent_done" and "status" in e)
     assert done["status"] in ("done", "timeout", "error")
     assert "elapsed_s" in done and "output" in done
+
+
+# -- w2-6: review subcaps + deterministic VERIFY fallback --------------------
+def test_review_subcaps_configured():
+    # VERIFY/REPAIR/decide are separate requests under the 45 s envelope.
+    from shlepa_agent import budget
+    from shlepa_agent.config import load_config
+
+    assert budget.REVIEW_CAP == 45.0
+    assert (
+        budget.REVIEW_SUBCAP_VERIFY
+        + budget.REVIEW_SUBCAP_REPAIR
+        + budget.REVIEW_SUBCAP_DECIDE
+        == budget.REVIEW_CAP
+    )
+    cfg = load_config()  # production config
+    assert cfg.phases["commit"].time == budget.REVIEW_SUBCAP_VERIFY
+    assert cfg.phases["repair"].time == budget.REVIEW_SUBCAP_REPAIR
+
+
+def test_review_subcaps_knob_restores_v5_envelope(monkeypatch):
+    from shlepa_agent.config import load_config
+    from shlepa_agent.phases.commit import CommitPhase
+
+    cfg = load_config()
+    phase = CommitPhase()
+    assert phase.limits(cfg).time == 15.0  # VERIFY subcap
+    monkeypatch.setenv("SHLEPA_REVIEW_SUBCAPS", "0")
+    assert phase.limits(cfg).time is None  # regime: REVIEW_CAP 45 s
+
+
+def _plan_step_spec():
+    # A plan that names the deliverable spec (relative path).
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "goal": "write out.json with the answer key",
+                "findings": "",
+                "steps": ["write the file"],
+                "artifact_spec": {
+                    "kind": "file",
+                    "path": "out.json",
+                    "format": "json",
+                    "keys": ["answer"],
+                },
+            },
+        }
+    }
+
+
+def _work_step_spec():
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": "wrote out.json",
+                "findings": "",
+                "deliverable": "out.json",
+                "confidence": 0.9,
+            },
+        }
+    }
+
+
+def test_verify_timeout_valid_deliverable_ends_done(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # VERIFY cut by its subcap with a VALID deliverable on disk: the
+    # harness ends the run "done" — no LLM, no new cycle.
+    (tmp_path / "out.json").write_text('{"answer": 42}', encoding="utf-8")
+    stub_state["script"] = [
+        _plan_step_spec(),
+        _work_step_spec(),
+        {"delay": 1.5, "final": "verdict coming soon..."},  # cut at 1.0 s
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path, commit_time=1.0))
+    assert _status(events) == "done"
+    fb = [e for e in events if e.get("event") == "review_fallback"]
+    assert fb and fb[0]["valid"] is True
+    assert not [e for e in events if e.get("event") == "cycle"]
+
+
+def test_verify_timeout_invalid_deliverable_next_round(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # VERIFY cut by its subcap with an INVALID deliverable: a new
+    # plan/work cycle starts, carrying the recorded failed checks as
+    # hints in the next plan's prompt.
+    (tmp_path / "out.json").write_text('{"x": 1}', encoding="utf-8")  # no 'answer'
+    stub_state["script"] = [
+        _plan_step_spec(),
+        _work_step_spec(),
+        {"delay": 1.5, "final": "verdict coming soon..."},  # cut at 1.0 s
+    ]
+    _run(
+        monkeypatch,
+        stub_openai,
+        tmp_path,
+        agent_cfg=_cfg(tmp_path, commit_time=1.0, max_steps=4),
+    )
+    cycles = [
+        e
+        for e in events
+        if e.get("event") == "cycle" and e.get("reason") == "review_fallback"
+    ]
+    assert cycles, "expected a review_fallback cycle"
+    fb = [e for e in events if e.get("event") == "review_fallback"]
+    assert fb and fb[0]["valid"] is False
+    # a second plan started and its prompt carries the failed check
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts.count("plan") >= 2
+    assert any(
+        "mechanical deliverable check (harness) FAILED" in json.dumps(b["messages"])
+        for b in stub_state["bodies"]
+    )

@@ -78,8 +78,8 @@ def test_phase_values_4_phase_pipeline():
     # v6 (w2-4): VERIFY is read-only (repair is a separate phase, w2-5).
     assert set(commit.tools) == {"read", "search"}
     assert commit.requests == 20
-    assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 35.0  # advisory, under the 45s cap
+    assert commit.time == 15.0  # VERIFY subcap (w2-6)
+    assert commit.soft_time == 10.0  # advisory, under the 15s subcap
     assert commit.soft_tokens == 20000
     assert commit.reasoning_effort == "low"
     assert commit.max_retries == 0

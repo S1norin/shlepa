@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from contextlib import nullcontext
@@ -67,7 +68,7 @@ from shlepa_agent.log import (
     _log_stream_event,
 )
 from shlepa_agent.model import BudgetExceeded, TrackedModel
-from shlepa_agent.outputs import PartialHandoff
+from shlepa_agent.outputs import PartialHandoff, ReviewResult
 from shlepa_agent.phases import get_phase
 from shlepa_agent.phases.base import Phase, PhaseResult, RunState
 from shlepa_agent.phases.commit import trim_history
@@ -639,6 +640,35 @@ def _post_work_check(state: RunState) -> None:
         state.deliverable_check = None
 
 
+def _commit_fallback_hints(state: RunState, check: dict | None) -> None:
+    """w2-6: on a deterministic VERIFY fallback, make sure the next plan
+    sees the recorded failed checks as hints (the plan prompt renders
+    ``state.results['commit'].output.hints``)."""
+    prev = state.results.get("commit")
+    own = None
+    if prev is not None and prev.output is not None:
+        own = getattr(prev.output, "hints", None) or []
+    hints = list(own or [])
+    if check is not None:
+        hints.append(
+            "mechanical deliverable check (harness) FAILED: "
+            + json.dumps(check)
+            + " — fix the named failures"
+        )
+    status = prev.status if prev is not None else "timeout"
+    state.results["commit"] = PhaseResult(
+        status=status,
+        summary="VERIFY ended without a verdict (harness fallback)",
+        output=ReviewResult(
+            status="partial",
+            verdict="next_round",
+            artifact=(state.deliverable_spec or {}).get("path", ""),
+            checks=[],
+            hints=hints,
+        ),
+    )
+
+
 def _salvage_needed(state: RunState) -> bool:
     """Salvage fires only on a missing/empty deliverable with a known path."""
     check = state.deliverable_check
@@ -758,8 +788,37 @@ async def _pipeline(
             elif phase.id != "plan":
                 output = result.summary
         if phase.terminal:
-            # A review that itself failed (error after zero retries) or was
-            # cut by its own time cap reports its own status — not "done".
+            # v6 (w2-6): a VERIFY cut by its subcap is routed
+            # deterministically by the harness — no LLM. A valid
+            # deliverable ends the run "done"; a broken one starts a new
+            # cycle carrying the recorded failed checks as hints. (A
+            # commit ERROR — the model never produced a valid verdict —
+            # still ends the run as "error": no fallback loop.)
+            if result.status == "timeout":
+                if phase.id == "commit":
+                    check = state.deliverable_check
+                    _log_event(
+                        "review_fallback",
+                        reason=result.status,
+                        valid=bool(check and check.get("valid")),
+                        check=check,
+                    )
+                    if check and check.get("valid"):
+                        return "done", output
+                    _commit_fallback_hints(state, check)
+                    state.cycles += 1
+                    _log_event(
+                        "cycle",
+                        reason="review_fallback",
+                        cycle=state.cycles,
+                        elapsed_s=round(state.model.elapsed(), 1),
+                    )
+                    final_status = "done"
+                    phase_id = "plan"
+                    continue
+            # A review that itself failed (error after zero retries) or
+            # was cut by its own time cap otherwise reports its own
+            # status — not "done".
             if result.status in ("timeout", "error"):
                 return result.status, output
             # v6 (w2-5): repair_scope='local' with a named failing check
