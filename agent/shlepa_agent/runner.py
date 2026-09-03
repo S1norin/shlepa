@@ -536,9 +536,18 @@ async def run_prompt(
     Never raises: any unexpected failure is logged as agent_error (+ a final
     agent_done with status "error") and "" is returned, so the process exits
     0.
+
+    Regime dispatch (``[agent].loop`` / ``SHLEPA_LOOP``): "v3" runs the
+    budgeted main->commit loop (:mod:`shlepa_agent.v3loop`), which owns its
+    own agent_start (with the [v3loop] budget fields) and agent_done;
+    anything else runs the v5 cycles pipeline below, unchanged.
     """
     _configure_logging()
     cfg = agent_cfg or load_config()
+    if cfg.agent.loop == "v3":
+        from shlepa_agent import v3loop
+
+        return await v3loop.run_prompt(prompt, instrument=instrument, agent_cfg=cfg)
     model: TrackedModel | None = None
     try:
         # v5 pipeline values: no time horizon — the entry is always "plan"

@@ -71,6 +71,18 @@ def run(
             "as toolset=<arm>."
         ),
     ),
+    loop: str = typer.Option(
+        "",
+        "--loop",
+        help=(
+            "Pipeline regime for the batch: cycles (the default v5 "
+            "plan/work/review pipeline) or v3 (the budgeted single main "
+            "phase with the terminal commit on budget breach). Default: the "
+            "SHLEPA_LOOP env var, else cycles. Passed into the container as "
+            "SHLEPA_LOOP and tagged on every MLflow run as loop=<loop> (v3 "
+            "only). Orthogonal to the toolset arm."
+        ),
+    ),
 ) -> None:
     """Run the dev experiment loop for a preset."""
     from shlepa_cli import tasks as tasks_module
@@ -94,11 +106,18 @@ def run(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1)
+    # Loop resolution: --loop flag > SHLEPA_LOOP env > cycles (the default
+    # v5 cycles pipeline). The loop axis is orthogonal to the toolset arm.
+    loop_spec = loop or os.environ.get("SHLEPA_LOOP", "") or "cycles"
+    if loop_spec not in ("cycles", "v3"):
+        typer.echo(f"unknown loop regime: {loop_spec!r} (cycles|v3)", err=True)
+        raise typer.Exit(code=1)
     if dry_run:
         model = preset_obj.model or settings.local_agent_model or "(from env)"
         typer.echo(f"preset: {preset_obj.name}")
         typer.echo(f"model: {model}")
         typer.echo(f"arm: {arm}")
+        typer.echo(f"loop: {loop_spec}")
         typer.echo(f"tasks ({len(resolved)}):")
         for task in resolved:
             typer.echo(f"  - {task.slug} ({task.name})")
@@ -111,6 +130,7 @@ def run(
     batch_id = run_engine.make_batch_id()
     typer.echo(
         f"preset: {preset_obj.name} | model: {model or '(env)'} | arm: {arm} | "
+        f"loop: {loop_spec} | "
         f"mode: {'no-docker' if no_docker else 'container'} | "
         f"batch: {batch_id} | tasks: {len(resolved)}"
     )
@@ -131,6 +151,7 @@ def run(
         mlflow_client=mlflow_client,
         batch_id=batch_id,
         arm=arm,
+        loop=loop_spec,
     )
     typer.echo("")
     typer.echo(run_engine.format_summary(results))

@@ -363,6 +363,7 @@ def log_task_to_mlflow(
     trace_wait_sec: float = 15.0,
     experiment_name: str | None = None,
     arm: str | None = None,
+    loop: str | None = None,
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
@@ -394,6 +395,8 @@ def log_task_to_mlflow(
         tags["batch_id"] = batch_id
     if arm:
         tags["toolset"] = arm
+    if loop and loop != "cycles":
+        tags["loop"] = loop
     if settings.shlepa_otel_enabled:
         jaeger = (settings.otel_exporter_otlp_endpoint or "http://localhost:4318").replace(
             ":4318", ":16686"
@@ -498,6 +501,7 @@ def run_preset(
     mlflow_client=None,
     batch_id: str | None = None,
     arm: str | None = None,
+    loop: str | None = None,
 ) -> list[TaskResult]:
     """Run every task of a preset; a failing task never stops the batch.
 
@@ -532,6 +536,7 @@ def run_preset(
             batch_id=batch_id,
             preset_name=preset.name,
             arm=arm,
+            loop=loop,
         )
         results.append(result)
         if mlflow_client is not None:
@@ -544,6 +549,7 @@ def run_preset(
                 batch_id=batch_id,
                 batch_started_ms=batch_started_ms,
                 arm=arm,
+                loop=loop,
             )
         print(
             f"  -> {result.slug}: solved={result.solved} "
@@ -589,6 +595,7 @@ def _call_agent(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    loop: str | None = None,
 ) -> AgentRun:
     """Invoke the agent with SLEPA_TASK_SLUG set for the duration of the run.
 
@@ -607,6 +614,8 @@ def _call_agent(
         extra["SLEPA_AGENT_VERSION"] = _agent_version()
     if arm:
         extra["AGENT_TOOLSET"] = arm
+    if loop and loop != "cycles":
+        extra["SHLEPA_LOOP"] = loop
     old_extra = {k: os.environ.get(k) for k in extra}
     os.environ.update(extra)
     try:
@@ -731,6 +740,7 @@ def _agent_env(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    loop: str | None = None,
 ) -> dict[str, str]:
     """docker-exec environment for the in-container agent."""
     env: dict[str, str] = {
@@ -746,6 +756,8 @@ def _agent_env(
         env["SLEPA_AGENT_TIMEOUT"] = str(int(task.timeout_sec))
     if arm:
         env["AGENT_TOOLSET"] = arm
+    if loop and loop != "cycles":
+        env["SHLEPA_LOOP"] = loop
     if settings.shlepa_otel_enabled:
         env["SLEPA_OTEL_ENABLED"] = "1"
         env["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
@@ -784,6 +796,7 @@ def run_task(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    loop: str | None = None,
 ) -> TaskResult:
     """Run one task and return its TaskResult.
 
@@ -825,6 +838,7 @@ def run_task(
                 batch_id=batch_id,
                 preset_name=preset_name,
                 arm=arm,
+                loop=loop,
             )
             solved, score_detail = _score_no_docker(task, workspace)
         except Exception as exc:  # noqa: BLE001 - keep the batch going
@@ -871,6 +885,7 @@ def run_task(
                     batch_id=batch_id,
                     preset_name=preset_name,
                     arm=arm,
+                    loop=loop,
                 ),
                 timeout_sec=task.timeout_sec,
             )

@@ -63,12 +63,13 @@ def _cfg(
     commit_time_cap=80.0,
     commit_request_limit=25,
     request_wall=240.0,
+    loop="v3",
 ):
     p = tmp_path / "cfg.toml"
     p.write_text(
         f"""\
 [agent]
-loop = "v3"
+loop = "{loop}"
 temp = 0.6
 send_temp = false
 
@@ -93,6 +94,21 @@ tools = ["read", "write", "edit", "bash"]
 requests = {request_limit}
 max_retries = 0
 
+[phases.plan]
+tools = ["read", "write", "edit", "bash"]
+requests = 20
+max_retries = 0
+
+[phases.work]
+tools = ["read", "write", "edit", "bash"]
+requests = 30
+max_retries = 0
+
+[phases.review]
+tools = ["read", "write", "edit", "bash"]
+requests = 20
+max_retries = 0
+
 [phases.commit]
 tools = ["read", "write", "edit", "bash"]
 requests = {commit_request_limit}
@@ -115,13 +131,17 @@ request_wall = {request_wall}
     return load_config(p)
 
 
-def _run(monkeypatch, stub_openai, tmp_path, agent_cfg):
-    from shlepa_agent import v3loop
-
+def _set_agent_env(monkeypatch, stub_openai, tmp_path):
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
     monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
+
+
+def _run(monkeypatch, stub_openai, tmp_path, agent_cfg):
+    from shlepa_agent import v3loop
+
+    _set_agent_env(monkeypatch, stub_openai, tmp_path)
     return asyncio.run(v3loop.run_prompt(TASK, agent_cfg=agent_cfg))
 
 
@@ -153,6 +173,38 @@ def _usage_step():
     return {
         **_tool_step(),
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _cycles_plan_step(decision="commit"):
+    """A plan-phase step (typed final_result; decision ends the cycle)."""
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "goal": "write /app/hello.txt with the content hello",
+                "findings": "n/a",
+                "steps": ["write the file", "verify it"],
+                "decision": decision,
+            },
+        }
+    }
+
+
+def _cycles_review_step():
+    """A review-phase step with the done verdict."""
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "status": "ok",
+                "verdict": "done",
+                "artifact": "/app/hello.txt",
+                "checks": ["re-read the file -> content matches"],
+                "hints": [],
+                "notes": "wrote hello.txt",
+            },
+        }
     }
 
 
@@ -313,6 +365,47 @@ def test_commit_request_limit_enforced(monkeypatch, stub_openai, tmp_path, event
     assert len(stub_state["bodies"]) == 5  # 2 main + 3 commit, then the limit
     done = [e for e in events if e.get("event") == "commit" and e.get("done")]
     assert done and "UsageLimitExceeded" in done[0].get("error", "")
+
+
+# -- runner dispatch (AC: SHLEPA_LOOP / [agent].loop selects the regime) ----
+
+def test_runner_dispatches_v3loop_when_loop_is_v3(monkeypatch, stub_openai, tmp_path, events):
+    # runner.run_prompt branches on cfg.agent.loop: "v3" runs the v3loop
+    # pipeline, whose agent_start carries the [v3loop] budget fields.
+    stub_state["script"] = [{"final": "wrote hello.txt"}]
+    cfg = _cfg(tmp_path, token_budget=999)
+    assert cfg.agent.loop == "v3"
+    _set_agent_env(monkeypatch, stub_openai, tmp_path)
+    import shlepa_agent.runner as runner
+
+    output = asyncio.run(runner.run_prompt(TASK, agent_cfg=cfg))
+    assert output == "wrote hello.txt"
+    assert _status(events) == "done"
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert start["loop"] == "v3"
+    assert start["token_budget"] == 999  # v3loop budget field present
+    assert "entry" not in start  # not the cycles regime
+
+
+def test_runner_dispatches_cycles_when_loop_is_cycles(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # The default regime: the v5 cycles pipeline runs (plan -> review done),
+    # agent_start carries the cycles regime fields and no v3loop fields.
+    stub_state["script"] = [_cycles_plan_step(), _cycles_review_step()]
+    cfg = _cfg(tmp_path, loop="cycles")
+    assert cfg.agent.loop == "cycles"
+    _set_agent_env(monkeypatch, stub_openai, tmp_path)
+    import shlepa_agent.runner as runner
+
+    output = asyncio.run(runner.run_prompt(TASK, agent_cfg=cfg))
+    assert _status(events) == "done"
+    start = next(e for e in events if e.get("event") == "agent_start")
+    assert start["entry"] == "plan"  # cycles regime fields
+    assert "plan_cap" in start
+    assert "loop" not in start
+    assert "token_budget" not in start  # no v3loop budget fields
+    assert output  # the cycles pipeline produced a final output
 
 
 # -- non-budget error (AC: error status, no commit) ---------------------------
