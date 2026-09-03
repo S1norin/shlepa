@@ -34,10 +34,14 @@ from shlepa_agent.phases import (
 from shlepa_agent.tools import AgentDeps
 
 
-def _state(task="Create hello.txt with the exact content hello", last_messages=None):
+def _state(
+    task="Create hello.txt with the exact content hello",
+    last_messages=None,
+    workdir=None,
+):
     cfg = load_config()
     deps = AgentDeps(
-        workdir=Path("/tmp"),
+        workdir=workdir if workdir is not None else Path("/tmp"),
         cfg=cfg,
         clock=lambda: 0.0,
     )
@@ -154,14 +158,31 @@ def test_trim_history_drops_dangling_tool_call_response():
     assert out == msgs[:2]
 
 
-def test_commit_and_emergency_continue_the_last_conversation():
+def test_commit_is_fresh_by_default_emergency_continues(monkeypatch):
+    # v6 (w2-4): VERIFY runs on a fresh conversation (harness packet); the
+    # emergency phase still continues the last conversation.
+    monkeypatch.delenv("SHLEPA_REVIEW_CTX", raising=False)
+    msgs = [
+        ModelRequest(parts=[TextPart("hi")]),
+        ModelResponse(parts=[TextPart("ok")]),
+    ]
+    state = _state(last_messages=msgs)
+    assert CommitPhase().history(state) is None
+    assert EmergencyPhase().history(state) == msgs
+
+
+def test_review_ctx_full_resumes_the_last_conversation(monkeypatch):
+    # A/B arm: SHLEPA_REVIEW_CTX=full restores the v5 resumed transcript.
+    monkeypatch.setenv("SHLEPA_REVIEW_CTX", "full")
     msgs = [
         ModelRequest(parts=[TextPart("hi")]),
         ModelResponse(parts=[TextPart("ok")]),
     ]
     state = _state(last_messages=msgs)
     assert CommitPhase().history(state) == msgs
-    assert EmergencyPhase().history(state) == msgs
+    # the packet itself is not rendered in full mode (the commit.md text
+    # may mention the packet, so match the packet header instead)
+    assert "VERIFY PACKET (assembled" not in CommitPhase().prompt(state)
 
 
 def test_plan_and_work_are_fresh_runs():
@@ -174,11 +195,97 @@ def test_plan_and_work_are_fresh_runs():
 def test_phase_toolsets_from_config():
     cfg = load_config()
     # v6: the plan phase is read-only (no bash/write/edit); work gains
-    # recon + search (structured exploration).
+    # recon + search (structured exploration). VERIFY (w2-4) is read-only:
+    # no bash/write/edit — repair is a separate bounded phase.
     assert PlanPhase().tools(cfg) == ["read", "recon", "search"]
     assert WorkPhase().tools(cfg) == ["read", "write", "edit", "bash", "recon", "search"]
-    for phase in (CommitPhase(), EmergencyPhase()):
-        assert phase.tools(cfg) == ["read", "write", "edit", "bash"]
+    assert set(CommitPhase().tools(cfg)) == {"read", "search"}
+    assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
+
+
+# -- v6 VERIFY packet (w2-4) ---------------------------------------------------
+def _verify_state(tmp_path, deliverable_present: bool = True, last_messages=None):
+    if deliverable_present:
+        (tmp_path / "out.json").write_text('{"answer": 42}', encoding="utf-8")
+    state = _state(workdir=tmp_path, last_messages=last_messages)
+    state.deliverable_spec = {
+        "kind": "file",
+        "path": "out.json",
+        "format": "json",
+        "keys": ["answer"],
+        "expected_content": None,
+    }
+    state.deliverable_check = {
+        "exists": deliverable_present,
+        "non_empty": deliverable_present,
+        "parse_ok": deliverable_present,
+        "keys_ok": deliverable_present,
+        "valid": deliverable_present,
+        "reason": "ok" if deliverable_present else "missing",
+    }
+    state.results["work"] = PhaseResult(
+        status="done",
+        summary="wrote out.json",
+        deliverable="out.json",
+        output=WorkResult(summary="wrote out.json", findings="used jq to validate"),
+    )
+    state.results["plan"] = PhaseResult(
+        status="done",
+        summary="",
+        output=PlanResult(
+            goal="write out.json with the answer",
+            findings="",
+            steps=["write the file"],
+        ),
+    )
+    return state
+
+
+def test_verify_packet_preloads_artifact_and_check(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path)
+    packet = build_verify_packet(state)
+    assert 'path=\'out.json\'' in packet
+    assert '\"answer\": 42' in packet  # preloaded artifact content
+    assert '"valid": true' in packet  # mechanical check result
+    assert "WORK summary: wrote out.json" in packet
+    assert "PLAN goal: write out.json with the answer" in packet
+
+
+def test_verify_packet_missing_artifact_says_so(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path, deliverable_present=False)
+    packet = build_verify_packet(state)
+    assert "MISSING OR EMPTY" in packet
+
+
+def test_verify_packet_summary_truncation(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path)
+    state.results["work"] = PhaseResult(
+        status="done",
+        output=WorkResult(summary="x" * 5000, findings=""),
+    )
+    packet = build_verify_packet(state)
+    assert "[...TRUNCATED...]" in packet
+    assert len(packet) < 5000
+
+
+def test_verify_prompt_is_fresh_not_transcript(monkeypatch, tmp_path):
+    # AC: the first user message is the harness packet, not the work
+    # transcript.
+    monkeypatch.delenv("SHLEPA_REVIEW_CTX", raising=False)
+    work_msg = ModelRequest(parts=[TextPart("secret work transcript content")])
+    state = _verify_state(tmp_path, last_messages=[work_msg])
+    _ = work_msg  # kept for clarity: the transcript is NOT in the request
+    phase = CommitPhase()
+    assert phase.history(state) is None
+    prompt = phase.prompt(state)
+    assert "VERIFY PACKET" in prompt
+    assert "secret work transcript content" not in prompt
 
 
 def test_phase_limits_from_config():

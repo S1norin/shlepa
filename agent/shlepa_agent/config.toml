@@ -103,10 +103,13 @@ soft_time = 105.0
 max_retries = 1
 
 [phases.commit]
-# Terminal REVIEW phase: verify the deliverable mechanically, repair it if
-# broken, decide done|next_round. Hard cap is the fixed regime constant
-# (review = 45s, budget.py). The soft time stays UNDER the hard cap.
-tools = ["read", "write", "edit", "bash"]
+# Terminal REVIEW phase (v6 VERIFY): read-only verifier on a fresh harness
+# packet (spec + preloaded artifact + mechanical check + decision summary).
+# No bash/write/edit — repair is a separate bounded phase (w2-5). Hard cap
+# is the fixed regime constant (review = 45s, budget.py); the soft time
+# stays UNDER the hard cap. A/B: SHLEPA_REVIEW_CTX=full restores the v5
+# resumed-transcript behaviour (the tool list is ignored for reading only).
+tools = ["read", "search"]
 requests = 20
 soft_time = 35.0
 soft_tokens = 20000

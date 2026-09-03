@@ -90,9 +90,12 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
 def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai, tmp_path):
     from stub_server import reset_stub_state
 
-    # This test asserts the exact request count of the v5-shaped script; the
-    # v6 salvage gate is covered in test_salvage.py.
+    # This test asserts the exact request count of the v5-shaped script;
+    # the v6 salvage gate is covered in test_salvage.py. It also pins the
+    # v5 resumed-transcript review arm (SHLEPA_REVIEW_CTX=full); the v6
+    # fresh-packet verify is covered in test_phases.py.
     monkeypatch.setenv("SHLEPA_SALVAGE", "0")
+    monkeypatch.setenv("SHLEPA_REVIEW_CTX", "full")
     reset_stub_state()
     stub_state["script"] = [
         {
