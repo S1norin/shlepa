@@ -50,10 +50,11 @@ def test_phase_values_4_phase_pipeline():
     assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
 
     plan = cfg.phases["plan"]
-    assert set(plan.tools) == {"read", "write", "edit", "bash"}
+    # v6: read-only exploration surface; bash/write/edit structurally absent
+    assert set(plan.tools) == {"read", "recon", "search"}
     assert plan.requests == 25
-    assert plan.time is None  # cap = regime constant (budget.py)
-    assert plan.soft_time == 45.0  # advisory
+    assert plan.time is None  # cap = regime constant (budget.py, 30s)
+    assert plan.soft_time == 25.0  # advisory, under the 30s cap
     assert plan.soft_tokens == 15000  # advisory
     assert plan.max_retries == 1
 
@@ -125,6 +126,27 @@ def test_invalid_env_override_ignored(monkeypatch):
     monkeypatch.setenv("SHLEPA_BUDGET_MAX_TOKENS", "not-a-number")
     cfg = load_config()
     assert cfg.budget.max_tokens == 16384
+
+
+def test_plan_cap_env_override(monkeypatch):
+    # v6 knob: the plan cap defaults to the regime constant (30s) and is
+    # env-overridable via SHLEPA_PLAN_TIME (an explicit phases.plan.time).
+    assert load_config().phases["plan"].time is None
+    monkeypatch.setenv("SHLEPA_PLAN_TIME", "45")
+    cfg = load_config()
+    assert cfg.phases["plan"].time == 45.0
+    monkeypatch.setenv("SHLEPA_PLAN_TIME", "not-a-number")
+    assert load_config().phases["plan"].time is None  # invalid: ignored
+
+
+def test_search_tool_env_toggle(monkeypatch):
+    assert load_config().tools.search.enabled is True
+    monkeypatch.setenv("SHLEPA_SEARCH", "0")
+    assert load_config().tools.search.enabled is False
+    monkeypatch.setenv("SHLEPA_SEARCH", "1")
+    assert load_config().tools.search.enabled is True
+    monkeypatch.setenv("SHLEPA_SEARCH", "garbage")
+    assert load_config().tools.search.enabled is True  # invalid: ignored
 
 
 def test_custom_path(tmp_path):

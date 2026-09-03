@@ -234,6 +234,32 @@ def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     assert [e["status"] for e in dones] == ["done", "done", "done"]
 
 
+def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events):
+    # v6: the plan toolset is read-only (read, recon, search). A model that
+    # still asks for bash is refused by the tool surface (unknown tool),
+    # nothing is executed, and the run carries on to work.
+    from shlepa_agent.config import load_config
+
+    stub_state["script"] = [
+        {"tool_call": {"name": "bash", "arguments": {"command": "touch hello.txt"}}},
+        _plan_step("work"),
+        _work_step(),
+        _review_step(),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
+    assert _status(events) == "done"
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work", "commit"]
+    # the bash call was refused, never executed
+    refused = [
+        e for e in events
+        if e.get("event") == "llm_tool_result" and e.get("tool") == "bash"
+    ]
+    assert refused, "expected a refusal for the out-of-surface bash call"
+    assert "Unknown tool" in refused[0]["result"]
+    assert not (tmp_path / "hello.txt").exists()
+
+
 def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [_plan_step("commit"), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
@@ -476,7 +502,7 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     # v5 fixed-regime details are additive (unknown to the CLI, but logged);
     # there is NO t / t_source / hard_time / soft_time / commit_deadline
     assert {"plan_cap", "work_cap", "review_cap", "bash_cap", "llm_wall"} <= set(start)
-    assert start["plan_cap"] == pytest.approx(60.0)
+    assert start["plan_cap"] == pytest.approx(30.0)  # v6 regime
     assert start["work_cap"] == pytest.approx(120.0)
     assert start["review_cap"] == pytest.approx(45.0)
     assert start["bash_cap"] == pytest.approx(30.0)

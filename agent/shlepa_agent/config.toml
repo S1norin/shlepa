@@ -77,12 +77,15 @@ max_output = 8192
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
-# structured plan. Hard cap is the fixed regime constant (plan = 60s,
-# budget.py). An explicit `time` value would override the cap (dev knob;
-# omitted here). Soft values are advisory (rendered into the prompt).
-tools = ["read", "write", "edit", "bash"]
+# structured plan. Hard cap is the fixed regime constant (plan = 30s,
+# budget.py; env-overridable via SHLEPA_PLAN_TIME). An explicit `time`
+# value would override the cap (dev knob; omitted here). Soft values are
+# advisory (rendered into the prompt).
+# v6: read-only exploration surface — bash/write/edit are structurally
+# absent (recon + search replace the raw read-and-probe pass).
+tools = ["read", "recon", "search"]
 requests = 25
-soft_time = 45.0
+soft_time = 25.0
 soft_tokens = 15000
 max_retries = 1
 

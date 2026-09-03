@@ -58,7 +58,8 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "expert autonomous cybersecurity agent" in system
     assert "FORMAT DISCIPLINE" in system
     assert "AVAILABLE TOOLS" in system
-    for tool in ("read", "write", "edit", "bash"):
+    # v6: the plan surface is read-only — recon/search instead of bash/write
+    for tool in ("read", "recon", "search"):
         assert tool in system, tool
     # the task text renders into the system message (constant for the run)
     assert "Create hello.txt with the exact content hello" in system

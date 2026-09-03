@@ -160,7 +160,9 @@ def test_plan_and_work_are_fresh_runs():
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
     cfg = load_config()
-    for phase in (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase()):
+    # v6: the plan phase is read-only (no bash/write/edit)
+    assert PlanPhase().tools(cfg) == ["read", "recon", "search"]
+    for phase in (WorkPhase(), CommitPhase(), EmergencyPhase()):
         assert phase.tools(cfg) == ["read", "write", "edit", "bash"]
 
 
@@ -168,8 +170,8 @@ def test_phase_limits_from_config():
     cfg = load_config()
     plan = PlanPhase().limits(cfg)
     assert plan.requests == 25
-    assert plan.time is None  # cap = regime constant (budget.py)
-    assert plan.soft_time == 45.0
+    assert plan.time is None  # cap = regime constant (budget.py, 30s)
+    assert plan.soft_time == 25.0  # advisory, under the 30s cap
     assert plan.soft_tokens == 15000
     assert plan.reasoning_effort is None
 
@@ -195,9 +197,9 @@ def test_phase_limits_from_config():
 def test_limits_note_rendered_regime_caps():
     state = _state()
     plan_note = PlanPhase().limits_note(state)
-    # fixed regime caps (plan 60s) + advisory soft values
-    assert "hard-capped at 60s" in plan_note
-    assert "45s" in plan_note
+    # fixed regime caps (plan 30s in v6) + advisory soft values
+    assert "hard-capped at 30s" in plan_note
+    assert "25s" in plan_note
     assert "15000" in plan_note
     work_note = WorkPhase().limits_note(state)
     assert "hard-capped at 120s" in work_note
@@ -234,7 +236,7 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
     assert "PLAN PHASE" in prompt
     assert "final_result" in prompt  # output schema block
     assert "decision" in prompt
-    assert "60s" in prompt  # advisory limits
+    assert "30s" in prompt  # advisory limits (v6 plan cap)
     # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
     # fresh first pass: no previous results block (the plan instructions

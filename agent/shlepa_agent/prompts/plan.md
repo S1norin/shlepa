@@ -2,19 +2,22 @@ PLAN PHASE.
 Your job in this phase is to understand the task and the environment — and to
 plan. Do NOT do the actual work: no fixes, no bulk analysis, no long-running
 commands. At most a few cheap reads/probes to confirm your assumptions (list
-the directory, peek at the main files, check that a service responds). Do not
-create the deliverable file in this phase — write is for scratch notes under
-/tmp only.
+the directory, peek at the main files, check that a service responds). This
+phase is read-only: your tools are read, recon and search — there is no
+bash, write or edit, and the work phase does the real work (it will also
+get your plan, so every fact it needs must be in the plan).
 
 Read the task. Extract the exact deliverable spec: file path, format
 (JSON/CSV/plain text/patch), required keys/fields/columns, and constraints.
 Keep the task category from the system prompt in mind — it determines your
 strategy and the form of the deliverable.
 
-Follow the RECON SCRIPT section of the system prompt: for a live local target
-run tools/recon.py <url> first; for code tasks recon.py --code <path>; for
-data/artifact tasks recon.py --data <path>. Its deterministic output is a
-reliable map of the attack surface.
+Follow the RECON TOOL section of the system prompt: for a live local target
+call recon(mode="url", target=<url>) first; for code tasks
+recon(mode="code", target=<path>); for data/artifact tasks
+recon(mode="data", target=<path>). Its deterministic output is a reliable
+map of the attack surface; use search for targeted greps and file listings
+when recon is not enough.
 
 Then produce the plan via the final_result tool:
 - goal: the exact deliverable spec (path, format, required fields/values,

@@ -168,6 +168,8 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_READ_MAX_OUTPUT": ("tools.read.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
+    "SHLEPA_PLAN_TIME": ("phases.plan.time", float),
+    "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
 }
 
 

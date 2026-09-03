@@ -10,7 +10,10 @@ below.
 
 Regime (seconds) — fixed constants, no per-task derivation:
 
-    plan     = PLAN_CAP   (60)  plan phase cap
+    plan     = PLAN_CAP   (30)  plan phase cap (v6: read-only recon is
+                                cheap; the 27B cohort was burning the old
+                                60 s cap on recon+scratch work before any
+                                real plan)
     work     = WORK_CAP   (120) work phase cap per cycle
     review   = REVIEW_CAP (45)  review (commit) phase cap
     bash     = BASH_MAX   (30)  bash per-call cap (also the tool max)
@@ -23,7 +26,7 @@ Pure stdlib; no agent-specific imports.
 """
 from __future__ import annotations
 
-PLAN_CAP = 60.0
+PLAN_CAP = 30.0
 WORK_CAP = 120.0
 REVIEW_CAP = 45.0
 BASH_MAX = 30.0
