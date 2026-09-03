@@ -93,6 +93,11 @@ class ToolsConfig(BaseModel):
     # ``timeout`` is the per-call wall (the v5 regime bash cap); the engine
     # result is separately capped at ``max_output`` chars.
     log_triage: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=3500)
+    # MITRE KB tool: OFF by default. The AGENT_TOOLSET=+mitre-kb arm enables
+    # it (see _enable_mitre_kb_tools and toolsets.py). The ``timeout`` is a
+    # per-call wall safety net (the in-memory search is sub-millisecond);
+    # the result is capped at ``max_output`` chars.
+    mitre_kb: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8000)
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -195,6 +200,7 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_CODE_SEARCH_TIMEOUT": ("tools.code_search.timeout", float),
     "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
     "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
+    "SHLEPA_MITRE_KB_MAX_OUTPUT": ("tools.mitre_kb.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
 }
@@ -262,6 +268,21 @@ def _enable_forensics_tools(cfg: AgentConfig) -> None:
     for phase in cfg.phases.values():
         if "log_triage" not in phase.tools:
             phase.tools.append("log_triage")
+
+
+def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
+    """Enable the MITRE KB tool (the +mitre-kb arm mutation).
+
+    Mirrors :func:`_enable_forensics_tools`: tool enabled and its name
+    appended to every phase's tool list (its note then renders into the
+    system prompt automatically; the arm-gated KB prefix is appended in
+    ``runner._system_prompt``). Deduped, so it is safe if a phase list
+    ever names it explicitly.
+    """
+    cfg.tools.mitre_kb.enabled = True
+    for phase in cfg.phases.values():
+        if "mitre_kb" not in phase.tools:
+            phase.tools.append("mitre_kb")
 
 
 def _apply_code_search_env(cfg: AgentConfig) -> None:

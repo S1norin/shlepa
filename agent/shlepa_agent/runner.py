@@ -137,14 +137,25 @@ def _is_handoff_error(exc: BaseException) -> bool:
 
 
 def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
-    """Render the common system message for a phase (base + tools + task)."""
+    """Render the common system message for a phase (base + tools + task).
+
+    The +mitre-kb arm additionally appends the KB prefix (the full
+    technique index + old->new alias map, ~10K tokens of static, stable
+    content) to the tools block (the decision record, Option 3; the
+    baseline prompt stays byte-identical when the arm is off).
+    """
     tools = get_tools(agent_cfg, phase.tools(agent_cfg))
+    tools_block = "\n".join(f"- {tool.note}" for tool in tools)
+    if any(tool.name == "mitre_kb" for tool in tools):
+        from shlepa_agent.mitre_kb import kb_prefix
+
+        tools_block += "\n\n" + kb_prefix()
     return render_system(
         agent_cfg,
         phase.id,
         {
             "system": load_prompt("base.md"),
-            "tools": "\n".join(f"- {tool.note}" for tool in tools),
+            "tools": tools_block,
             "task": task,
         },
     )

@@ -14,6 +14,7 @@ from shlepa_agent.tools.bash import BASH_TOOL
 from shlepa_agent.tools.code_search import CODE_SEARCH_TOOL, FILE_OUTLINE_TOOL
 from shlepa_agent.tools.edit import EDIT_TOOL
 from shlepa_agent.tools.log_triage import LOG_TRIAGE_TOOL
+from shlepa_agent.tools.mitre_kb import MITRE_KB_TOOL
 from shlepa_agent.tools.read import READ_TOOL
 from shlepa_agent.tools.write import WRITE_TOOL
 
@@ -32,6 +33,9 @@ ALL_TOOLS: dict[str, Tool] = {
         # Off by default: enabled by the +forensics toolset arm
         # (config._enable_forensics_tools).
         LOG_TRIAGE_TOOL,
+        # Off by default: enabled by the +mitre-kb toolset arm
+        # (config._enable_mitre_kb_tools).
+        MITRE_KB_TOOL,
     )
 }
 
