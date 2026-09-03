@@ -4,6 +4,13 @@ approaches and do not restart exploration from scratch — the plan phase
 already did the understanding. Do only the minimum work needed to fulfil the
 plan; follow the plan steps in order.
 
+If the RESULTS OF PREVIOUS PHASES block carries a PARTIAL HANDOFF (the plan
+phase was cut off by its cap): the hand-off may be incomplete — treat its
+findings as leads, not established facts, and the LAST TOOLS block shows the
+plan phase's recent tool calls with their results (trust tool results over
+prose). In that case the first priority is to create or update the
+deliverable file on disk early and keep it fresh while you fill in the rest.
+
 Rules:
 - If a step fails twice, adapt within the plan's scope with the smallest
   change; never switch strategy wholesale. Never run the same failing

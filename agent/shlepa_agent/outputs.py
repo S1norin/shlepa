@@ -10,9 +10,9 @@ in v5) stays free text.
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PlanResult(BaseModel):
@@ -52,6 +52,71 @@ class PlanResult(BaseModel):
             "fully known, write the deliverable now."
         )
     )
+
+
+class PartialHandoff(BaseModel):
+    """Typed hand-off for the plan-timeout final_ask (v6).
+
+    When the plan phase is cut off by its cap, one tool-less final_ask asks
+    the model to summarize what is already known. The work phase starts
+    fresh and receives this JSON (plus the harness's deterministic
+    LAST_TOOLS block) instead of the full plan transcript. Every field has
+    a default so a weak or partial answer still validates; list fields
+    also coerce a stray scalar into a one-element list.
+    """
+
+    objective: str = Field(
+        default="",
+        description=(
+            "The deliverable objective as understood so far: file path, "
+            "format, required fields/values (empty if not yet clear)."
+        ),
+    )
+    findings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Key facts already established, each with its evidence "
+            "location (file, endpoint, tool output)."
+        ),
+    )
+    files_seen: list[str] = Field(
+        default_factory=list,
+        description="Paths of the task files already inspected.",
+    )
+    hypotheses: list[str] = Field(
+        default_factory=list,
+        description="Working hypotheses about the solution (unverified).",
+    )
+    failed_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Approaches/probes already tried and rejected, with the reason — "
+            "so the work phase does not repeat them."
+        ),
+    )
+    next_action: str = Field(
+        default="",
+        description=(
+            "The single most valuable next action for the work phase."
+        ),
+    )
+    deliverable_path_if_known: str = Field(
+        default="",
+        description="Deliverable path if already determined (empty otherwise).",
+    )
+
+    @field_validator(
+        "findings", "files_seen", "hypotheses", "failed_paths", mode="before"
+    )
+    @classmethod
+    def _coerce_to_list(cls, value: Any) -> Any:
+        # Models frequently answer a list field with a bare string; a stray
+        # scalar must not crash the hand-off.
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
 
 class WorkResult(BaseModel):
