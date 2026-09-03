@@ -179,20 +179,18 @@ def _bad_work():
     return step
 
 
-def _review_step(status="ok", verdict="done"):
-    return {
-        "tool_call": {
-            "name": "final_result",
-            "arguments": {
-                "status": status,
-                "verdict": verdict,
-                "artifact": "/app/hello.txt",
-                "checks": ["re-read the file -> content matches"],
-                "hints": [] if verdict == "done" else ["re-examine the target"],
-                "notes": "wrote hello.txt",
-            },
-        }
+def _review_step(status="ok", verdict="done", repair_scope=None):
+    arguments = {
+        "status": status,
+        "verdict": verdict,
+        "artifact": "/app/hello.txt",
+        "checks": ["re-read the file -> content matches"],
+        "hints": [] if verdict == "done" else ["re-examine the target"],
+        "notes": "wrote hello.txt",
     }
+    if repair_scope is not None:
+        arguments["repair_scope"] = repair_scope
+    return {"tool_call": {"name": "final_result", "arguments": arguments}}
 
 
 def _phase_starts(events, phase):
@@ -514,6 +512,31 @@ V6_ROUTING_CASES = [
         # the work retry happens inside the work phase (one start event)
         "phases": ["plan", "work", "commit"],
         "status": "error",
+    },
+    {
+        # w2-5: REPAIR is entered ONLY on repair_scope='local' — 'none'
+        # (and no scope at all) never does.
+        "name": "review_scope_none_never_repairs",
+        "script": [_plan_step(), _work_step(), _review_step(repair_scope="none")],
+        "cfg": {},
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        # w2-5: repair_scope='needs_next_round' routes straight to a new
+        # cycle (plan -> work -> review again), never through repair.
+        "name": "review_needs_next_round_cycles",
+        "script": [
+            _plan_step(),
+            _work_step(),
+            _review_step(verdict="next_round", repair_scope="needs_next_round"),
+            _plan_step(),
+            _work_step(),
+            _review_step(),
+        ],
+        "cfg": {},
+        "phases": ["plan", "work", "commit", "plan", "work", "commit"],
+        "status": "done",
     },
 ]
 

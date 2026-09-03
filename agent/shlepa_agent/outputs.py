@@ -258,6 +258,16 @@ class ReviewResult(BaseModel):
             "One line: what the deliverable is (empty if self-evident)."
         ),
     )
+    repair_scope: Literal["none", "local", "needs_next_round"] = Field(
+        default="none",
+        description=(
+            "Who can fix a failing check: 'none' — nothing to repair; "
+            "'local' — ONE in-place edit of the deliverable fixes it (name "
+            "the failing check in 'checks'); 'needs_next_round' — the fix "
+            "requires new investigation or work (pair with verdict "
+            "'next_round')."
+        ),
+    )
 
 
 class SalvageResult(BaseModel):

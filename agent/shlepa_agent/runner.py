@@ -49,6 +49,7 @@ import asyncio
 import os
 import sys
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,6 +74,7 @@ from shlepa_agent.phases.commit import trim_history
 from shlepa_agent.state import extract_last_tools, save_state
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
+from shlepa_agent.tools.base import RepairScope
 
 #: Hard cap for the one-shot final_ask request after a phase time-out.
 FINAL_ASK_CAP_S = 30.0
@@ -760,6 +762,24 @@ async def _pipeline(
             # cut by its own time cap reports its own status — not "done".
             if result.status in ("timeout", "error"):
                 return result.status, output
+            # v6 (w2-5): repair_scope='local' with a named failing check
+            # enters the bounded REPAIR phase (artifact-only, one mutation);
+            # every other scope/verdict never does.
+            scope = getattr(result.output, "repair_scope", None)
+            if phase.id == "commit" and scope == "local":
+                spec = state.deliverable_spec
+                if spec and spec.get("path"):
+                    p = Path(spec["path"])
+                    if not p.is_absolute():
+                        p = state.deps.workdir / p
+                    state.deps = replace(
+                        state.deps, repair_scope=RepairScope(path=p.resolve())
+                    )
+                    _log_event("repair_enter", path=str(p))
+                    phase_id = "repair"
+                    final_status = "done"
+                    continue
+                _log_event("repair_skipped", reason="no_deliverable_path")
             # Review phase: "done" stops the run; "next_round" always starts
             # a new cycle (the container kill at the task's own limit is the
             # only external bound).
@@ -810,6 +830,28 @@ async def _pipeline(
             _persist_salvage_body(state)
             _post_work_check(state)
             phase_id = "commit"
+            continue
+        if phase.id == "repair":
+            # v6 (w2-5): the harness re-runs the mechanical check; the
+            # result drives the exit — the model's words do not (external
+            # feedback, not a self-grading loop). A repair timeout/error
+            # re-checks the same way: still broken -> new cycle.
+            _post_work_check(state)
+            check = state.deliverable_check
+            passed = bool(check and check.get("valid"))
+            state.deps = replace(state.deps, repair_scope=None)
+            _log_event("repair_done", passed=passed, check=check)
+            if passed:
+                return "done", output
+            state.cycles += 1
+            _log_event(
+                "cycle",
+                reason="repair_failed",
+                cycle=state.cycles,
+                elapsed_s=round(state.model.elapsed(), 1),
+            )
+            final_status = "done"
+            phase_id = "plan"
             continue
         if result.status == "timeout":
             # WORK time cap / context-limit breach (unchanged from v5): one

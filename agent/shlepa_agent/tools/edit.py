@@ -58,9 +58,23 @@ async def edit(ctx: "RunContext[AgentDeps]", path: str, edits: list[EditItem]) -
     _log_event("tool_call", tool="edit", path=str(p), n_edits=len(edits))
     args = {"path": path, "edits": edits}
     max_file_mb = ctx.deps.cfg.tools.edit.max_file_mb or DEFAULT_MAX_FILE_MB
+    scope = ctx.deps.repair_scope
 
     def fail(reason: str) -> str:
         return format_tool_result(ctx, "edit", "", t0, args=args, failed=reason)
+
+    if scope is not None:
+        # REPAIR phase (w2-5): artifact-only, at most one mutation.
+        if p != scope.path:
+            return fail(
+                f"REPAIR scope: only the deliverable {scope.path} may be "
+                f"mutated (got {path}); route anything else to next_round"
+            )
+        if scope.mutations_used >= 1:
+            return fail(
+                "REPAIR scope: mutation budget exhausted (one mutation per "
+                "repair); finish via the final answer"
+            )
 
     edits = [e if isinstance(e, EditItem) else EditItem.model_validate(e) for e in edits]
 
@@ -137,6 +151,8 @@ async def edit(ctx: "RunContext[AgentDeps]", path: str, edits: list[EditItem]) -
         for s, e, i in sorted(spans, reverse=True):
             new_text = new_text[:s] + edits[i].newText + new_text[e:]
         await asyncio.to_thread(p.write_text, new_text, encoding="utf-8")
+        if scope is not None:
+            scope.mutations_used += 1
         return format_tool_result(
             ctx, "edit", f"Replaced {len(spans)} block(s) in {path}", t0, args=args
         )

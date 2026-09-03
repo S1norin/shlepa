@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
@@ -49,6 +49,19 @@ async def run_file_tool(body: Callable[[], Awaitable[str]], fail: Callable[[str]
         return fail(f"tool timed out after {FILE_TOOL_TIMEOUT_S:g}s")
 
 
+@dataclass
+class RepairScope:
+    """Mutation budget for the REPAIR phase (w2-5), held by the edit tool.
+
+    Only the deliverable path may be mutated, at most once per repair:
+    every other edit call is rejected by the tool itself (harness-side,
+    not prompt-side).
+    """
+
+    path: Path
+    mutations_used: int = 0
+
+
 @dataclass(frozen=True)
 class AgentDeps:
     """Per-run dependencies handed to every tool call via RunContext.deps."""
@@ -58,6 +71,9 @@ class AgentDeps:
     #: Wall-clock elapsed seconds since the run started (the
     #: ``TrackedModel.elapsed`` clock).
     clock: Callable[[], float]
+    #: Set while the REPAIR phase runs (w2-5); the edit tool enforces the
+    #: artifact-only, one-mutation budget. None outside REPAIR.
+    repair_scope: RepairScope | None = field(default=None)
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.

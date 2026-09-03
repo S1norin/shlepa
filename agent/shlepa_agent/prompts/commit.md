@@ -26,7 +26,12 @@ A separate repair phase handles broken files; you only judge and route.
      plan (what was wrong, what must change); empty list for "done".
    - artifact: the absolute path of the deliverable file (empty if none).
    - checks: each mechanical check you ran and its outcome, one entry per
-     check. Empty if nothing was checked.
+     check. Empty if nothing was checked. When a check fails and you set
+     repair_scope='local', name the failing check here.
+   - repair_scope: who can fix a failing check. "none" — nothing to repair
+     (or the run is fine); "local" — exactly ONE in-place edit of the
+     deliverable fixes the named failing check; "needs_next_round" — the fix
+     requires new investigation or work (then set verdict="next_round").
    - notes: one line describing the deliverable (empty if self-evident).
 
 Finish via the final_result tool. Once the verdict is made, stop

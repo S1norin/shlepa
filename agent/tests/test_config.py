@@ -47,7 +47,14 @@ def test_unknown_tool_raises():
 
 def test_phase_values_4_phase_pipeline():
     cfg = load_config()
-    assert set(cfg.phases) == {"plan", "work", "salvage", "commit", "emergency"}
+    assert set(cfg.phases) == {
+        "plan",
+        "work",
+        "salvage",
+        "commit",
+        "repair",
+        "emergency",
+    }
 
     plan = cfg.phases["plan"]
     # v6: read-only exploration surface; bash/write/edit structurally absent
@@ -93,6 +100,17 @@ def test_salvage_phase_config():
     assert salvage.requests == 5
     assert salvage.time == 30.0
     assert salvage.max_retries == 0
+
+
+def test_repair_phase_config():
+    # v6 (w2-5): artifact-only repair, one mutation, 20 s explicit cap,
+    # never retried.
+    cfg = load_config()
+    repair = cfg.phases["repair"]
+    assert set(repair.tools) == {"read", "search", "edit"}
+    assert repair.requests == 3
+    assert repair.time == 20.0
+    assert repair.max_retries == 0
 
 
 def test_template_blocks():

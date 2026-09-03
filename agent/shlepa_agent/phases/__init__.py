@@ -7,7 +7,7 @@ the ``[phases.*]`` sections); the registry maps id -> phase class.
 from __future__ import annotations
 
 from shlepa_agent.phases.base import Phase, PhaseLimits, PhaseResult, RunState
-from shlepa_agent.phases.commit import CommitPhase, trim_history
+from shlepa_agent.phases.commit import CommitPhase, RepairPhase, trim_history
 from shlepa_agent.phases.emergency import EmergencyPhase
 from shlepa_agent.phases.plan import PlanPhase
 from shlepa_agent.phases.salvage import SalvagePhase
@@ -18,6 +18,7 @@ PHASES: dict[str, type[Phase]] = {
     WorkPhase.id: WorkPhase,
     SalvagePhase.id: SalvagePhase,
     CommitPhase.id: CommitPhase,
+    RepairPhase.id: RepairPhase,
     EmergencyPhase.id: EmergencyPhase,
 }
 
@@ -37,6 +38,7 @@ __all__ = [
     "PhaseLimits",
     "PhaseResult",
     "PlanPhase",
+    "RepairPhase",
     "RunState",
     "SalvagePhase",
     "WorkPhase",

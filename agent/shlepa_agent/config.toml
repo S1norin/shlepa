@@ -116,6 +116,17 @@ soft_tokens = 20000
 reasoning_effort = "low"
 max_retries = 0
 
+[phases.repair]
+# v6 (w2-5): bounded artifact-only repair, entered only when the review
+# verdict carries repair_scope='local' with a named failing check. The edit
+# tool enforces the artifact-only, one-mutation budget; the harness
+# re-runs the mechanical check afterwards (pass -> done, fail -> new
+# plan/work cycle). 20 s explicit cap (the regime has no repair constant).
+tools = ["read", "search", "edit"]
+requests = 3
+time = 20.0
+max_retries = 0
+
 [phases.salvage]
 # v6 (w2-3): write-only rescue after WORK left the deliverable missing or
 # empty on disk. Fresh context, one tool (write), 30 s explicit cap (the

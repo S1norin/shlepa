@@ -211,3 +211,47 @@ class CommitPhase(Phase):
                 "output_schema": output_schema_note(ReviewResult),
             },
         )
+
+
+class RepairPhase(Phase):
+    """Bounded artifact-only repair (v6, w2-5).
+
+    Entered only when the review verdict carries ``repair_scope='local'``
+    with a named failing check. Keeps the VERIFY conversation (it carries
+    the packet and the named failure). Tools: read/search/edit with the
+    edit tool enforcing the artifact-only, one-mutation budget (w2-5);
+    after the phase the harness re-runs the mechanical check and the
+    result drives the exit (pass -> done, fail -> next_round).
+    """
+
+    id = "repair"
+    output_type = None  # free text: edit the file, then say what you did
+    terminal = False
+
+    def history(self, state: RunState) -> list[Any] | None:
+        # REPAIR keeps the continuation context (D4): it needs the packet
+        # and the named failure from the VERIFY conversation.
+        return trim_history(state.model.last_messages)
+
+    def prompt(self, state: RunState) -> str:
+        spec = state.deliverable_spec or {}
+        check = state.deliverable_check or {}
+        extra = (
+            "REPAIR CONTEXT (harness):\n"
+            f"deliverable: {spec.get('path')!r} (kind={spec.get('kind')!r}, "
+            f"format={spec.get('format')!r})\n"
+            f"mechanical check: {json.dumps(check)}\n"
+            "You have exactly ONE mutation (an edit of the deliverable file; "
+            "other paths are rejected by the harness). Make it count: fix the "
+            "named failing check, nothing else. Do not investigate — if the "
+            "fix is not obvious from the packet, do not mutate and say so.\n\n"
+            + self.limits_note(state)
+        )
+        return render_user(
+            state.cfg,
+            self.id,
+            {
+                "phase_prompt": load_prompt(f"{self.id}.md"),
+                "extra": extra,
+            },
+        )
