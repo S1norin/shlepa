@@ -37,9 +37,11 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
 | `notes/endpoint-embeddings.md` | LLM-endpoint embeddings (llama.cpp, E5-Mistral, LLM2Vec): evidence, design limits, contest risk |
 | `notes/hybrid-fusion.md` | RRF fusion and when dense actually helps BM25 (TechniqueRAG evidence) |
 | `notes/vtx-embed.md` | `VTXAI/vtx-embed-{7M,1M}`: 4-bit static (SIF) embedders, MIT, the only retrieval-grade models found that fit the zip |
+| `notes/expansion-go-no-go.md` | issue #94 measured and decided (2026-09-03): **GO** — expansion ships |
 | `analysis/queries.jsonl` | shared ground-truth query set (40 paraphrase + 8 literal, expected T-IDs) |
 | `analysis/bench.py` | harness: scores BM25 / dense / RRF on the query set (dev-only) |
 | `analysis/bm25-baseline.md` | BM25 baseline results (2026-09-03) |
+| `analysis/expansion-results.md` | BM25+expansion measured results (2026-09-03): paraphrase P@5 40.0% vs 20.0% baseline |
 | `analysis/cprime-protocol.md` | C′ experiment protocol: hypotheses, run steps, decision matrix for reading the results |
 | `analysis/vtx-results.md` | C′ measured results (2026-09-03): mini-256 meets the success bar; nano marginal |
 | `analysis/fit-matrix.md` | cross-cutting option comparison + recommendation |
@@ -71,6 +73,12 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
    + endpoint ceiling (issue #93); distillation only if the ceiling far
    exceeds C′+F. Detail and gating: `analysis/fit-matrix.md`;
    measurement protocol: `analysis/cprime-protocol.md`.
+6. **F is measured: GO (2026-09-03).** BM25+expansion
+   (`analysis/expansion-results.md`): paraphrase P@5 40.0% vs 20.0%
+   baseline, literal held at 100%, +97,785 B zipped, zero runtime cost —
+   above C′ mini-256's dense 37.5% for ~1/10 of the zip cost. Wiring
+   into the shipped loader + task-level A/B is the follow-up
+   (`notes/expansion-go-no-go.md`).
 
 Experiments are tracked as GitHub issues: **#93** (ceiling: ONNX +
 endpoint vs BM25), **#94** (semantic keyword expansion).
