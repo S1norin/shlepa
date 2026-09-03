@@ -7,7 +7,6 @@ target. Fixtures are inline (ephemeral ports, tmp_path) so the suite stays
 hermetic.
 """
 
-import importlib.util
 import json
 import socket
 import subprocess
@@ -19,19 +18,11 @@ from pathlib import Path
 
 import pytest
 
+from shlepa_agent.recon import scan_ports
+
 RECON = Path(__file__).resolve().parents[1] / "tools" / "recon.py"
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "recon"
 WEB_GOLDEN_PORT = 18473  # fixed port used by the web golden (gen_goldens.py)
-
-
-def _load_recon_module():
-    spec = importlib.util.spec_from_file_location("recon", RECON)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-recon = _load_recon_module()
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +204,7 @@ def test_scan_ports_passive_banner():
     """A service that speaks first (SSH-style) is labeled with its banner."""
     banner, bport = _start_banner_server()
     try:
-        ports = recon.scan_ports("127.0.0.1", bport, time.monotonic() + 30)
+        ports = scan_ports("127.0.0.1", bport, time.monotonic() + 30)
         assert "TestBanner" in ports.get(str(bport), "")
     finally:
         banner.close()
@@ -341,6 +332,47 @@ def test_web_cli_parity():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_engine_exposes_entries():
+    import shlepa_agent.recon as engine
+
+    for name in ("recon_web", "recon_code", "recon_data", "render",
+                 "err_note"):
+        assert callable(getattr(engine, name)), name
+
+
+def test_engine_stdlib_only():
+    """The engine must stay importable in a bare stdlib python (task env)."""
+    import ast
+
+    import shlepa_agent.recon as engine
+
+    tree = ast.parse(Path(engine.__file__).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] in sys.stdlib_module_names, \
+                    alias.name
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level > 0 or \
+                (node.module or "").split(".")[0] in sys.stdlib_module_names, \
+                node.module
+
+
+def test_engine_matches_cli():
+    """The CLI wrapper must be a thin passthrough over the engine."""
+    import shlepa_agent.recon as engine
+
+    for flag, fixture, fn in (
+        ("--code", "code_fixture", engine.recon_code),
+        ("--data", "data_fixture", engine.recon_data),
+    ):
+        proc = run_recon(flag, str(FIXTURES / fixture))
+        assert proc.returncode == 0, proc.stderr
+        live = _strip_volatile(fn(FIXTURES / fixture))
+        cli = _strip_volatile(json.loads(proc.stdout))
+        assert live == cli
 
 
 def test_data_mode(tmp_path):
