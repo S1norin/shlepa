@@ -95,6 +95,8 @@ class _MetricsCapture(logging.Handler):
         super().__init__()
         self.tokens_in = 0
         self.tokens_out = 0
+        self.cache_read = 0
+        self.cache_write = 0
         self.tool_calls = 0
         self.status: str | None = None
 
@@ -107,6 +109,8 @@ class _MetricsCapture(logging.Handler):
         if event == "usage":
             self.tokens_in = int(data.get("cumulative_input") or 0)
             self.tokens_out = int(data.get("cumulative_output") or 0)
+            self.cache_read = int(data.get("cumulative_cache_read") or 0)
+            self.cache_write = int(data.get("cumulative_cache_write") or 0)
         elif event == "llm_tool_call":
             self.tool_calls += 1
         elif event == "agent_done":
@@ -140,6 +144,8 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
                     "final_output": "",
                     "tokens_in": capture.tokens_in,
                     "tokens_out": capture.tokens_out,
+                    "tokens_cache_read": capture.cache_read,
+                    "tokens_cache_write": capture.cache_write,
                     "tool_calls": capture.tool_calls,
                     "termination": "timeout",
                 }
@@ -163,6 +169,8 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
         "final_output": output,
         "tokens_in": capture.tokens_in,
         "tokens_out": capture.tokens_out,
+        "tokens_cache_read": capture.cache_read,
+        "tokens_cache_write": capture.cache_write,
         "tool_calls": capture.tool_calls,
         "termination": _TERMINATION.get(capture.status, "ok"),
     }
@@ -421,6 +429,8 @@ def run_agent_in_container(
         final_output=metrics["final_output"] or (proc.stdout or "").strip(),
         tokens_in=metrics["tokens_in"],
         tokens_out=metrics["tokens_out"],
+        tokens_cache_read=metrics.get("tokens_cache_read", 0),
+        tokens_cache_write=metrics.get("tokens_cache_write", 0),
         tool_calls=metrics["tool_calls"],
         termination=metrics["termination"],
     )
@@ -430,14 +440,17 @@ def parse_agent_metrics(stderr: str) -> dict:
     """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
 
     Returns a dict with final_output / tokens_in / tokens_out /
-    tool_calls / termination; defaults to empty values and
-    termination='ok' when the marker is missing or broken (the run
-    still counts as an unsolved, not a crash).
+    tokens_cache_read / tokens_cache_write / tool_calls / termination;
+    defaults to empty values and termination='ok' when the marker is
+    missing or broken (the run still counts as an unsolved, not a
+    crash). Cache keys are 0 when the endpoint did not report caching.
     """
     defaults = {
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
         "tool_calls": 0,
         "termination": "ok",
     }

@@ -48,7 +48,9 @@ class AgentRun:
     final_output: str
     tokens_in: int
     tokens_out: int
-    tool_calls: int
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
+    tool_calls: int = 0
     termination: str = "ok"
 
 
@@ -72,6 +74,8 @@ class TaskResult:
     error: str | None
     score_detail: str
     workspace: Path
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
     termination: str = "ok"
 
 
@@ -100,6 +104,8 @@ class _HostMetricsCapture(logging.Handler):
         super().__init__()
         self.tokens_in = 0
         self.tokens_out = 0
+        self.cache_read = 0
+        self.cache_write = 0
         self.tool_calls = 0
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -111,6 +117,8 @@ class _HostMetricsCapture(logging.Handler):
         if event == "usage":
             self.tokens_in = int(data.get("cumulative_input") or 0)
             self.tokens_out = int(data.get("cumulative_output") or 0)
+            self.cache_read = int(data.get("cumulative_cache_read") or 0)
+            self.cache_write = int(data.get("cumulative_cache_write") or 0)
         elif event == "llm_tool_call":
             self.tool_calls += 1
 
@@ -168,6 +176,8 @@ def run_agent_on_host(
         final_output=output,
         tokens_in=capture.tokens_in,
         tokens_out=capture.tokens_out,
+        tokens_cache_read=capture.cache_read,
+        tokens_cache_write=capture.cache_write,
         tool_calls=capture.tool_calls,
     )
 
@@ -451,6 +461,15 @@ def log_task_to_mlflow(
         client.log_metric(run_id, "tokens_in", result.tokens_in)
         client.log_metric(run_id, "tokens_out", result.tokens_out)
         client.log_metric(run_id, "tokens_total", result.tokens_total)
+        # Prompt-cache metrics only when the endpoint reported caching.
+        if result.tokens_cache_read:
+            client.log_metric(
+                run_id, "tokens_cache_read", result.tokens_cache_read
+            )
+        if result.tokens_cache_write:
+            client.log_metric(
+                run_id, "tokens_cache_write", result.tokens_cache_write
+            )
         client.log_metric(run_id, "tool_calls", result.tool_calls)
         client.log_param(run_id, "final_output", result.final_output[:2000])
         client.log_param(run_id, "termination", result.termination)
@@ -839,7 +858,7 @@ def run_task(
     workspace = make_workspace(settings.repo_root, task.slug)
     instruction_file = task.path / "instruction.md"
     started = time.monotonic()
-    agent_run = AgentRun("", 0, 0, 0)
+    agent_run = AgentRun(final_output="", tokens_in=0, tokens_out=0)
     solved = False
     score_detail = ""
     error: str | None = None
@@ -864,7 +883,10 @@ def run_task(
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
             agent_run = AgentRun(
-                "", 0, 0, 0, termination=_classify_termination(exc)
+                final_output="",
+                tokens_in=0,
+                tokens_out=0,
+                termination=_classify_termination(exc),
             )
     else:
         from shlepa_cli import dev_env
@@ -916,7 +938,10 @@ def run_task(
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
             agent_run = AgentRun(
-                "", 0, 0, 0, termination=_classify_termination(exc)
+                final_output="",
+                tokens_in=0,
+                tokens_out=0,
+                termination=_classify_termination(exc),
             )
         finally:
             if container is not None:
@@ -934,6 +959,8 @@ def run_task(
         tokens_in=agent_run.tokens_in,
         tokens_out=agent_run.tokens_out,
         tokens_total=agent_run.tokens_in + agent_run.tokens_out,
+        tokens_cache_read=agent_run.tokens_cache_read,
+        tokens_cache_write=agent_run.tokens_cache_write,
         tool_calls=agent_run.tool_calls,
         final_output=agent_run.final_output,
         error=error,

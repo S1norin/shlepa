@@ -19,6 +19,8 @@ import json
 __all__ = [
     "build_digest",
     "detect_loops",
+    "per_phase_tokens",
+    "span_phase_id",
     "thinking_parts_count",
     "tool_signature",
     "trace_signals",
@@ -98,6 +100,45 @@ def span_prompt_tokens(span: dict) -> int:
 
 def span_completion_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
+
+
+def span_phase_id(span: dict) -> str | None:
+    """The pipeline phase (plan/work/commit) an LLM span ran in, if labeled.
+
+    Traces exported before the F4 phase labels exist carry no such
+    attribute; the digest then omits the per-phase breakdown entirely.
+    """
+    return (span.get("attributes") or {}).get("shlepa.phase_id")
+
+
+#: Display order for per-phase token lines; unknown phases sort after.
+_PHASE_ORDER = ("plan", "work", "commit")
+
+
+def per_phase_tokens(trace: dict) -> list[tuple[str, int, int]]:
+    """(phase, prompt_tokens, completion_tokens) per labeled phase.
+
+    Ordered plan -> work -> commit, then any other phase alphabetically.
+    Empty when no LLM span carries a phase label (pre-F4 traces).
+    """
+    totals: dict[str, list[int]] = {}
+    for span in _llm_spans(trace):
+        phase = span_phase_id(span)
+        if phase is None:
+            continue
+        bucket = totals.setdefault(phase, [0, 0])
+        bucket[0] += span_prompt_tokens(span)
+        bucket[1] += span_completion_tokens(span)
+    if not totals:
+        return []
+    ordered = sorted(
+        totals.items(),
+        key=lambda item: (
+            _PHASE_ORDER.index(item[0]) if item[0] in _PHASE_ORDER else len(_PHASE_ORDER),
+            item[0],
+        ),
+    )
+    return [(phase, pin, pout) for phase, (pin, pout) in ordered]
 
 
 def _output_messages(span: dict):
@@ -315,6 +356,11 @@ def build_digest(trace: dict) -> str:
         f"- tokens: {prompt_tokens} in / {completion_tokens} out "
         f"(total {prompt_tokens + completion_tokens})"
     )
+    for phase, phase_in, phase_out in per_phase_tokens(trace):
+        lines.append(
+            f"- tokens[{phase}]: {phase_in} in / {phase_out} out "
+            f"(total {phase_in + phase_out})"
+        )
     lines.append(f"- llm_calls: {len(llm)}")
     if llm:
         if any(_span_has_output_messages(s) for s in llm):

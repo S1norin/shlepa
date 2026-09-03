@@ -12,8 +12,14 @@ from shlepa_cli import trace_digest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _llm_span(i, prompt, completion, start_ns=None):
+def _llm_span(i, prompt, completion, start_ns=None, phase=None):
     start = (start_ns if start_ns is not None else i) * 1_000_000_000
+    attributes = {
+        "llm.token_count.prompt": str(prompt),
+        "llm.token_count.completion": str(completion),
+    }
+    if phase is not None:
+        attributes["shlepa.phase_id"] = phase
     return {
         "span_id": f"llm-{i}",
         "parent_id": None,
@@ -23,10 +29,7 @@ def _llm_span(i, prompt, completion, start_ns=None):
         "status": "OK",
         "start_time_ns": start,
         "end_time_ns": start + 1_000_000_000,
-        "attributes": {
-            "llm.token_count.prompt": str(prompt),
-            "llm.token_count.completion": str(completion),
-        },
+        "attributes": attributes,
         "events": [],
         "inputs": None,
         "outputs": None,
@@ -111,6 +114,37 @@ def test_header_aggregates_tokens_calls_and_duration():
     assert "300" in digest  # peak = max prompt
     assert "tool_errors" in digest.lower() or "tool errors" in digest.lower()
     assert "1" in digest  # one ERROR tool span
+
+
+def test_header_per_phase_token_lines():
+    spans = [
+        _llm_span(1, 100, 10, phase="work"),
+        _llm_span(2, 50, 5, phase="plan"),
+        _llm_span(3, 20, 2, phase="commit"),
+    ]
+    digest = trace_digest.build_digest(_trace(spans))
+    plan_line = next(l for l in digest.splitlines() if l.startswith("- tokens[plan]:"))
+    work_line = next(l for l in digest.splitlines() if l.startswith("- tokens[work]:"))
+    commit_line = next(l for l in digest.splitlines() if l.startswith("- tokens[commit]:"))
+    assert "50 in / 5 out" in plan_line
+    assert "100 in / 10 out" in work_line
+    assert "20 in / 2 out" in commit_line
+    # plan -> work -> commit ordering regardless of span order
+    assert digest.index(plan_line) < digest.index(work_line) < digest.index(commit_line)
+
+
+def test_per_phase_lines_absent_for_unlabeled_traces():
+    spans = [_llm_span(1, 100, 10), _llm_span(2, 200, 20)]
+    digest = trace_digest.build_digest(_trace(spans))
+    assert "tokens[" not in digest
+
+
+def test_per_phase_tokens_helper_ignores_unlabeled_spans():
+    spans = [
+        _llm_span(1, 100, 10, phase="plan"),
+        _llm_span(2, 200, 20),  # unlabeled: excluded
+    ]
+    assert trace_digest.per_phase_tokens(_trace(spans)) == [("plan", 100, 10)]
 
 
 def test_repeated_identical_tool_results_counted():

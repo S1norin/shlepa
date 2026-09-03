@@ -483,7 +483,15 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     assert start["llm_wall"] == pytest.approx(180.0)
     usage = next(e for e in events if e.get("event") == "usage")
     for field in (
-        "request", "input_tokens", "output_tokens", "cumulative_input", "cumulative_output"
+        "request",
+        "input_tokens",
+        "output_tokens",
+        "cache_read",
+        "cache_write",
+        "cumulative_input",
+        "cumulative_output",
+        "cumulative_cache_read",
+        "cumulative_cache_write",
     ):
         assert field in usage
     # v5 pipeline events

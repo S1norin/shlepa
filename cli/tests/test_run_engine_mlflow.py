@@ -87,6 +87,28 @@ class _PrintingClient:
         pass
 
 
+def test_log_task_to_mlflow_cache_metrics_when_present(tmp_path):
+    client = _PrintingClient()
+    run_engine.log_task_to_mlflow(
+        client,
+        _settings(tmp_path),
+        "all",
+        None,
+        _result(tmp_path, tokens_cache_read=120, tokens_cache_write=8),
+    )
+    assert client.metrics["tokens_cache_read"] == 120
+    assert client.metrics["tokens_cache_write"] == 8
+
+
+def test_log_task_to_mlflow_no_cache_metrics_when_zero(tmp_path):
+    client = _PrintingClient()
+    run_engine.log_task_to_mlflow(
+        client, _settings(tmp_path), "all", None, _result(tmp_path)
+    )
+    assert "tokens_cache_read" not in client.metrics
+    assert "tokens_cache_write" not in client.metrics
+
+
 def test_log_task_to_mlflow_masks_view_run_url(tmp_path, capsys):
     client = _PrintingClient()
     run_id = run_engine.log_task_to_mlflow(
