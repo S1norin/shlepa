@@ -87,6 +87,12 @@ class RunState:
     #: {"path": <relative>, "sha256": <hex>, "content": <text>}; restored
     #: on exit when a later round left a broken file (best-at-exit).
     best_snapshot: dict[str, Any] | None = field(default=None)
+    #: v6 (w3-6): in-environment test-file hashes recorded at bootstrap
+    #: (tamper guard); None when the task ships no test files.
+    test_hashes: dict[str, str] | None = field(default=None)
+    #: v6 (w3-6): True when the test files changed mid-run — the run's
+    #: own test results are then invalid.
+    test_tampered: bool = False
 
     @property
     def cfg(self) -> AgentConfig:

@@ -75,6 +75,7 @@ from shlepa_agent.phases import get_phase
 from shlepa_agent.phases.base import Phase, PhaseResult, RunState
 from shlepa_agent.phases.commit import trim_history
 from shlepa_agent.state import extract_last_tools, save_state
+from shlepa_agent.test_guard import bootstrap_test_hashes, check_test_hashes
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
 from shlepa_agent.tools.base import RepairScope
@@ -689,6 +690,24 @@ def _maybe_snapshot_best(state: RunState) -> None:
         _log_event("agent_error", error=f"best snapshot: {type(e).__name__}: {str(e)[:200]}")
 
 
+def _verify_test_hashes(state: RunState) -> None:
+    """w3-6: at exit, re-hash the in-environment test files; a change
+    marks the run's own test results invalid (event + state flag).
+    Never raises.
+    """
+    try:
+        if not state.test_hashes:
+            return
+        changed = check_test_hashes(state.deps.workdir, state.test_hashes)
+        if changed:
+            state.test_tampered = True
+            _log_event(
+                "test_tamper", count=len(changed), files=changed[:20]
+            )
+    except Exception as e:  # pragma: no cover - defensive
+        _log_event("agent_error", error=f"test guard: {type(e).__name__}: {str(e)[:200]}")
+
+
 def _restore_best_on_exit(state: RunState) -> None:
     """w2-9: at exit, if the current deliverable fails the check but a
     passing snapshot exists and the file changed, restore the snapshot —
@@ -1074,6 +1093,10 @@ async def run_prompt(
             deps=AgentDeps(workdir=workdir, cfg=cfg, clock=model.elapsed),
             model=model,
         )
+        # v6 (w3-6): tamper guard — record the in-environment test files
+        # now; re-hashed before the run's own test results are accepted.
+        state.test_hashes = bootstrap_test_hashes(workdir)
+        _log_event("test_guard", files=len(state.test_hashes or {}))
         _log_event(
             "agent_start",
             model=_resolve_model_name(),
@@ -1102,6 +1125,9 @@ async def run_prompt(
         status, output = await _pipeline(
             state, instrument, factory, entry, max_steps
         )
+        # v6 (w3-6): the run's own test results are only trustworthy if
+        # the in-environment test files were not mutated mid-run.
+        _verify_test_hashes(state)
         # v6 (w2-9): best-at-exit — a later round that left a broken
         # deliverable cannot regress an earlier check-passing one.
         _restore_best_on_exit(state)
