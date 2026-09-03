@@ -12,7 +12,11 @@
 # plan -> work -> review until the review verdict is "done" (a "next_round"
 # verdict starts a new round). The container itself is killed at the
 # task's own limit; the emergency phase name is UNUSED (kept for compat).
+# loop: the control-flow regime. "cycles" = the v5 pipeline above (default);
+# "v3" = the budgeted single main phase + terminal commit (the depleting
+# budget lives in [v3loop]). Env: SHLEPA_LOOP. Invalid values = "cycles".
 entry = ""
+loop = "cycles"
 emergency = "emergency"
 # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
 max_steps = 0
@@ -84,6 +88,16 @@ requests = 100
 soft_time = 105.0
 max_retries = 1
 
+[phases.main]
+# The v3 loop regime's single open main phase (used only when
+# [agent].loop = "v3"): the full tool loop, bounded by the depleting
+# [v3loop] budget instead of a per-phase cap. `requests` is advisory here
+# (the hard request cap is [v3loop].request_limit); max_retries stays 0
+# (v3 parity: a failed main run ends the trial, no retry loop).
+tools = ["read", "write", "edit", "bash"]
+requests = 90
+max_retries = 0
+
 [phases.commit]
 # Terminal REVIEW phase: verify the deliverable mechanically, repair it if
 # broken, decide done|next_round. Hard cap is the fixed regime constant
@@ -103,6 +117,23 @@ requests = 20
 soft_tokens = 20000
 reasoning_effort = "low"
 max_retries = 0
+
+[v3loop]
+# Depleting budget of the v3 loop regime (active only when
+# [agent].loop = "v3"): checked before every LLM request. The soft wall
+# hands off to the terminal commit phase (whose window is commit_time_cap,
+# also capped at the remaining hard window); hard_time must fit under the
+# task's own limit. request_limit / token_budget are enforced via
+# pydantic-ai UsageLimits on the main phase. The commit phase's tools and
+# reasoning effort come from [phases.commit]. Values are the v3 agent's
+# registered defaults (SHLEPA_V3_* env overrides).
+soft_time = 500.0
+hard_time = 585.0
+request_limit = 90
+token_budget = 300000
+commit_time_cap = 80.0
+commit_request_limit = 25
+request_wall = 240.0
 
 [template]
 # Render order of the common request template. "system", "tools" and "task"

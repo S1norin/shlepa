@@ -16,9 +16,15 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
+
+#: Loop regimes (``[agent].loop`` / ``SHLEPA_LOOP``): the v5
+#: plan/work/review cycles (default) or the v3 budgeted main->commit loop
+#: (see :class:`V3LoopConfig` and :mod:`shlepa_agent.v3loop`). The loop axis
+#: is orthogonal to the toolset arm axis (``AGENT_TOOLSET``).
+LOOP_VALUES = ("cycles", "v3")
 
 
 class AgentSection(BaseModel):
@@ -31,6 +37,17 @@ class AgentSection(BaseModel):
 
     #: Entry phase. Empty = "plan".
     entry: str = ""
+    #: Loop regime: "cycles" (the v5 plan -> work -> review cycle, default)
+    #: or "v3" (the budgeted single main phase + terminal commit; the
+    #: ``[v3loop]`` section holds its budget). Invalid values normalize to
+    #: "cycles" (never raise).
+    loop: str = "cycles"
+
+    @field_validator("loop", mode="before")
+    @classmethod
+    def _normalize_loop(cls, value: Any) -> Any:
+        s = str(value).strip().lower()
+        return s if s in LOOP_VALUES else "cycles"
     #: Name of the emergency phase (UNUSED in v5, kept for compatibility).
     emergency: str = "emergency"
     # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
@@ -48,7 +65,8 @@ class BudgetConfig(BaseModel):
     The phase caps are fixed constants (``budget.py``); there is NO task
     time limit T, NO global hard stop and NO request-start gate. There is
     NO global token budget and NO request-count limit (token usage is
-    logged for analysis only).
+    logged for analysis only). (The v3 regime keeps its own depleting
+    budget in ``[v3loop]``; see :class:`V3LoopConfig`.)
     """
 
     # Hard per-request output cap; without it a single request can loop for
@@ -56,6 +74,40 @@ class BudgetConfig(BaseModel):
     max_tokens: int = 16_384
     # Per-request open timeout (up to the first bytes).
     request_timeout: float = 180.0
+
+
+class V3LoopConfig(BaseModel):
+    """Depleting budget of the v3 loop regime (``[v3loop]`` section).
+
+    Only used when ``[agent] loop = "v3"`` (:mod:`shlepa_agent.v3loop`): a
+    shared pool checked before every LLM request — soft/hard wall-clock
+    limits (the hard limit must fit under the task's own limit with a commit
+    window to spare), a request-count limit and a total-token budget (both
+    enforced via pydantic-ai ``UsageLimits``), plus the terminal commit
+    phase's window. The commit phase's tools, reasoning effort and retries
+    come from ``[phases.commit]`` (the phase is shared with the cycles
+    regime). Values are the v3 agent's registered defaults (model version
+    3, MLflow run ee78c24c).
+    """
+
+    # Soft wall-clock budget: once exceeded, the next request hands off to
+    # the commit phase (v3: soft fires at ~500s).
+    soft_time: float = 500.0
+    # Hard wall-clock budget: run (including the commit window) done by
+    # this time (v3: 585s, under the 600s task limit).
+    hard_time: float = 585.0
+    # LLM request-count budget for the main phase.
+    request_limit: int = 90
+    # Total-token budget (input + output) for the main phase.
+    token_budget: int = 300_000
+    # Terminal commit phase window (also capped at the remaining hard
+    # window; below 10s the commit is skipped with a log event).
+    commit_time_cap: float = 80.0
+    # LLM request-count budget for the commit phase.
+    commit_request_limit: int = 25
+    # Per-request wall clock (open -> last chunk) for the v3 regime (v3 used
+    # 240s; the cycles regime uses the fixed 180s LLM_WALL).
+    request_wall: float = 240.0
 
 
 class ToolConfig(BaseModel):
@@ -171,6 +223,8 @@ class TemplateConfig(BaseModel):
 class AgentConfig(BaseModel):
     agent: AgentSection = Field(default_factory=AgentSection)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    #: v3 loop regime budget (used only when ``agent.loop == "v3"``).
+    v3loop: V3LoopConfig = Field(default_factory=V3LoopConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
     # Resolved toolset arm (see toolsets.py): "baseline" when AGENT_TOOLSET
@@ -212,6 +266,13 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_RECON_MAX_OUTPUT": ("tools.recon.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
+    "SHLEPA_V3_SOFT_TIME": ("v3loop.soft_time", float),
+    "SHLEPA_V3_HARD_TIME": ("v3loop.hard_time", float),
+    "SHLEPA_V3_REQUEST_LIMIT": ("v3loop.request_limit", int),
+    "SHLEPA_V3_TOKEN_BUDGET": ("v3loop.token_budget", int),
+    "SHLEPA_V3_COMMIT_TIME": ("v3loop.commit_time_cap", float),
+    "SHLEPA_V3_COMMIT_REQUEST_LIMIT": ("v3loop.commit_request_limit", int),
+    "SHLEPA_V3_REQUEST_WALL": ("v3loop.request_wall", float),
 }
 
 
@@ -336,6 +397,21 @@ def _apply_code_search_env(cfg: AgentConfig) -> None:
     _enable_search_tools(cfg, engine)
 
 
+def _apply_loop_env(cfg: AgentConfig) -> None:
+    """Loop-regime selection: the SHLEPA_LOOP env var (cycles | v3).
+
+    A valid value overrides ``[agent].loop``; unset or invalid values keep
+    the toml value (which itself normalizes invalid entries to "cycles" in
+    the validator). Selection must never crash the run.
+    """
+    raw = os.environ.get("SHLEPA_LOOP")
+    if raw is None or not raw.strip():
+        return
+    value = raw.strip().lower()
+    if value in LOOP_VALUES:
+        cfg.agent.loop = value
+
+
 def _apply_toolset_env(cfg: AgentConfig) -> None:
     """Arm selection: the AGENT_TOOLSET env var (named toolset arms).
 
@@ -365,5 +441,6 @@ def load_config(path: Path | str | None = None) -> AgentConfig:
     data = tomllib.loads(p.read_text(encoding="utf-8"))
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
+    _apply_loop_env(cfg)
     _apply_toolset_env(cfg)
     return cfg

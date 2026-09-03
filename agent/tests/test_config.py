@@ -45,9 +45,11 @@ def test_unknown_tool_raises():
         cfg.tools.get("nope")
 
 
-def test_phase_values_4_phase_pipeline():
+def test_phase_sections():
     cfg = load_config()
-    assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
+    # The cycles pipeline (plan/work/commit/emergency) plus the v3 loop
+    # regime's main phase (active only when [agent].loop = "v3").
+    assert set(cfg.phases) == {"plan", "work", "commit", "emergency", "main"}
 
     plan = cfg.phases["plan"]
     assert set(plan.tools) == {"read", "write", "edit", "bash"}
@@ -80,6 +82,90 @@ def test_phase_values_4_phase_pipeline():
     assert emergency.time is None
     assert emergency.reasoning_effort == "low"
     assert emergency.max_retries == 0
+
+    main = cfg.phases["main"]  # v3 loop regime main phase
+    assert set(main.tools) == {"read", "write", "edit", "bash"}
+    assert main.requests == 90  # advisory; the hard cap is [v3loop].request_limit
+    assert main.time is None  # no per-phase cap; the [v3loop] budget bounds it
+    assert main.max_retries == 0  # v3 parity: no main-run retry loop
+
+
+def test_v3loop_defaults():
+    cfg = load_config()
+    v = cfg.v3loop
+    assert cfg.agent.loop == "cycles"  # default regime
+    assert v.soft_time == 500.0
+    assert v.hard_time == 585.0
+    assert v.request_limit == 90
+    assert v.token_budget == 300000
+    assert v.commit_time_cap == 80.0
+    assert v.commit_request_limit == 25
+    assert v.request_wall == 240.0
+
+
+def test_loop_toml_value_and_normalization(tmp_path):
+    from shlepa_agent.config import DEFAULT_CONFIG_PATH
+
+    def _with_loop(line: str):
+        text = DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+        text = text.replace('loop = "cycles"', line, 1)
+        p = tmp_path / "cfg.toml"
+        p.write_text(text, encoding="utf-8")
+        return load_config(p)
+
+    assert _with_loop('loop = "v3"').agent.loop == "v3"
+    assert _with_loop('loop = "V3"').agent.loop == "v3"  # case-insensitive
+    assert _with_loop('loop = "bogus"').agent.loop == "cycles"  # invalid -> cycles
+
+
+def test_loop_env_override(monkeypatch):
+    monkeypatch.setenv("SHLEPA_LOOP", "v3")
+    assert load_config().agent.loop == "v3"
+    monkeypatch.setenv("SHLEPA_LOOP", "cycles")
+    assert load_config().agent.loop == "cycles"
+    monkeypatch.setenv("SHLEPA_LOOP", "garbage")
+    assert load_config().agent.loop == "cycles"  # invalid: ignored
+    monkeypatch.delenv("SHLEPA_LOOP")
+    assert load_config().agent.loop == "cycles"  # unset: toml default
+
+
+def test_v3loop_env_overrides_win(monkeypatch):
+    monkeypatch.setenv("SHLEPA_V3_SOFT_TIME", "100")
+    monkeypatch.setenv("SHLEPA_V3_HARD_TIME", "120.5")
+    monkeypatch.setenv("SHLEPA_V3_REQUEST_LIMIT", "7")
+    monkeypatch.setenv("SHLEPA_V3_TOKEN_BUDGET", "1234")
+    monkeypatch.setenv("SHLEPA_V3_COMMIT_TIME", "42")
+    monkeypatch.setenv("SHLEPA_V3_COMMIT_REQUEST_LIMIT", "3")
+    monkeypatch.setenv("SHLEPA_V3_REQUEST_WALL", "60")
+    v = load_config().v3loop
+    assert v.soft_time == 100.0
+    assert v.hard_time == 120.5
+    assert v.request_limit == 7
+    assert v.token_budget == 1234
+    assert v.commit_time_cap == 42.0
+    assert v.commit_request_limit == 3
+    assert v.request_wall == 60.0
+
+
+def test_v3loop_invalid_env_override_ignored(monkeypatch):
+    monkeypatch.setenv("SHLEPA_V3_HARD_TIME", "not-a-number")
+    monkeypatch.setenv("SHLEPA_V3_REQUEST_LIMIT", "lots")
+    v = load_config().v3loop
+    assert v.hard_time == 585.0
+    assert v.request_limit == 90
+
+
+def test_main_phase_gets_arm_mutations():
+    from shlepa_agent.config import _apply_read_only_arm, _enable_search_tools
+
+    cfg = load_config()
+    _enable_search_tools(cfg, "rg")
+    assert "code_search" in cfg.phases["main"].tools
+    assert "file_outline" in cfg.phases["main"].tools
+
+    cfg2 = load_config()
+    _apply_read_only_arm(cfg2)
+    assert cfg2.phases["main"].tools == ["read", "write", "edit", "recon"]
 
 
 def test_template_blocks():
