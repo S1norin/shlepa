@@ -47,7 +47,7 @@ def test_unknown_tool_raises():
 
 def test_phase_values_4_phase_pipeline():
     cfg = load_config()
-    assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
+    assert set(cfg.phases) == {"plan", "work", "salvage", "commit", "emergency"}
 
     plan = cfg.phases["plan"]
     # v6: read-only exploration surface; bash/write/edit structurally absent
@@ -82,6 +82,16 @@ def test_phase_values_4_phase_pipeline():
     assert emergency.time is None
     assert emergency.reasoning_effort == "low"
     assert emergency.max_retries == 0
+
+
+def test_salvage_phase_config():
+    # v6 (w2-3): write-only rescue, explicit 30 s cap, never retried.
+    cfg = load_config()
+    salvage = cfg.phases["salvage"]
+    assert set(salvage.tools) == {"write"}
+    assert salvage.requests == 5
+    assert salvage.time == 30.0
+    assert salvage.max_retries == 0
 
 
 def test_template_blocks():

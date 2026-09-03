@@ -90,6 +90,9 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
 def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai, tmp_path):
     from stub_server import reset_stub_state
 
+    # This test asserts the exact request count of the v5-shaped script; the
+    # v6 salvage gate is covered in test_salvage.py.
+    monkeypatch.setenv("SHLEPA_SALVAGE", "0")
     reset_stub_state()
     stub_state["script"] = [
         {

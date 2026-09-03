@@ -260,6 +260,31 @@ class ReviewResult(BaseModel):
     )
 
 
+class SalvageResult(BaseModel):
+    """Structured output of the salvage phase (v6, w2-3).
+
+    ``body`` is the harness's fallback persistence: if the deliverable is
+    still missing/empty on disk after the run, the runner writes this text
+    to the deliverable path (atomically).
+    """
+
+    body: str = Field(
+        default="",
+        description=(
+            "The COMPLETE exact content of the deliverable file — the same "
+            "bytes you wrote (or would write). The harness persists this text "
+            "to the deliverable path if the file is still missing or empty."
+        ),
+    )
+    path: str = Field(
+        default="",
+        description=(
+            "Deliverable path you wrote with the write tool (empty if you "
+            "did not write it)."
+        ),
+    )
+
+
 def output_schema_note(model_cls: type[BaseModel]) -> str:
     """Render the 'output_schema' user-message block for a typed phase.
 

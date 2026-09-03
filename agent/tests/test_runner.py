@@ -271,6 +271,9 @@ def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events)
     # nothing is executed, and the run carries on to work.
     from shlepa_agent.config import load_config
 
+    # This test is about the plan tool surface, not the v6 salvage gate
+    # (covered in test_salvage.py): keep the v5-shaped sequence.
+    monkeypatch.setenv("SHLEPA_SALVAGE", "0")
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "touch hello.txt"}}},
         _plan_step(),

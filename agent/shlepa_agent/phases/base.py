@@ -77,6 +77,12 @@ class RunState:
     #: "last_tools": [LAST_TOOLS entries]}. Rendered into the work prompt;
     #: None for normal plans and for ``SHLEPA_HANDOFF=off``.
     plan_handoff: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-3): deliverable spec resolved after WORK (from the plan's
+    #: artifact_spec / WorkResult.deliverable); None when no path is known.
+    deliverable_spec: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-3): latest mechanical check result (deliverable_check.py);
+    #: refreshed after WORK and again after SALVAGE; consumed by REVIEW.
+    deliverable_check: dict[str, Any] | None = field(default=None)
 
     @property
     def cfg(self) -> AgentConfig:

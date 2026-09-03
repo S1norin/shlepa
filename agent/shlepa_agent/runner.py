@@ -59,6 +59,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from shlepa_agent.budget import PLAN_CAP, REVIEW_CAP, WORK_CAP, regime
 from shlepa_agent.config import AgentConfig, load_config
+from shlepa_agent.deliverable_check import ArtifactSpec, check_deliverable
 from shlepa_agent.log import (
     _configure_logging,
     _log_event,
@@ -558,6 +559,128 @@ async def _plan_handoff(state: RunState, phase: Phase) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Post-work deliverable gate (v6, w2-3)
+# ---------------------------------------------------------------------------
+
+
+def _salvage_enabled() -> bool:
+    """Kill-switch for the salvage route: SHLEPA_SALVAGE=0|false|off disables."""
+    return os.environ.get("SHLEPA_SALVAGE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "off",
+    )
+
+
+def _resolve_deliverable_spec(state: RunState) -> dict[str, Any] | None:
+    """Best-known deliverable spec after WORK.
+
+    The plan's ``artifact_spec`` wins; ``WorkResult.deliverable`` fills a
+    missing path (and is the only source when the plan produced no typed
+    output). Returns None when no path is known (the gate then stays off).
+    """
+    spec: ArtifactSpec | None = None
+    plan = state.results.get("plan")
+    if plan is not None and plan.output is not None:
+        out = plan.output
+        raw = getattr(out, "artifact_spec", None)
+        if raw is None and isinstance(out, dict):
+            raw = out.get("artifact_spec")
+        spec = ArtifactSpec.from_any(raw)
+    work = state.results.get("work")
+    work_path = ""
+    if work is not None and work.output is not None:
+        out = work.output
+        work_path = getattr(out, "deliverable", "") or ""
+        if not work_path and isinstance(out, dict):
+            work_path = out.get("deliverable") or ""
+    if work_path:
+        if spec is None:
+            spec = ArtifactSpec(path=work_path)
+        elif not spec.path:
+            spec = ArtifactSpec(
+                kind=spec.kind,
+                path=work_path,
+                format=spec.format,
+                keys=spec.keys,
+                expected_content=spec.expected_content,
+            )
+    if spec is None or not spec.path:
+        return None
+    return {
+        "kind": spec.kind,
+        "path": spec.path,
+        "format": spec.format,
+        "keys": list(spec.keys),
+        "expected_content": spec.expected_content,
+    }
+
+
+def _post_work_check(state: RunState) -> None:
+    """Resolve the deliverable spec after WORK and run the mechanical check.
+
+    Stores both in the run state (``deliverable_spec`` / ``deliverable_check``)
+    for the salvage gate and, eventually, the REVIEW context packet. Never
+    raises: a check failure must not break the run.
+    """
+    try:
+        spec = _resolve_deliverable_spec(state)
+        state.deliverable_spec = spec
+        if spec is None:
+            state.deliverable_check = None
+            return
+        state.deliverable_check = check_deliverable(
+            state.deps.workdir, spec
+        ).to_dict()
+    except Exception as e:  # pragma: no cover - defensive
+        _log_event("agent_error", error=f"post-work check: {type(e).__name__}: {str(e)[:200]}")
+        state.deliverable_check = None
+
+
+def _salvage_needed(state: RunState) -> bool:
+    """Salvage fires only on a missing/empty deliverable with a known path."""
+    check = state.deliverable_check
+    if not check or not state.deliverable_spec:
+        return False
+    if check.get("exists") and check.get("non_empty"):
+        return False
+    if "salvage" not in state.cfg.phases:
+        return False  # not configured (e.g. dev test configs)
+    return _salvage_enabled()
+
+
+def _persist_salvage_body(state: RunState) -> None:
+    """Persist the salvage final_result.body if the file is still absent.
+
+    Atomic (tmp file in the same directory + os.replace). A file the model
+    itself wrote wins — the body is only the fallback.
+    """
+    spec = state.deliverable_spec
+    result = state.results.get("salvage")
+    if not spec or result is None or result.status != "done" or result.output is None:
+        return
+    out = result.output
+    body = getattr(out, "body", "") or ""
+    if not body and isinstance(out, dict):
+        body = out.get("body") or ""
+    if not body:
+        return
+    path = Path(spec["path"])
+    if not path.is_absolute():
+        path = state.deps.workdir / path
+    if path.is_file() and path.stat().st_size > 0:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".salvage-tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, path)
+        _log_event("salvage_persist", path=str(path), chars=len(body))
+    except OSError as e:
+        _log_event("agent_error", error=f"salvage persist: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Pipeline walk
 # ---------------------------------------------------------------------------
 
@@ -678,18 +801,31 @@ async def _pipeline(
                 final_status = "done"
                 phase_id = "work"
             continue
+        if phase.id == "salvage":
+            # v6 (w2-3): salvage is done — persist the body fallback if the
+            # model never wrote the file, re-check (the refreshed result is
+            # what REVIEW sees), then hand off to the terminal review.
+            # A salvage timeout/error never triggers final_ask: salvage
+            # IS the rescue.
+            _persist_salvage_body(state)
+            _post_work_check(state)
+            phase_id = "commit"
+            continue
         if result.status == "timeout":
             # WORK time cap / context-limit breach (unchanged from v5): one
             # toolless final_ask on the same conversation, then hand off to
-            # the terminal review.
+            # the terminal review (via the salvage gate when the
+            # deliverable is missing/empty, w2-3).
             with _phase_context(phase.id):
                 await _final_ask(state, phase)
             final_status = "timeout"
-            phase_id = "commit"
+            _post_work_check(state)
+            phase_id = "salvage" if _salvage_needed(state) else "commit"
             continue
         if result.status == "error":
             final_status = "error"
-            phase_id = "commit"
+            _post_work_check(state)
+            phase_id = "salvage" if _salvage_needed(state) else "commit"
             continue
         if phase.id == "plan":
             # v6: the plan -> commit shortcut is gone — every done plan
@@ -699,8 +835,10 @@ async def _pipeline(
             final_status = "done"
             continue
         # work -> review (there is no decision in WorkResult; the review's
-        # verdict decides done vs. a new cycle).
-        phase_id = "commit"
+        # verdict decides done vs. a new cycle). The post-work gate (w2-3)
+        # routes through salvage first when the deliverable is missing/empty.
+        _post_work_check(state)
+        phase_id = "salvage" if _salvage_needed(state) else "commit"
         final_status = "done"
         continue
 

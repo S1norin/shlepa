@@ -113,6 +113,17 @@ soft_tokens = 20000
 reasoning_effort = "low"
 max_retries = 0
 
+[phases.salvage]
+# v6 (w2-3): write-only rescue after WORK left the deliverable missing or
+# empty on disk. Fresh context, one tool (write), 30 s explicit cap (the
+# regime has no salvage constant — the explicit `time` IS the cap). The
+# harness persists final_result.body atomically if the model never wrote
+# the file. Kill-switch: SHLEPA_SALVAGE=0.
+tools = ["write"]
+requests = 5
+time = 30.0
+max_retries = 0
+
 [phases.emergency]
 # UNUSED in v5 (kept for compatibility): the v4 terminal rescue. The runner
 # never routes to it.

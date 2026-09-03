@@ -239,7 +239,7 @@ def test_phase_context_stamps_spans_with_phase_id():
 
 
 def test_run_prompt_phase_spans_carry_phase_id(monkeypatch, stub_openai, tmp_path):
-    """End-to-end: LLM spans of a 3-phase run carry the right phase labels."""
+    """End-to-end: LLM spans of the stub pipeline run carry the right phase labels."""
     import asyncio
 
     from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, stub_state
@@ -275,8 +275,10 @@ def test_run_prompt_phase_spans_carry_phase_id(monkeypatch, stub_openai, tmp_pat
         for s in exporter.get_finished_spans()
         if s.attributes.get("shlepa.phase_id")
     }
-    # The stub pipeline runs plan -> work -> commit.
-    assert labeled == {"plan", "work", "commit"}, (
+    # The stub pipeline runs plan -> work -> salvage -> commit: the default
+    # config's post-work gate (w2-3) fires because the stub work phase never
+    # writes hello.txt to disk.
+    assert labeled == {"plan", "work", "salvage", "commit"}, (
         f"unexpected phase labels: {labeled}"
     )
     # Every labeled span sits under the root span (same trace).
