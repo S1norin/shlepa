@@ -1,7 +1,7 @@
 # C′ experiment protocol: in-zip static embedder (vtx-embed) vs BM25
 
 Reviewed: 2026-09-03
-Status: protocol — runs 2026-09-03; results → `vtx-results.md` (new).
+Status: executed 2026-09-03 — results in `vtx-results.md`.
 
 What the C′ experiment (fit-matrix recommendation rev 2) measures, how
 it runs, and how to read the outcome. Model verification, zip-size math
