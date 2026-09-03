@@ -288,6 +288,21 @@ def test_verify_prompt_is_fresh_not_transcript(monkeypatch, tmp_path):
     assert "secret work transcript content" not in prompt
 
 
+def test_commit_prompt_binary_framing():
+    # w2-7: the REVIEW prompt carries the binary 1/0 scoring framing and
+    # the named-check requirement; the old soft "partial is better than
+    # nothing" framing is gone.
+    from shlepa_agent.template import load_prompt
+
+    prompt = load_prompt("commit.md")
+    assert "SCORING IS BINARY" in prompt
+    assert "exactly 1" in prompt and "exactly 0" in prompt
+    assert "NAME the specific check" in prompt
+    assert "repair_scope" in prompt
+    assert "partial deliverable scores better" not in prompt.lower()
+    assert "best effort if partial" not in prompt
+
+
 def test_phase_limits_from_config():
     cfg = load_config()
     plan = PlanPhase().limits(cfg)
