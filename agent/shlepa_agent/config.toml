@@ -23,7 +23,9 @@ send_temp = false
 
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
-# budget.py (plan 30 / work 120 / review 45 / bash 30 / llm wall 180).
+# budget.py (plan 30 / work 120 / review 45 / bash 30 / llm wall 180;
+# plus the w3-2 finalization reserve — last 10 s of a phase cap disable
+# bash/search/recon, override: SHLEPA_FINALIZE_RESERVE, 0 = off).
 # There is NO task time limit T, NO global hard stop, NO request-start
 # gate, NO global token budget and NO request-count limit: token usage is
 # logged per request for analysis only.

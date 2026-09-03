@@ -21,7 +21,13 @@ from pathlib import Path
 from pydantic_ai import RunContext
 
 from shlepa_agent.log import _log_event
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result, resolve_path
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    finalizing_result,
+    format_tool_result,
+    resolve_path,
+)
 
 #: Hard char cap on the result body.
 DEFAULT_MAX_OUTPUT = 8192
@@ -150,6 +156,12 @@ async def search(
     large dirs are scanned for at most 10 s (partial results + a note).
     pattern is required for grep/glob; for ls pass path= the directory."""
     t0 = time.monotonic()
+    # w3-2: inside the finalization reserve search is not executed.
+    blocked = finalizing_result(
+        ctx, "search", t0, args={"mode": mode, "pattern": pattern, "path": path}
+    )
+    if blocked is not None:
+        return blocked
     scfg = ctx.deps.cfg.tools.search
     max_output = scfg.max_output or DEFAULT_MAX_OUTPUT
     if not pattern and mode != "ls":

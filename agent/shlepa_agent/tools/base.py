@@ -62,6 +62,19 @@ class RepairScope:
     mutations_used: int = 0
 
 
+@dataclass
+class PhaseWindow:
+    """The current phase's wall-clock window (w3-2 finalization reserve).
+
+    ``start`` is ``time.monotonic()`` at phase entry; the reserve starts
+    when ``cap - (now - start)`` drops below ``finalize_reserve()``.
+    """
+
+    phase_id: str
+    cap: float
+    start: float
+
+
 @dataclass(frozen=True)
 class AgentDeps:
     """Per-run dependencies handed to every tool call via RunContext.deps."""
@@ -78,6 +91,9 @@ class AgentDeps:
     #: Repeated identical failed tool calls are compressed in the result
     #: forwarded to the model (the 1st occurrence is never compressed).
     ledger: dict[str, int] = field(default_factory=dict)
+    #: The current phase window (w3-2); None outside a phase (the
+    #: finalization reserve guard is then inert).
+    phase_window: PhaseWindow | None = field(default=None)
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.
@@ -125,6 +141,41 @@ def _ledger_compress(
         "The full result was already shown at the first occurrence — do not "
         "repeat this exact call; change approach."
     ), count
+
+
+def finalizing_result(
+    ctx: "RunContext[AgentDeps]",
+    name: str,
+    started: float,
+    args: Mapping[str, Any] | None = None,
+) -> str | None:
+    """w3-2: if the current phase is inside its finalization reserve,
+    return a synthetic FINALIZING result for an exploratory tool call
+    (bash/search/recon) WITHOUT executing it; None otherwise.
+
+    write/edit (and read) are intentionally untouched — finishing the
+    deliverable must keep working.
+    """
+    from shlepa_agent.budget import finalize_reserve
+
+    w = ctx.deps.phase_window
+    if w is None:
+        return None
+    remaining = w.cap - (time.monotonic() - w.start)
+    if remaining > finalize_reserve():
+        return None
+    return format_tool_result(
+        ctx,
+        name,
+        "<not executed>",
+        started,
+        args=args,
+        failed=(
+            f"FINALIZING: {name} is disabled in the last "
+            f"{finalize_reserve():g}s of the {w.phase_id} phase — "
+            "write the deliverable now"
+        ),
+    )
 
 
 def format_tool_result(

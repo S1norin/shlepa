@@ -24,7 +24,12 @@ from pathlib import Path
 from pydantic_ai import RunContext
 
 from shlepa_agent.log import _log_event, _truncate
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    finalizing_result,
+    format_tool_result,
+)
 
 #: Hard per-call wall cap for the recon script.
 RECON_TIMEOUT_S = 25.0
@@ -95,6 +100,12 @@ async def recon(
     call is killed at 25 s (a url crawl may be cut short — fall back to
     targeted reads/search for what it missed)."""
     t0 = time.monotonic()
+    # w3-2: inside the finalization reserve recon is not executed.
+    blocked = finalizing_result(
+        ctx, "recon", t0, args={"mode": mode, "target": target}
+    )
+    if blocked is not None:
+        return blocked
     rcfg = ctx.deps.cfg.tools.recon
     max_output = rcfg.max_output or DEFAULT_MAX_OUTPUT
     _log_event("tool_call", tool="recon", mode=mode, target=target)

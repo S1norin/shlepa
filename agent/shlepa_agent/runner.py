@@ -78,7 +78,7 @@ from shlepa_agent.state import extract_last_tools, save_state
 from shlepa_agent.test_guard import bootstrap_test_hashes, check_test_hashes
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
-from shlepa_agent.tools.base import RepairScope
+from shlepa_agent.tools.base import PhaseWindow, RepairScope
 
 #: Hard cap for the one-shot final_ask request after a phase time-out.
 FINAL_ASK_CAP_S = 30.0
@@ -320,6 +320,10 @@ async def _run_phase(
     limits = phase.limits(cfg)
     cap = _phase_cap(phase.id, limits, cfg)
     t0 = time.monotonic()
+    # w3-2: expose the phase window to the tools so the finalization
+    # reserve can disable exploratory calls (bash/search/recon) in the
+    # last R seconds of the cap.
+    state.deps = replace(state.deps, phase_window=PhaseWindow(phase.id, cap, t0))
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort

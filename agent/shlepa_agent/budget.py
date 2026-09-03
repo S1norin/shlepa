@@ -37,11 +37,29 @@ Pure stdlib; no agent-specific imports.
 """
 from __future__ import annotations
 
+import os
+
 PLAN_CAP = 30.0
 WORK_CAP = 120.0
 REVIEW_CAP = 45.0  # review-stage envelope (v6: sum of the subcaps)
 BASH_MAX = 30.0
 LLM_WALL = 180.0
+#: v6 (w3-2): finalization reserve — in the last R seconds of a phase cap
+#: the exploratory tools (bash/search/recon) are disabled so the model
+#: spends the window finalizing the deliverable instead of exploring.
+FINALIZE_RESERVE = 10.0
+
+
+def finalize_reserve() -> float:
+    """w3-2: the reserve, honoring the SHLEPA_FINALIZE_RESERVE override
+    (seconds; 0 disables the reserve)."""
+    v = os.environ.get("SHLEPA_FINALIZE_RESERVE")
+    if v is not None:
+        try:
+            return max(0.0, float(v))
+        except ValueError:
+            pass
+    return FINALIZE_RESERVE
 
 # v6 (w2-6) review-stage subcaps: VERIFY / REPAIR / decide each run as a
 # separate request under the 45 s envelope, so the envelope kill can never
@@ -69,4 +87,5 @@ def regime() -> dict[str, float]:
         "review_subcap_decide": REVIEW_SUBCAP_DECIDE,
         "bash": BASH_MAX,
         "llm_wall": LLM_WALL,
+        "finalize_reserve": finalize_reserve(),
     }

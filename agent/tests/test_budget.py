@@ -43,4 +43,7 @@ def test_regime_snapshot():
         "review_subcap_decide": 10.0,
         "bash": 30.0,
         "llm_wall": 180.0,
+        # w3-2: finalization reserve (last R s of a phase cap ->
+        # exploratory tools disabled).
+        "finalize_reserve": 10.0,
     }
