@@ -112,7 +112,13 @@ class StubHandler(BaseHTTPRequestHandler):
             "created": 1700000000,
             "model": "stub-model",
         }
-        usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        # Per-step usage override (opt-in): tool-call responses carry no
+        # usage by default, so tests that need cumulative token accounting
+        # in a tool loop set "usage" on their script steps. The streaming
+        # tool-call branch only attaches it when the step opted in.
+        default_usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        usage = step.get("usage") or default_usage
+        has_usage = step.get("usage") is not None
         if not body.get("stream"):
             if tool_call:
                 message = {
@@ -203,6 +209,7 @@ class StubHandler(BaseHTTPRequestHandler):
                     **base,
                     "object": "chat.completion.chunk",
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                    **({"usage": usage} if has_usage else {}),
                 },
             ]
         else:
