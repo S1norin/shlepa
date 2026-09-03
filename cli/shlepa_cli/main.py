@@ -65,7 +65,7 @@ def run(
         help=(
             "Toolset arm for the batch (named toolset, see "
             "agent/shlepa_agent/toolsets.py): baseline, +smart-grep, +sifs, "
-            "+forensics. "
+            "+forensics, +mitre-kb. "
             "Default: the AGENT_TOOLSET env var, else baseline. Passed into "
             "the container as AGENT_TOOLSET and tagged on every MLflow run "
             "as toolset=<arm>."
