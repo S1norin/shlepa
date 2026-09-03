@@ -65,10 +65,11 @@ from shlepa_agent.log import (
     _log_stream_event,
 )
 from shlepa_agent.model import BudgetExceeded, TrackedModel
+from shlepa_agent.outputs import PartialHandoff
 from shlepa_agent.phases import get_phase
 from shlepa_agent.phases.base import Phase, PhaseResult, RunState
 from shlepa_agent.phases.commit import trim_history
-from shlepa_agent.state import save_state
+from shlepa_agent.state import extract_last_tools, save_state
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
 
@@ -140,6 +141,17 @@ FINAL_ASK_MESSAGE = (
     "deliverable NOW to the exact path in the exact format using only the "
     "information you already have. Do not call any tools and do not think "
     "any further: reply with one short line naming the deliverable path."
+)
+
+
+PARTIAL_HANDOFF_MESSAGE = (
+    "\u23f1\ufe0f TIME LIMIT REACHED for this phase. Do not call any tools. "
+    "Now emit the partial_handoff: summarize everything established so far — "
+    "the deliverable objective (path/format/required values), key findings "
+    "with their evidence locations, files already seen, working hypotheses, "
+    "approaches already tried and rejected, and the single most valuable next "
+    "action. A work phase starts fresh from this hand-off: be concrete and "
+    "evidence-based, no fluff. Leave a field empty rather than guessing."
 )
 
 
@@ -399,6 +411,7 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
         "final_ask",
         phase=phase.id,
         start=True,
+        mode="off",  # the v5 toolless message (no typed hand-off)
         cap_s=round(cap, 1),
         history_messages=len(history or []),
         elapsed_s=round(model.elapsed(), 1),
@@ -419,7 +432,10 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
                             text = str(out)
             model.log_pending_usage()
             _stamp_final_ask(span, ok=True, text=text)
-            _log_event("final_ask", phase=phase.id, ok=True, elapsed_s=round(model.elapsed(), 1))
+            _log_event(
+                "final_ask", phase=phase.id, ok=True, mode="off",
+                elapsed_s=round(model.elapsed(), 1),
+            )
         except (TimeoutError, asyncio.TimeoutError):
             model.log_pending_usage()
             _stamp_final_ask(span, ok=False, reason="time cap")
@@ -427,6 +443,7 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
                 "final_ask",
                 phase=phase.id,
                 ok=False,
+                mode="off",
                 reason="time cap",
                 elapsed_s=round(model.elapsed(), 1),
             )
@@ -437,8 +454,107 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
                 "final_ask",
                 phase=phase.id,
                 ok=False,
+                mode="off",
                 error=f"{type(e).__name__}: {str(e)[:200]}",
             )
+
+
+async def _plan_handoff(state: RunState, phase: Phase) -> None:
+    """Plan-timeout hand-off (v6): one toolless final_ask, then store the
+    hand-off payload in ``state.plan_handoff`` for the work prompt.
+
+    With ``agent.handoff = "partial"`` (the v6 default) the final_ask is
+    typed: it emits a ``PartialHandoff`` via the ``final_result`` output
+    tool. Independently of the model's answer, the harness extracts the
+    deterministic LAST_TOOLS tail of the plan conversation — key evidence
+    survives even when the summary is weak. With ``handoff = "off"`` the
+    v5 final_ask message is used and nothing is stored (A1 arm).
+    """
+    cfg = state.cfg
+    model = state.model
+    mode = (cfg.agent.handoff or "partial").lower()
+    typed = mode != "off"
+    cap = FINAL_ASK_CAP_S
+    history = trim_history(model.last_messages) or None
+    kwargs: dict[str, Any] = {}
+    if typed:
+        kwargs["output_type"] = PartialHandoff
+    agent = Agent(
+        model,
+        deps_type=AgentDeps,
+        system_prompt=_system_prompt(cfg, phase, state.task),
+        **kwargs,
+    )
+    message = PARTIAL_HANDOFF_MESSAGE if typed else FINAL_ASK_MESSAGE
+    _log_event(
+        "final_ask",
+        phase=phase.id,
+        start=True,
+        mode=mode,
+        cap_s=round(cap, 1),
+        history_messages=len(history or []),
+        elapsed_s=round(model.elapsed(), 1),
+    )
+    handoff_json: str | None = None
+    with _final_ask_span_ctx(phase.id, message) as span:
+        output: Any = None
+        text = ""
+        try:
+            async with asyncio.timeout(cap):
+                async with agent.run_stream_events(
+                    message,
+                    deps=state.deps,
+                    model_settings=_model_settings(cfg),
+                    message_history=history,
+                ) as events:
+                    async for event in events:
+                        out = _log_stream_event(event)
+                        if out is not None:
+                            output = out
+                            text = str(out)
+            model.log_pending_usage()
+            if typed:
+                if isinstance(output, PartialHandoff):
+                    handoff_json = output.model_dump_json()
+                else:
+                    _log_event(
+                        "agent_error", error="plan handoff: missing typed output"
+                    )
+            _stamp_final_ask(span, ok=True, text=text or (handoff_json or ""))
+            _log_event(
+                "final_ask",
+                phase=phase.id,
+                ok=True,
+                mode=mode,
+                elapsed_s=round(model.elapsed(), 1),
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            model.log_pending_usage()
+            _stamp_final_ask(span, ok=False, reason="time cap")
+            _log_event(
+                "final_ask",
+                phase=phase.id,
+                ok=False,
+                mode=mode,
+                reason="time cap",
+                elapsed_s=round(model.elapsed(), 1),
+            )
+        except Exception as e:
+            model.log_pending_usage()
+            _stamp_final_ask(span, ok=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+            _log_event(
+                "final_ask",
+                phase=phase.id,
+                ok=False,
+                mode=mode,
+                error=f"{type(e).__name__}: {str(e)[:200]}",
+            )
+    if not typed:
+        return  # "off": v5 behavior — no hand-off block
+    state.plan_handoff = {
+        "handoff": handoff_json,
+        "last_tools": extract_last_tools(model.last_messages),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -540,9 +656,32 @@ async def _pipeline(
                 final_status if final_status in ("timeout", "error") else "done",
                 output,
             )
+        if phase.id == "plan" and result.status in ("timeout", "error"):
+            # v6 routing invariant: every failed plan reaches WORK (a fresh
+            # run), never the review shortcut. The dev knob
+            # SHLEPA_ROUTE_PLAN_TIMEOUT=commit restores the v5 routes
+            # (timeout: final_ask -> review; error -> review) for A0.
+            route = (state.cfg.agent.route_plan_failure or "work").lower()
+            if route == "commit":
+                if result.status == "timeout":
+                    with _phase_context(phase.id):
+                        await _final_ask(state, phase)
+                final_status = result.status
+                phase_id = "commit"
+            else:
+                if result.status == "timeout":
+                    with _phase_context(phase.id):
+                        await _plan_handoff(state, phase)
+                # WORK gets a note about the failed plan (error) or the
+                # hand-off block (timeout); the review verdict is decisive
+                # for the final status.
+                final_status = "done"
+                phase_id = "work"
+            continue
         if result.status == "timeout":
-            # Time cap / context-limit breach: one toolless final_ask on the
-            # same conversation, then hand off to the terminal review.
+            # WORK time cap / context-limit breach (unchanged from v5): one
+            # toolless final_ask on the same conversation, then hand off to
+            # the terminal review.
             with _phase_context(phase.id):
                 await _final_ask(state, phase)
             final_status = "timeout"
@@ -553,12 +692,10 @@ async def _pipeline(
             phase_id = "commit"
             continue
         if phase.id == "plan":
-            if getattr(result.output, "decision", None) == "commit":
-                # Trivial task: the plan already knows the answer — the
-                # review verifies it (terminal).
-                phase_id = "commit"
-            else:
-                phase_id = "work"
+            # v6: the plan -> commit shortcut is gone — every done plan
+            # flows to WORK (the w1-7 follow-up removes the now-unused
+            # `decision` field from PlanResult).
+            phase_id = "work"
             final_status = "done"
             continue
         # work -> review (there is no decision in WorkResult; the review's

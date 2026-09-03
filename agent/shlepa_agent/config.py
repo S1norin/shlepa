@@ -39,6 +39,17 @@ class AgentSection(BaseModel):
     temp: float = 0.6
     #: Send ``temp`` in model settings (env: SHLEPA_SEND_TEMP, 1/0).
     send_temp: bool = False
+    #: Plan-failure routing (v6, env: SHLEPA_ROUTE_PLAN_TIMEOUT).
+    #: "work" (default) — every failed plan (timeout or error) flows into
+    #: WORK; "commit" — v5 routing (timeout: final_ask -> review;
+    #: error -> review), kept for the A0 baseline arm.
+    route_plan_failure: str = "work"
+    #: Plan-timeout hand-off mode (v6, env: SHLEPA_HANDOFF).
+    #: "partial" (default) — the timeout final_ask is typed (emits a
+    #: PartialHandoff) and WORK receives the hand-off JSON plus the
+    #: harness's deterministic LAST_TOOLS block; "off" — the v5 final_ask
+    #: message, no hand-off block (A1 arm).
+    handoff: str = "partial"
 
 
 class BudgetConfig(BaseModel):
@@ -170,6 +181,8 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
     "SHLEPA_PLAN_TIME": ("phases.plan.time", float),
     "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
+    "SHLEPA_ROUTE_PLAN_TIMEOUT": ("agent.route_plan_failure", str),
+    "SHLEPA_HANDOFF": ("agent.handoff", str),
 }
 
 

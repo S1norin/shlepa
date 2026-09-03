@@ -72,6 +72,11 @@ class RunState:
     results: dict[str, PhaseResult] = field(default_factory=dict)
     #: Completed plan->work cycles (replan count).
     cycles: int = 0
+    #: v6 plan-timeout hand-off payload, set by the runner when a plan
+    #: timeout is routed to WORK: {"handoff": <PartialHandoff JSON or None>,
+    #: "last_tools": [LAST_TOOLS entries]}. Rendered into the work prompt;
+    #: None for normal plans and for ``SHLEPA_HANDOFF=off``.
+    plan_handoff: dict[str, Any] | None = field(default=None)
 
     @property
     def cfg(self) -> AgentConfig:

@@ -148,6 +148,36 @@ def _work_step():
     }
 
 
+def _handoff_step():
+    # The typed partial_handoff final_ask answer (plan-timeout hand-off, v6).
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "objective": "write /app/hello.txt with the content hello",
+                "findings": ["task wants hello.txt (task statement)"],
+                "files_seen": ["/app/task.txt"],
+                "hypotheses": [],
+                "failed_paths": [],
+                "next_action": "write the file and verify it",
+                "deliverable_path_if_known": "/app/hello.txt",
+            },
+        }
+    }
+
+
+def _bad_plan():
+    step = _plan_step("work")
+    step["tool_call"]["arguments"]["steps"] = "not-a-list"  # invalid PlanResult
+    return step
+
+
+def _bad_work():
+    step = _work_step()
+    step["tool_call"]["arguments"]["confidence"] = "high"  # invalid: float
+    return step
+
+
 def _review_step(status="ok", verdict="done"):
     return {
         "tool_call": {
@@ -260,13 +290,15 @@ def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events)
     assert not (tmp_path / "hello.txt").exists()
 
 
-def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [_plan_step("commit"), _review_step()]
+def test_trivial_plan_still_flows_through_work(monkeypatch, stub_openai, tmp_path, events):
+    # v6 routing invariant: the plan -> commit shortcut is gone — even a
+    # trivial plan (decision="commit") flows PLAN -> WORK -> REVIEW.
+    stub_state["script"] = [_plan_step("commit"), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
-    assert not _phase_starts(events, "work")  # work was skipped
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 2
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work", "commit"]
+    assert len(stub_state["bodies"]) == 3
 
 
 def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, events):
@@ -335,17 +367,19 @@ def test_commit_time_cap_reports_timeout(
     assert _status(events) == "timeout"
 
 
-def test_plan_time_cap_triggers_final_ask_then_review(
-    monkeypatch, stub_openai, tmp_path, events
-):
+def test_plan_time_cap_handoff_to_work(monkeypatch, stub_openai, tmp_path, events):
+    # v6: a plan cut by its cap gets ONE toolless final_ask (typed
+    # partial_handoff), then routes to WORK (a fresh run) — the review is
+    # reached only through a completed work phase.
     stub_state["script"] = [
         {"delay": 2.5, "final": "too slow — plan timed out"},
-        {"final": "FINAL-ASK: wrote hello.txt"},
-        _review_step(),  # v5: a plan breach hands off straight to the review
+        _handoff_step(),
+        _work_step(),
+        _review_step(),
     ]
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "timeout"  # plan was cut by its cap
+    assert _status(events) == "done"  # plan was cut, but work + review finished
     # the test config has send_temp on: every request (incl. final_ask) sends it
     assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
     # plan was cut by its hard cap (budget), NOT retried
@@ -353,24 +387,151 @@ def test_plan_time_cap_triggers_final_ask_then_review(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
     )
     assert not [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
-    # one toolless final_ask on the plan conversation, then the terminal review
+    # one typed final_ask on the plan conversation, then the work phase
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
     assert asks[0].get("start") is True
+    assert asks[0].get("mode") == "partial"
     assert asks[-1].get("ok") is True
-    assert not _phase_starts(events, "work")
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 3
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work", "commit"]
+    assert len(stub_state["bodies"]) == 4
+    # WORK's user message carries the cut-off note + the hand-off JSON.
+    work_text = json.dumps(stub_state["bodies"][2])
+    assert "cut off by its time cap" in work_text
+    assert "PARTIAL HANDOFF" in work_text
+    assert "deliverable_path_if_known" in work_text
     # KV-cache reuse: the final_ask request prefix is byte-identical to the
     # plan phase's last request (same system message, same history prefix).
     bodies = stub_state["bodies"]
     fa = next(
         b
         for b in bodies
-        if any("HARD TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"])
+        if any(
+            "TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"]
+        )
     )
     plan = bodies[0]
     assert fa["messages"][0] == plan["messages"][0]  # system: byte-identical
     assert fa["messages"][:-1] == plan["messages"][:-1]  # history prefix
+
+
+def test_plan_time_cap_v5_routing_under_knobs(monkeypatch, stub_openai, tmp_path, events):
+    # A0 baseline arm: SHLEPA_ROUTE_PLAN_TIMEOUT=commit + SHLEPA_HANDOFF=off
+    # reproduce the v5 routes — the v5 final_ask message, no hand-off block,
+    # and the review straight after (work never starts).
+    monkeypatch.setenv("SHLEPA_ROUTE_PLAN_TIMEOUT", "commit")
+    monkeypatch.setenv("SHLEPA_HANDOFF", "off")
+    stub_state["script"] = [
+        {"delay": 2.5, "final": "too slow — plan timed out"},
+        {"final": "FINAL-ASK: wrote hello.txt"},
+        _review_step(),
+    ]
+    cfg = _cfg(tmp_path, plan_time=1.0)
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    assert _status(events) == "timeout"  # v5: a plan breach ends "timeout"
+    asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
+    assert asks and asks[0].get("mode") == "off"
+    assert not _phase_starts(events, "work")
+    assert _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 3
+
+
+def test_plan_error_routes_to_work(monkeypatch, stub_openai, tmp_path, events):
+    # v6: a plan that fails after its retries still reaches WORK, with a
+    # direct-execution note (there is no plan to follow). Each failed plan
+    # attempt consumes two stub steps (initial output call + one output
+    # retry), so the script carries two bad steps per attempt.
+    stub_state["script"] = [*(_bad_plan() for _ in range(4)), _work_step(), _review_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "done"  # work + review finished the task
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    # the plan retry happens inside the plan phase (one start event)
+    assert starts == ["plan", "work", "commit"]
+    assert any(
+        e.get("event") == "phase_retry" and e.get("phase") == "plan" for e in events
+    )
+    work_text = json.dumps(stub_state["bodies"][4])
+    assert "the plan phase failed" in work_text
+    assert "execute the task directly" in work_text
+
+
+# -- v6 routing invariant: table-driven coverage of all plan/work outcomes ---
+V6_ROUTING_CASES = [
+    {
+        "name": "plan_done_work",
+        "script": [_plan_step("work"), _work_step(), _review_step()],
+        "cfg": {},
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        "name": "plan_done_commit_shortcut_gone",
+        "script": [_plan_step("commit"), _work_step(), _review_step()],
+        "cfg": {},
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        "name": "plan_timeout_handoff_to_work",
+        "script": [
+            {"delay": 2.5, "final": "slow plan"},
+            _handoff_step(),
+            _work_step(),
+            _review_step(),
+        ],
+        "cfg": {"plan_time": 1.0},
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        "name": "plan_error_direct_execution",
+        # 2 failed plan attempts x 2 output calls each, then work + review.
+        "script": [*(_bad_plan() for _ in range(4)), _work_step(), _review_step()],
+        "cfg": {},
+        # the plan retry happens inside the plan phase (one start event)
+        "phases": ["plan", "work", "commit"],
+        "status": "done",
+    },
+    {
+        "name": "work_timeout_final_ask_review",
+        "script": [
+            _plan_step("work"),
+            {"delay": 2.5, "final": "slow work"},
+            {"final": "FINAL-ASK: wrote hello.txt"},
+            _review_step(),
+        ],
+        "cfg": {"work_time": 1.0},
+        "phases": ["plan", "work", "commit"],
+        "status": "timeout",
+    },
+    {
+        "name": "work_error_review",
+        # 2 failed work attempts x 2 output calls each, then the review.
+        "script": [
+            _plan_step("work"),
+            *(_bad_work() for _ in range(4)),
+            _review_step(),
+        ],
+        "cfg": {},
+        # the work retry happens inside the work phase (one start event)
+        "phases": ["plan", "work", "commit"],
+        "status": "error",
+    },
+]
+
+
+@pytest.mark.parametrize(
+    "case", V6_ROUTING_CASES, ids=[case["name"] for case in V6_ROUTING_CASES]
+)
+def test_v6_routing_table(monkeypatch, stub_openai, tmp_path, events, case):
+    # The v6 default knobs route every plan outcome to WORK and keep the
+    # v5 work-timeout/error routes to the review.
+    stub_state["script"] = case["script"]
+    cfg = _cfg(tmp_path, **case["cfg"])
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == case["phases"], case["name"]
+    assert _status(events) == case["status"], case["name"]
 
 
 def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, tmp_path, events):
