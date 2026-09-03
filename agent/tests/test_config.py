@@ -150,6 +150,33 @@ def test_search_tool_env_toggle(monkeypatch):
     assert load_config().tools.search.enabled is True  # invalid: ignored
 
 
+def test_v6_routing_and_handoff_knobs(monkeypatch):
+    # v6 A/B knobs: SHLEPA_ROUTE_PLAN_TIMEOUT (work|commit) and
+    # SHLEPA_HANDOFF (partial|off) — each appears in ENV_OVERRIDES with a
+    # type, ships with its v6 default, and overrides cleanly.
+    from shlepa_agent.config import ENV_OVERRIDES, _env_bool
+
+    assert ENV_OVERRIDES["SHLEPA_ROUTE_PLAN_TIMEOUT"] == ("agent.route_plan_failure", str)
+    assert ENV_OVERRIDES["SHLEPA_HANDOFF"] == ("agent.handoff", str)
+    assert ENV_OVERRIDES["SHLEPA_PLAN_TIME"] == ("phases.plan.time", float)
+    assert ENV_OVERRIDES["SHLEPA_SEARCH"] == ("tools.search.enabled", _env_bool)
+
+    cfg = load_config()  # v6 defaults
+    assert cfg.agent.route_plan_failure == "work"
+    assert cfg.agent.handoff == "partial"
+
+    monkeypatch.setenv("SHLEPA_ROUTE_PLAN_TIMEOUT", "commit")
+    monkeypatch.setenv("SHLEPA_HANDOFF", "off")  # A0: the v5 routes
+    cfg = load_config()
+    assert cfg.agent.route_plan_failure == "commit"
+    assert cfg.agent.handoff == "off"
+
+    monkeypatch.setenv("SHLEPA_ROUTE_PLAN_TIMEOUT", "garbage")
+    cfg = load_config()
+    assert cfg.agent.route_plan_failure == "garbage"  # the runner falls
+    # back to the v6 default (work) for unknown values
+
+
 def test_custom_path(tmp_path):
     import shutil
 
