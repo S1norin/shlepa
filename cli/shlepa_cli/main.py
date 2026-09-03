@@ -286,8 +286,17 @@ def clean(
     days: int = typer.Option(
         7, "--days", min=1, help="Max age in days (default 7)."
     ),
+    reconcile: bool = typer.Option(
+        False,
+        "--reconcile",
+        help="Also close dev-run MLflow runs stuck in PENDING/RUNNING.",
+    ),
 ) -> None:
-    """Remove tmp/ workspaces older than the given number of days."""
+    """Remove tmp/ workspaces older than the given number of days.
+
+    With --reconcile, also close dev-run task runs left in PENDING/RUNNING
+    (orphaned by a killed batch process) across all non-CI experiments.
+    """
     from shlepa_cli import clean as clean_module
     from shlepa_cli.config import get_settings
 
@@ -297,9 +306,17 @@ def clean(
     )
     if not removed:
         typer.echo("clean: nothing to remove")
-        return
     for path in removed:
         typer.echo(f"removed: {path}")
+    if reconcile:
+        from shlepa_cli.mlflow_client import get_mlflow_client
+
+        client = get_mlflow_client(settings)
+        closed = clean_module.reconcile_orphan_runs(client)
+        if not closed:
+            typer.echo("reconcile: no orphaned runs found")
+        for run_id in closed:
+            typer.echo(f"reconcile: closed orphaned run {run_id}")
 
 
 @app.command("help")
