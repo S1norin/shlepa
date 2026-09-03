@@ -50,6 +50,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -292,6 +293,23 @@ def _model_settings(cfg: AgentConfig) -> dict[str, Any]:
     return settings
 
 
+def _budget_header(
+    phase_id: str, elapsed_total: float, cap: float | None, phase_elapsed: float, prompt: str
+) -> str:
+    """w3-1: prepend ``[phase=<id> elapsed=<s> remaining=<s>]`` to a request.
+
+    Known quantities only: the phase's own wall-clock cap and the
+    monotonic clock — never a guessed per-task deadline or token budget.
+    """
+    if cap is None:
+        return prompt
+    remaining = max(0.0, cap - phase_elapsed)
+    return (
+        f"[phase={phase_id} elapsed={elapsed_total:.0f}s "
+        f"remaining={remaining:.0f}s]\n\n{prompt}"
+    )
+
+
 async def _run_phase(
     state: RunState, phase: Phase, agent: Agent
 ) -> PhaseResult:
@@ -300,6 +318,7 @@ async def _run_phase(
     model = state.model
     limits = phase.limits(cfg)
     cap = _phase_cap(phase.id, limits, cfg)
+    t0 = time.monotonic()
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort
@@ -315,9 +334,12 @@ async def _run_phase(
         )
     output: Any = None
     try:
+        prompt = _budget_header(
+            phase.id, model.elapsed(), cap, time.monotonic() - t0, phase.prompt(state)
+        )
         async with asyncio.timeout(cap):
             async with agent.run_stream_events(
-                phase.prompt(state),
+                prompt,
                 deps=state.deps,
                 model_settings=model_settings,
                 # v5: no UsageLimits — token and request-count limits are
@@ -421,12 +443,13 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
         history_messages=len(history or []),
         elapsed_s=round(model.elapsed(), 1),
     )
+    ask = _budget_header(phase.id, model.elapsed(), cap, 0.0, FINAL_ASK_MESSAGE)
     with _final_ask_span_ctx(phase.id, FINAL_ASK_MESSAGE) as span:
         text = ""
         try:
             async with asyncio.timeout(cap):
                 async with agent.run_stream_events(
-                    FINAL_ASK_MESSAGE,
+                    ask,
                     deps=state.deps,
                     model_settings=_model_settings(cfg),
                     message_history=history,
