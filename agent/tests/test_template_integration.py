@@ -33,7 +33,17 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
                     "goal": "write hello.txt with the content hello",
                     "findings": "",
                     "steps": ["write the file"],
-                    "decision": "commit",
+                },
+            }
+        },
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "summary": "wrote hello.txt",
+                    "findings": "",
+                    "deliverable": "hello.txt",
+                    "confidence": 1.0,
                 },
             }
         },
@@ -42,6 +52,7 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
                 "name": "final_result",
                 "arguments": {
                     "status": "ok",
+                    "verdict": "done",
                     "artifact": "hello.txt",
                     "checks": ["re-read -> matches"],
                     "notes": "wrote hello.txt",
@@ -87,7 +98,6 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
                 "arguments": {
                     "goal": "write /app/hello.txt",
                     "steps": ["echo hello > /app/hello.txt"],
-                    "decision": "work",
                 },
             }
         },

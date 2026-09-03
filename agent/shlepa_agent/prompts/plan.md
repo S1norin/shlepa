@@ -29,12 +29,11 @@ Then produce the plan via the final_result tool:
   approaches.
 - risks: the main things that could break this plan (wrong assumption, missing
   information) and how the work phase should handle them; empty if none.
-- decision: "work" in almost all cases; "commit" only if the answer is already
-  fully known and trivial to write. You still do NOT write the deliverable
-  file in this phase: the review phase continues your conversation, sees the
-  known answer in the goal, and writes + verifies the file itself.
 
-A review phase runs after the work phase and may send the run back to you
-(next_round) with hints — that feedback arrives in RESULTS OF PREVIOUS PHASES
+There is nothing to route: whatever the answer looks like, the work phase
+executes your plan next (even a trivial task — writing the file is the
+work phase's job), and a review phase runs after the work phase and may
+send the run back to you (next_round) with hints — that feedback arrives
+in RESULTS OF PREVIOUS PHASES
 together with the previous work result. Fix the plan accordingly; do not
 repeat what already failed.

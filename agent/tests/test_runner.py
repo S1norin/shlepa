@@ -118,7 +118,9 @@ blocks = ["system", "tools", "task", "extra", "previous_results",
     return load_config(p)
 
 
-def _plan_step(decision="work"):
+def _plan_step():
+    # v6: PlanResult carries no `decision` field (w1-7) — every plan flows
+    # to WORK; the former work|commit argument was removed.
     return {
         "tool_call": {
             "name": "final_result",
@@ -126,7 +128,6 @@ def _plan_step(decision="work"):
                 "goal": "write /app/hello.txt with the content hello",
                 "findings": "n/a",
                 "steps": ["write the file", "verify it"],
-                "decision": decision,
             },
         }
     }
@@ -167,7 +168,7 @@ def _handoff_step():
 
 
 def _bad_plan():
-    step = _plan_step("work")
+    step = _plan_step()
     step["tool_call"]["arguments"]["steps"] = "not-a-list"  # invalid PlanResult
     return step
 
@@ -248,7 +249,7 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
 # -- pipeline graph ---------------------------------------------------------
 def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         _review_step(),
     ]
@@ -272,7 +273,7 @@ def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events)
 
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "touch hello.txt"}}},
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         _review_step(),
     ]
@@ -292,8 +293,9 @@ def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events)
 
 def test_trivial_plan_still_flows_through_work(monkeypatch, stub_openai, tmp_path, events):
     # v6 routing invariant: the plan -> commit shortcut is gone — even a
-    # trivial plan (decision="commit") flows PLAN -> WORK -> REVIEW.
-    stub_state["script"] = [_plan_step("commit"), _work_step(), _review_step()]
+    # trivial plan (answer already known in PLAN) flows PLAN -> WORK ->
+    # REVIEW; the work phase is what writes the file.
+    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
     starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
@@ -305,10 +307,10 @@ def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, 
     # v5: no cycle cap — a "next_round" verdict starts a new plan/work
     # cycle while a full cycle (plan + work + review) fits the time left.
     stub_state["script"] = [
-        _plan_step("work"),          # plan, cycle 0
+        _plan_step(),                # plan, cycle 0
         _work_step(),
         _review_step(verdict="next_round"),
-        _plan_step("work"),          # plan, cycle 1 (review asked for it)
+        _plan_step(),                # plan, cycle 1 (review asked for it)
         _work_step(),
         _review_step(),              # done
     ]
@@ -329,7 +331,7 @@ def test_commit_api_failure_reports_timeout(
     # A review that dies on a persistent model error (HTTP 500) is a normal
     # hand-off: the run must end as "timeout", not "done".
     stub_state["script"] = [
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         {"error": 500},
     ]
@@ -345,7 +347,7 @@ def test_commit_invalid_verdict_reports_error(
     bad_review = _review_step()
     bad_review["tool_call"]["arguments"]["verdict"] = "explode"
     stub_state["script"] = [
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         bad_review,  # clamped by the stub: every retry sees the same bad step
     ]
@@ -359,7 +361,7 @@ def test_commit_time_cap_reports_timeout(
     # A review cut by its own time cap must end the run as "timeout",
     # not "done" (the previous work phase had succeeded).
     stub_state["script"] = [
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         {"delay": 2.5, "tool_call": _review_step()["tool_call"]},
     ]
@@ -459,14 +461,7 @@ def test_plan_error_routes_to_work(monkeypatch, stub_openai, tmp_path, events):
 V6_ROUTING_CASES = [
     {
         "name": "plan_done_work",
-        "script": [_plan_step("work"), _work_step(), _review_step()],
-        "cfg": {},
-        "phases": ["plan", "work", "commit"],
-        "status": "done",
-    },
-    {
-        "name": "plan_done_commit_shortcut_gone",
-        "script": [_plan_step("commit"), _work_step(), _review_step()],
+        "script": [_plan_step(), _work_step(), _review_step()],
         "cfg": {},
         "phases": ["plan", "work", "commit"],
         "status": "done",
@@ -495,7 +490,7 @@ V6_ROUTING_CASES = [
     {
         "name": "work_timeout_final_ask_review",
         "script": [
-            _plan_step("work"),
+            _plan_step(),
             {"delay": 2.5, "final": "slow work"},
             {"final": "FINAL-ASK: wrote hello.txt"},
             _review_step(),
@@ -508,7 +503,7 @@ V6_ROUTING_CASES = [
         "name": "work_error_review",
         # 2 failed work attempts x 2 output calls each, then the review.
         "script": [
-            _plan_step("work"),
+            _plan_step(),
             *(_bad_work() for _ in range(4)),
             _review_step(),
         ],
@@ -536,7 +531,7 @@ def test_v6_routing_table(monkeypatch, stub_openai, tmp_path, events, case):
 
 def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
-        _plan_step("work"),
+        _plan_step(),
         {"delay": 2.5, "final": "too slow — work timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
         _review_step(),
@@ -555,7 +550,7 @@ def test_step_guard_exhaustion_stops_run(monkeypatch, stub_openai, tmp_path, eve
     # max_steps=1 (dev knob): the plan phase runs, then the guard stops the
     # walk at the work boundary — with "timeout", no emergency routing.
     cfg = _cfg(tmp_path, max_steps=1)
-    stub_state["script"] = [_plan_step("work")]
+    stub_state["script"] = [_plan_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert _status(events) == "timeout"
     assert any(
@@ -584,7 +579,7 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
         return _FlakyPlan() if phase_id == "plan" else get_phase(phase_id)
 
     stub_state["script"] = [
-        _plan_step("work"),  # attempt 2 (attempt 1 dies before the request)
+        _plan_step(),        # attempt 2 (attempt 1 dies before the request)
         _work_step(),
         _review_step(),
     ]
@@ -603,7 +598,7 @@ def test_temperature_not_sent_by_default(monkeypatch, stub_openai, tmp_path, eve
 
     monkeypatch.delenv("SHLEPA_SEND_TEMP", raising=False)
     monkeypatch.delenv("SHLEPA_TEMP", raising=False)
-    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all("temperature" not in b for b in stub_state["bodies"])
@@ -615,7 +610,7 @@ def test_temperature_sent_when_send_temp_enabled(monkeypatch, stub_openai, tmp_p
     from shlepa_agent.config import load_config
 
     monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
-    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
@@ -628,7 +623,7 @@ def test_temperature_env_value_override(monkeypatch, stub_openai, tmp_path, even
 
     monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
     monkeypatch.setenv("SHLEPA_TEMP", "0.9")
-    stub_state["script"] = [_plan_step("commit"), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all(b.get("temperature") == 0.9 for b in stub_state["bodies"])
@@ -638,7 +633,7 @@ def test_temperature_env_value_override(monkeypatch, stub_openai, tmp_path, even
 def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "echo hi"}}},
-        _plan_step("work"),
+        _plan_step(),
         _work_step(),
         _review_step(),
     ]

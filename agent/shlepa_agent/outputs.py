@@ -46,12 +46,9 @@ class PlanResult(BaseModel):
             "Empty if none."
         ),
     )
-    decision: Literal["work", "commit"] = Field(
-        description=(
-            "'work' — execute the plan; 'commit' — the answer is already "
-            "fully known, write the deliverable now."
-        )
-    )
+    # v6: the former `decision` field (work|commit) is gone — the pipeline is
+    # strictly linear (every plan flows to WORK), so the plan carries no
+    # routing decision.
 
 
 class PartialHandoff(BaseModel):

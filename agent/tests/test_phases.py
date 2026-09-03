@@ -60,12 +60,24 @@ def test_phase_result_json_roundtrip():
 
 
 def test_phase_result_carries_typed_output():
-    plan = PlanResult(goal="write /app/out.txt", steps=["echo hi"], decision="work")
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo hi"])
     result = PhaseResult(status="done", summary=plan.model_dump_json(), output=plan)
-    assert result.output.decision == "work"
+    assert result.output.goal == "write /app/out.txt"
     # output is Any-typed: the JSON roundtrip keeps the data (as a dict)
     restored = PhaseResult.model_validate(json.loads(result.model_dump_json()))
-    assert restored.output["decision"] == "work"
+    assert restored.output["steps"] == ["echo hi"]
+
+
+def test_plan_result_has_no_routing_decision():
+    # v6: strictly linear pipeline — PlanResult carries no work|commit
+    # decision, and the plan prompt has no decision instructions.
+    assert "decision" not in PlanResult.model_fields
+    from shlepa_agent.phases.plan import PlanPhase
+
+    state = _state()
+    prompt = PlanPhase().prompt(state)
+    assert "decision" not in prompt
+    assert '"commit"' not in prompt  # no commit-shortcut instructions
 
 
 def test_run_state_holds_one_result_per_phase_and_cycles():
@@ -237,7 +249,6 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
     assert "PHASE INSTRUCTIONS" in prompt
     assert "PLAN PHASE" in prompt
     assert "final_result" in prompt  # output schema block
-    assert "decision" in prompt
     assert "30s" in prompt  # advisory limits (v6 plan cap)
     # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
@@ -280,7 +291,7 @@ def test_plan_prompt_on_replan_carries_review_hints():
 
 def test_work_prompt_carries_plan_result():
     state = _state()
-    plan = PlanResult(goal="write /app/out.txt", steps=["echo"], decision="work")
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo"])
     state.results["plan"] = PhaseResult(
         status="done", summary=plan.model_dump_json(), output=plan,
     )
@@ -294,7 +305,7 @@ def test_work_prompt_carries_plan_result():
 
 def test_work_prompt_on_retry_carries_previous_attempt_error():
     state = _state()
-    plan = PlanResult(goal="g", steps=["s"], decision="work")
+    plan = PlanResult(goal="g", steps=["s"])
     state.results["plan"] = PhaseResult(
         status="done", summary=plan.model_dump_json(), output=plan,
     )

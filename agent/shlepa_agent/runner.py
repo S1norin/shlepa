@@ -693,8 +693,8 @@ async def _pipeline(
             continue
         if phase.id == "plan":
             # v6: the plan -> commit shortcut is gone — every done plan
-            # flows to WORK (the w1-7 follow-up removes the now-unused
-            # `decision` field from PlanResult).
+            # flows to WORK (the pipeline is strictly linear; PlanResult
+            # carries no routing decision).
             phase_id = "work"
             final_status = "done"
             continue

@@ -105,7 +105,6 @@ def test_llm_thinking_event_carries_full_text(monkeypatch, stub_openai, tmp_path
                     "goal": "write hello.txt with the content hello",
                     "findings": "",
                     "steps": ["write the file"],
-                    "decision": "commit",
                 },
             },
             "reasoning": REASONING,

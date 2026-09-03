@@ -21,7 +21,6 @@ PIPELINE_SCRIPT = [
                 "goal": "write hello.txt with the exact content hello",
                 "findings": "",
                 "steps": ["write the file", "verify it"],
-                "decision": "work",
             },
         }
     },
