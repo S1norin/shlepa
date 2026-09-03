@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -635,9 +636,68 @@ def _post_work_check(state: RunState) -> None:
         state.deliverable_check = check_deliverable(
             state.deps.workdir, spec
         ).to_dict()
+        _maybe_snapshot_best(state)
     except Exception as e:  # pragma: no cover - defensive
         _log_event("agent_error", error=f"post-work check: {type(e).__name__}: {str(e)[:200]}")
         state.deliverable_check = None
+
+
+def _maybe_snapshot_best(state: RunState) -> None:
+    """w2-9: remember the last check-passing deliverable.
+
+    Snapshot (path + sha256 + content) so a later round that leaves a
+    broken file cannot regress a passing one. Never raises.
+    """
+    try:
+        check = state.deliverable_check
+        spec = state.deliverable_spec
+        if not (check and check.get("valid")) or spec is None:
+            return
+        p = Path(spec["path"])
+        if not p.is_absolute():
+            p = state.deps.workdir / p
+        content = p.read_text(encoding="utf-8", errors="replace")
+        state.best_snapshot = {
+            "path": spec["path"],
+            "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "content": content,
+        }
+    except Exception as e:  # pragma: no cover - defensive
+        _log_event("agent_error", error=f"best snapshot: {type(e).__name__}: {str(e)[:200]}")
+
+
+def _restore_best_on_exit(state: RunState) -> None:
+    """w2-9: at exit, if the current deliverable fails the check but a
+    passing snapshot exists and the file changed, restore the snapshot —
+    a killed round-2 overwrite cannot regress round-1. Never raises.
+    """
+    try:
+        snap = state.best_snapshot
+        if snap is None:
+            return
+        _post_work_check(state)  # refresh the check against the file on disk
+        check = state.deliverable_check
+        if check and check.get("valid"):
+            return
+        p = Path(snap["path"])
+        if not p.is_absolute():
+            p = state.deps.workdir / p
+        current = p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
+        if current is not None and \
+                hashlib.sha256(current.encode("utf-8")).hexdigest() == snap["sha256"]:
+            return  # already the best file
+        tmp = p.with_name(p.name + ".v6restore")
+        tmp.write_text(snap["content"], encoding="utf-8")
+        os.replace(tmp, p)
+        _post_work_check(state)
+        _log_event(
+            "artifact_restored",
+            path=snap["path"],
+            sha256=snap["sha256"][:12],
+            check=state.deliverable_check,
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        _log_event("agent_error", error=f"restore best: {type(e).__name__}: {str(e)[:200]}")
 
 
 def _commit_fallback_hints(state: RunState, check: dict | None) -> None:
@@ -1019,6 +1079,9 @@ async def run_prompt(
         status, output = await _pipeline(
             state, instrument, factory, entry, max_steps
         )
+        # v6 (w2-9): best-at-exit — a later round that left a broken
+        # deliverable cannot regress an earlier check-passing one.
+        _restore_best_on_exit(state)
         model.log_pending_usage()
         _log_event(
             "agent_done",

@@ -83,6 +83,10 @@ class RunState:
     #: v6 (w2-3): latest mechanical check result (deliverable_check.py);
     #: refreshed after WORK and again after SALVAGE; consumed by REVIEW.
     deliverable_check: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-9): last check-PASSING snapshot of the deliverable
+    #: {"path": <relative>, "sha256": <hex>, "content": <text>}; restored
+    #: on exit when a later round left a broken file (best-at-exit).
+    best_snapshot: dict[str, Any] | None = field(default=None)
 
     @property
     def cfg(self) -> AgentConfig:
