@@ -20,7 +20,7 @@ from pydantic_ai.messages import (
 )
 
 from shlepa_agent.config import load_config
-from shlepa_agent.outputs import PlanResult, ReviewResult, WorkResult
+from shlepa_agent.outputs import ArtifactSpec, PlanResult, ReviewResult, WorkResult
 from shlepa_agent.phases import (
     CommitPhase,
     EmergencyPhase,
@@ -72,6 +72,7 @@ def test_plan_result_has_no_routing_decision():
     # v6: strictly linear pipeline — PlanResult carries no work|commit
     # decision, and the plan prompt has no decision instructions.
     assert "decision" not in PlanResult.model_fields
+    assert "artifact_spec" in PlanResult.model_fields  # v6 spec field is present
     from shlepa_agent.phases.plan import PlanPhase
 
     state = _state()
@@ -250,11 +251,57 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
     assert "PLAN PHASE" in prompt
     assert "final_result" in prompt  # output schema block
     assert "30s" in prompt  # advisory limits (v6 plan cap)
+    # v6: the plan must emit the structured deliverable spec (w2-2)
+    assert "artifact_spec" in prompt
+    assert "QUOTED VERBATIM" in prompt  # expected_content verbatim-quote rule
+    assert "test_command" in prompt  # the three kinds are enumerated
     # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
     # fresh first pass: no previous results block (the plan instructions
     # mention the block name in prose — check header + content instead)
     assert "RESULTS OF PREVIOUS PHASES\nwork phase" not in prompt
+
+
+# -- artifact_spec (w2-2) ------------------------------------------------------------
+def test_plan_result_validates_with_default_artifact_spec():
+    plan = PlanResult(goal="write /app/out.txt", steps=["write it"])
+    assert plan.artifact_spec.kind == "file"
+    assert plan.artifact_spec.path == ""
+    assert plan.artifact_spec.keys == []
+    assert plan.artifact_spec.expected_content is None
+
+
+def test_plan_result_with_full_artifact_spec():
+    plan = PlanResult(
+        goal="write /app/out.json",
+        steps=["write it"],
+        artifact_spec={
+            "kind": "file",
+            "path": "/app/out.json",
+            "format": "json",
+            "keys": ["a", "b"],
+            "expected_content": None,
+        },
+    )
+    assert plan.artifact_spec.keys == ["a", "b"]
+    assert plan.artifact_spec.format == "json"
+
+
+def test_artifact_spec_kind_is_constrained():
+    import pytest as _pytest
+
+    from pydantic import ValidationError
+
+    with _pytest.raises(ValidationError):
+        ArtifactSpec(kind="bogus")
+    for kind in ("file", "test_command", "answer"):
+        assert ArtifactSpec(kind=kind).kind == kind
+
+
+def test_artifact_spec_keys_coerce_scalar_and_none():
+    assert ArtifactSpec(keys="solo").keys == ["solo"]
+    assert ArtifactSpec(keys=None).keys == []
+    assert ArtifactSpec().keys == []
 
 
 def test_plan_prompt_on_replan_carries_previous_work_result():

@@ -29,6 +29,13 @@ Then produce the plan via the final_result tool:
   approaches.
 - risks: the main things that could break this plan (wrong assumption, missing
   information) and how the work phase should handle them; empty if none.
+- artifact_spec: the structured deliverable spec — kind ("file", "test_command"
+  or "answer"), path (as stated in the instruction), format (json/csv/patch/
+  text only if stated), keys (required top-level JSON keys or CSV columns),
+  and expected_content: the FULL expected file content QUOTED VERBATIM from the
+  instruction — only when the instruction literally spells it out, never
+  paraphrased or guessed, null otherwise. The harness mechanically checks the
+  deliverable against this spec, so exactness matters more than prose.
 
 There is nothing to route: whatever the answer looks like, the work phase
 executes your plan next (even a trivial task — writing the file is the

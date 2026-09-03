@@ -15,6 +15,62 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+class ArtifactSpec(BaseModel):
+    """Structured deliverable spec extracted from the task instruction (v6).
+
+    The harness mechanically checks the deliverable against this spec
+    (exists / non_empty / parse_ok / keys_ok / valid — see
+    ``deliverable_check.py``); it also feeds the REVIEW context packet,
+    the salvage route and the best-at-exit snapshot.
+    """
+
+    kind: Literal["file", "test_command", "answer"] = Field(
+        default="file",
+        description=(
+            "'file' — the task output is a file to write; 'test_command' — the "
+            "deliverable is a patched program/repo validated by a test command; "
+            "'answer' — the task output is a short value (flag, number, string)."
+        ),
+    )
+    path: str = Field(
+        default="",
+        description="Deliverable file path as stated in the instruction (empty if none stated).",
+    )
+    format: str = Field(
+        default="",
+        description=(
+            "json | csv | patch | text, only when stated in the instruction "
+            "(empty if unstated)."
+        ),
+    )
+    keys: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Top-level JSON keys or CSV columns required by the instruction "
+            "(empty if none required)."
+        ),
+    )
+    expected_content: str | None = Field(
+        default=None,
+        description=(
+            "The full expected file content QUOTED VERBATIM, only when the "
+            "instruction literally spells it out (e.g. 'the file must contain "
+            "hello'). Never paraphrase, never guess — null unless the "
+            "instruction states the content explicitly."
+        ),
+    )
+
+    @field_validator("keys", mode="before")
+    @classmethod
+    def _coerce_keys_to_list(cls, value: Any) -> Any:
+        # A stray scalar must not crash the plan (models do this).
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
+
+
 class PlanResult(BaseModel):
     """Structured output of the plan phase."""
 
@@ -44,6 +100,14 @@ class PlanResult(BaseModel):
             "Main risks that could break this plan (wrong assumption, missing "
             "information, time) and how the work phase should handle them. "
             "Empty if none."
+        ),
+    )
+    artifact_spec: ArtifactSpec = Field(
+        default_factory=ArtifactSpec,
+        description=(
+            "Structured version of goal: the exact deliverable spec extracted "
+            "from the instruction (kind/path/format/keys/expected_content). "
+            "The harness mechanically checks the deliverable against it."
         ),
     )
     # v6: the former `decision` field (work|commit) is gone — the pipeline is
