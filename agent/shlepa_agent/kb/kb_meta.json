@@ -1,0 +1,27 @@
+{
+ "alias_entries": 105,
+ "attack_version": "19.2",
+ "files": {
+  "aliases.json": {
+   "bytes": 2426,
+   "sha256": "78df19abf143f62d5a5e1ca9ce2504af182214362d1d40a34ab33a9326c9bbba"
+  },
+  "cheats.jsonl": {
+   "bytes": 207562,
+   "sha256": "21cf9e7096b4a585266968f1022e891640214041789be2b91a988475bc2aede5"
+  },
+  "index.txt": {
+   "bytes": 21231,
+   "sha256": "872692173020b2623ebdecaa089d8d25b665ddc7fc7ad901b21b652546a48711"
+  },
+  "rows.json": {
+   "bytes": 1190118,
+   "sha256": "21fc6ca8d9557be0eb3635080da9780ee331bd71c95bf998f4cf33925d4e7d3f"
+  }
+ },
+ "generated": "2026-09-03",
+ "live_patterns": 709,
+ "source_commit": "6cda5ad8",
+ "source_file": "enterprise-attack-19.2.json",
+ "source_repo": "mitre-attack/attack-stix-data"
+}
