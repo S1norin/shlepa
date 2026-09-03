@@ -207,7 +207,11 @@ def main() -> int:
                                    cheats[tid]),
                         max_tokens=160)
         except RuntimeError as exc:
-            return tid, str(exc)
+            # Never persist the error text as a row: a failed row must
+            # stay "missing" so a re-run fills it (failures go to the
+            # summary + stderr via the failures list).
+            print(f"  fail {tid}: {exc}", file=sys.stderr, flush=True)
+            return tid, None
         return tid, text or None
 
     try:
