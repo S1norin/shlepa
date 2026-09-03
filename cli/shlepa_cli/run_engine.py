@@ -313,6 +313,68 @@ def _link_trace_to_run(client, run_id: str, trace_id: str) -> None:
         )
 
 
+def _close_run_failed(client, run_id: str, reason: str) -> None:
+    """Close a still-open task run as FAILED with a termination reason.
+
+    Best effort and idempotent: sets the ``termination_reason`` tag, then
+    terminates the run as FAILED. Never raises; a run that is already in
+    a terminal state is left untouched.
+    """
+    try:
+        client.set_tag(run_id, "termination_reason", reason[:500])
+    except Exception:  # noqa: BLE001 - telemetry must never fail the run
+        pass
+    try:
+        client.set_terminated(run_id, status="FAILED")
+    except Exception:  # noqa: BLE001 - telemetry must never fail the run
+        pass
+
+
+def sweep_orphaned_batch_runs(client, batch_id: str | None) -> list[str]:
+    """Close leftover PENDING/RUNNING runs of a finished batch.
+
+    Sweeps every active experiment for runs tagged with the batch's
+    ``batch_id`` that are still open (e.g. a logging step died between
+    create_run and set_terminated) and marks them FAILED with the
+    ``termination_reason`` tag. The batch id is generated as
+    ``YYYYMMDD-HHMMSS-<6 hex>`` (digits, dashes and hex only), so it is
+    safe to interpolate into the filter string. Returns the ids of the
+    closed runs. Never raises: a sweep failure must not break the batch
+    shutdown.
+    """
+    closed: list[str] = []
+    if not batch_id:
+        return closed
+    open_statuses = ("PENDING", "RUNNING")
+    try:
+        experiment_ids = [
+            experiment.experiment_id
+            for experiment in client.search_experiments()
+        ]
+        if not experiment_ids:
+            return closed
+        runs = client.search_runs(
+            experiment_ids=experiment_ids,
+            # The run filter grammar does not support status IN (...);
+            # fetch the (small) batch's runs and filter status here.
+            filter_string=f"tags.batch_id = '{batch_id}'",
+            max_results=500,
+        )
+        for run in runs:
+            if run.info.status not in open_statuses:
+                continue
+            _close_run_failed(
+                client,
+                run.info.run_id,
+                "orphaned: still open at batch shutdown; closed by the "
+                "post-batch sweep",
+            )
+            closed.append(run.info.run_id)
+    except Exception:  # noqa: BLE001 - the sweep must never break shutdown
+        pass
+    return closed
+
+
 def log_task_to_mlflow(
     client,
     settings: Settings,
@@ -335,6 +397,11 @@ def log_task_to_mlflow(
     reflects ``preset_name``. With otel on and a ``batch_id`` given, the
     run is tagged with ``batch_id`` and (when the trace is found)
     ``mlflow_trace_id``.
+
+    The run always ends in a terminal state: FINISHED for a task that ran
+    (solved or not), FAILED with a ``termination_reason`` tag for a
+    crashed task, and FAILED if MLflow logging itself fails or the engine
+    is interrupted (the run must never stay PENDING/RUNNING).
     """
     import shlepa_agent
 
@@ -376,30 +443,52 @@ def log_task_to_mlflow(
             f"mlflow run: https://{host}/#/experiments/{experiment_id}/runs/{run_id}",
             flush=True,
         )
-    client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
-    client.log_metric(run_id, "duration_sec", result.duration_sec)
-    client.log_metric(run_id, "tokens_in", result.tokens_in)
-    client.log_metric(run_id, "tokens_out", result.tokens_out)
-    client.log_metric(run_id, "tokens_total", result.tokens_total)
-    client.log_metric(run_id, "tool_calls", result.tool_calls)
-    client.log_param(run_id, "final_output", result.final_output[:2000])
-    client.log_param(run_id, "termination", result.termination)
-    if result.error:
-        client.log_param(run_id, "error", result.error[:2000])
-    result_json = result.workspace / "result.json"
-    if result_json.is_file():
-        client.log_artifact(run_id, str(result_json), artifact_path="data")
-    if settings.shlepa_otel_enabled and batch_id:
-        record_trace_tag(
-            client,
-            settings,
-            run_id,
-            batch_id,
-            result.slug,
-            batch_started_ms=batch_started_ms,
-            timeout_sec=trace_wait_sec,
-        )
-    client.set_terminated(run_id, status="FINISHED")
+    terminated = False
+    close_reason = "engine interrupted before the MLflow run was closed"
+    try:
+        client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
+        client.log_metric(run_id, "duration_sec", result.duration_sec)
+        client.log_metric(run_id, "tokens_in", result.tokens_in)
+        client.log_metric(run_id, "tokens_out", result.tokens_out)
+        client.log_metric(run_id, "tokens_total", result.tokens_total)
+        client.log_metric(run_id, "tool_calls", result.tool_calls)
+        client.log_param(run_id, "final_output", result.final_output[:2000])
+        client.log_param(run_id, "termination", result.termination)
+        if result.error:
+            client.log_param(run_id, "error", result.error[:2000])
+        result_json = result.workspace / "result.json"
+        if result_json.is_file():
+            client.log_artifact(run_id, str(result_json), artifact_path="data")
+        if settings.shlepa_otel_enabled and batch_id:
+            record_trace_tag(
+                client,
+                settings,
+                run_id,
+                batch_id,
+                result.slug,
+                batch_started_ms=batch_started_ms,
+                timeout_sec=trace_wait_sec,
+            )
+        if result.ok:
+            # Normal path (solved or unsolved): unchanged FINISHED status.
+            client.set_terminated(run_id, status="FINISHED")
+        else:
+            # Hard task error (agent crash, missing files): the run
+            # represents a failed execution.
+            close_reason = (
+                f"task {result.termination}: "
+                f"{result.error or 'unknown error'}"
+            )
+            _close_run_failed(client, run_id, close_reason)
+        terminated = True
+    except Exception as exc:  # noqa: BLE001 - close the run, then surface
+        close_reason = f"mlflow logging failed: {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if not terminated:
+            # MLflow logging itself raised, or the engine was interrupted
+            # (Ctrl-C/SIGTERM): the run must not stay PENDING/RUNNING.
+            _close_run_failed(client, run_id, close_reason)
     return run_id
 
 
@@ -466,35 +555,47 @@ def run_preset(
                 flush=True,
             )
     results: list[TaskResult] = []
-    for index, task in enumerate(tasks, 1):
-        print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
-        result = run_task(
-            task,
-            settings,
-            model=model,
-            no_docker=no_docker,
-            agent_runner=agent_runner,
-            docker_client=docker_client,
-            batch_id=batch_id,
-            preset_name=preset.name,
-        )
-        results.append(result)
-        if mlflow_client is not None:
-            log_task_to_mlflow(
-                mlflow_client,
+    try:
+        for index, task in enumerate(tasks, 1):
+            print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
+            result = run_task(
+                task,
                 settings,
-                preset.name,
-                model,
-                result,
+                model=model,
+                no_docker=no_docker,
+                agent_runner=agent_runner,
+                docker_client=docker_client,
                 batch_id=batch_id,
-                batch_started_ms=batch_started_ms,
+                preset_name=preset.name,
             )
-        print(
-            f"  -> {result.slug}: solved={result.solved} "
-            f"duration={result.duration_sec}s tokens={result.tokens_total}"
-            + (f" error={result.error}" if result.error else ""),
-            flush=True,
-        )
+            results.append(result)
+            if mlflow_client is not None:
+                log_task_to_mlflow(
+                    mlflow_client,
+                    settings,
+                    preset.name,
+                    model,
+                    result,
+                    batch_id=batch_id,
+                    batch_started_ms=batch_started_ms,
+                )
+            print(
+                f"  -> {result.slug}: solved={result.solved} "
+                f"duration={result.duration_sec}s tokens={result.tokens_total}"
+                + (f" error={result.error}" if result.error else ""),
+                flush=True,
+            )
+    finally:
+        # Engine shutdown path (normal completion and interrupt alike):
+        # close any batch run left open. The sweep never raises.
+        if mlflow_client is not None:
+            closed = sweep_orphaned_batch_runs(mlflow_client, batch_id)
+            if closed:
+                print(
+                    f"  closed {len(closed)} orphaned run(s) from batch "
+                    f"{batch_id}: {', '.join(closed)}",
+                    flush=True,
+                )
     return results
 
 

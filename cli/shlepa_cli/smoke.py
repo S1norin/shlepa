@@ -107,8 +107,13 @@ def run_smoke(
             experiment_name=experiment,
         )
         run = mlflow_client.get_run(run_id)
-        if run.info.status != "FINISHED":
-            raise RuntimeError(f"run status is {run.info.status}, not FINISHED")
+        # A crashed task closes its run as FAILED (see
+        # run_engine.log_task_to_mlflow); any terminal state means the
+        # record was logged and closed.
+        if run.info.status not in ("FINISHED", "FAILED"):
+            raise RuntimeError(
+                f"run status is {run.info.status}, not a terminal state"
+            )
     except Exception as exc:  # noqa: BLE001 - report the stage failure
         out(f"mlflow: FAIL ({type(exc).__name__}: {exc})")
         return False

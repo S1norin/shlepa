@@ -8,6 +8,7 @@ from mlflow import MlflowClient
 
 from shlepa_cli import run_engine
 from shlepa_cli.config import Settings
+from shlepa_cli.tasks import Preset, Task
 
 
 @pytest.fixture(autouse=True)
@@ -481,3 +482,140 @@ def test_log_task_missing_trace_warns_and_still_logs(tmp_path, capsys):
     assert "mlflow_trace_id" not in [k for (_r, k) in client.tags]
     out = capsys.readouterr().out
     assert "trace" in out.lower()
+
+
+# --- Dangling-run closing (F5) --------------------------------------------
+
+
+def _task(root, slug):
+    task_dir = root / "tasks" / slug
+    (task_dir / "tests").mkdir(parents=True)
+    (task_dir / "instruction.md").write_text("Create a file.")
+    (task_dir / "tests" / "test_check.py").write_text(
+        "import os, pathlib\n\n"
+        "def test_f():\n"
+        "    ws = pathlib.Path(os.environ['SLEPA_WORKSPACE'])\n"
+        "    assert (ws / 'out.txt').read_text() == 'out'\n"
+    )
+    return Task(slug=slug, name=slug, path=task_dir, timeout_sec=60)
+
+
+def _ok_runner(instruction, workdir, model, timeout_sec, otel):
+    (workdir / "out.txt").write_text("out")
+    return run_engine.AgentRun("done", 5, 3, 1)
+
+
+def _crash_runner(instruction, workdir, model, timeout_sec, otel):
+    if "crash" in workdir.name:
+        raise RuntimeError("agent crashed")
+    return _ok_runner(instruction, workdir, model, timeout_sec, otel)
+
+
+def test_mid_batch_task_crash_closes_run_failed(tmp_path):
+    """A task that crashes mid-batch leaves its MLflow run FAILED (never
+    PENDING/RUNNING) with the termination reason; the batch keeps going."""
+    client = MlflowClient(tracking_uri=f"file://{tmp_path / 'store'}")
+    tasks = [_task(tmp_path, "crash-task"), _task(tmp_path, "ok-task")]
+    preset = Preset(name="all", tasks="all")
+    results = run_engine.run_preset(
+        _settings(tmp_path),
+        preset,
+        tasks,
+        model="m",
+        no_docker=True,
+        agent_runner=_crash_runner,
+        mlflow_client=client,
+    )
+    assert len(results) == 2
+    assert not results[0].ok
+
+    crash_runs = client.search_runs(
+        [client.get_experiment_by_name("crash").experiment_id]
+    )
+    assert len(crash_runs) == 1
+    assert crash_runs[0].info.status == "FAILED"
+    assert "agent crashed" in crash_runs[0].data.tags["termination_reason"]
+
+    # The healthy sibling keeps the normal FINISHED terminal state.
+    ok_runs = client.search_runs(
+        [client.get_experiment_by_name("ok").experiment_id]
+    )
+    assert len(ok_runs) == 1
+    assert ok_runs[0].info.status == "FINISHED"
+
+
+class _FailingMetricClient(MlflowClient):
+    """MlflowClient whose first log_metric call explodes."""
+
+    def __init__(self, tracking_uri):
+        super().__init__(tracking_uri=tracking_uri)
+        self._metric_calls = 0
+
+    def log_metric(self, run_id, key, value, **kwargs):
+        self._metric_calls += 1
+        if self._metric_calls == 1:
+            raise RuntimeError("mlflow down")
+        return super().log_metric(run_id, key, value, **kwargs)
+
+
+def test_logging_failure_closes_run_failed(tmp_path):
+    """An MLflow failure mid-logging (or an engine interrupt) must not
+    leave the run PENDING/RUNNING: the finally closes it as FAILED with
+    the failure reason."""
+    client = _FailingMetricClient(f"file://{tmp_path / 'store'}")
+    tasks = [_task(tmp_path, "ok-task")]
+    preset = Preset(name="all", tasks="all")
+    with pytest.raises(RuntimeError, match="mlflow down"):
+        run_engine.run_preset(
+            _settings(tmp_path),
+            preset,
+            tasks,
+            model="m",
+            no_docker=True,
+            agent_runner=_ok_runner,
+            mlflow_client=client,
+        )
+    runs = client.search_runs(
+        [client.get_experiment_by_name("ok").experiment_id]
+    )
+    assert len(runs) == 1
+    assert runs[0].info.status == "FAILED"
+    assert "mlflow down" in runs[0].data.tags["termination_reason"]
+
+
+def test_post_batch_sweep_closes_orphaned_runs(tmp_path):
+    """The post-batch sweep marks leftover batch-tagged open runs FAILED
+    and leaves already-finished runs untouched."""
+    client = MlflowClient(tracking_uri=f"file://{tmp_path / 'store'}")
+    batch = "20260902-120000-abc123"
+    orphan_exp_id = client.create_experiment("orphan-fam")
+    orphan = client.create_run(
+        experiment_id=orphan_exp_id, run_name="orphan", tags={"batch_id": batch}
+    )
+    # Left RUNNING on purpose: the sweep must close it.
+    done_exp_id = client.create_experiment("done-fam")
+    done = client.create_run(
+        experiment_id=done_exp_id, run_name="done", tags={"batch_id": batch}
+    )
+    client.set_terminated(done.info.run_id, status="FINISHED")
+
+    closed = run_engine.sweep_orphaned_batch_runs(client, batch)
+
+    assert closed == [orphan.info.run_id]
+    assert client.get_run(orphan.info.run_id).info.status == "FAILED"
+    assert (
+        "orphaned" in client.get_run(orphan.info.run_id).data.tags[
+            "termination_reason"
+        ]
+    )
+    assert client.get_run(done.info.run_id).info.status == "FINISHED"
+    assert "termination_reason" not in client.get_run(done.info.run_id).data.tags
+
+
+def test_post_batch_sweep_never_raises():
+    class _Boom:
+        def search_experiments(self):
+            raise RuntimeError("store exploded")
+
+    assert run_engine.sweep_orphaned_batch_runs(_Boom(), "b") == []
+    assert run_engine.sweep_orphaned_batch_runs(_Boom(), None) == []

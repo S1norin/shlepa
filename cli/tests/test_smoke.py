@@ -114,7 +114,9 @@ def test_smoke_task_hard_error(tmp_path: Path):
         filter_string=f"run_name = '{SMOKE_SLUG}'",
     )
     assert len(runs) == 1
-    assert runs[0].info.status == "FINISHED"
+    # A crashed task closes its run as FAILED with the termination reason.
+    assert runs[0].info.status == "FAILED"
+    assert "boom" in runs[0].data.tags["termination_reason"]
     assert runs[0].data.metrics["solved"] == 0.0
 
 
