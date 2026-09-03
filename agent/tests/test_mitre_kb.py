@@ -40,7 +40,8 @@ def _ctx(tmp_path, cfg=None):
 def _kb_tree() -> dict[str, str]:
     out = {}
     for p in sorted(engine.KB_DIR.iterdir()):
-        out[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
+        if p.is_file():
+            out[p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
     return out
 
 
