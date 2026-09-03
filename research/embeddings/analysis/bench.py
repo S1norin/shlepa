@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "agent"))
 
-from shlepa_agent.mitre_kb import MitreKB, KB_DIR  # noqa: E402
+from shlepa_agent.mitre_kb import MitreKB, KB_DIR, load_expansion  # noqa: E402
 
 QUERIES = Path(__file__).with_name("queries.jsonl")
 
@@ -73,7 +73,6 @@ def fmt(report: list[dict]) -> str:
     lines: list[str] = []
     for r in report:
         mark = "OK " if r["hit5"] else "MISS"
-        t1 = "ok" if r["hit1"] else "--"
         lines.append(
             f"{mark} [{r['type']}] {r['id']:>4} expected={','.join(r['expected'])} "
             f"top5={','.join(r['top5'])}"
@@ -177,17 +176,25 @@ def main() -> None:
                     help="also report RRF fusion with BM25 (vectors mode)")
     ap.add_argument("--expansion", type=Path,
                     help="jsonl semantic expansion artifact (id/v/text); "
-                         "appended to the BM25 doc corpus (issue #94)")
+                         "overrides the shipped expansion (issue #94)")
+    ap.add_argument("--no-expansion", action="store_true",
+                    help="opt out of the shipped expansion (pre-#97 "
+                         "baseline corpus)")
     ap.add_argument("--save", type=Path, help="save per-query rows (jsonl)")
     args = ap.parse_args()
 
-    expansion: dict[str, str] | None = None
-    if args.expansion:
+    expansion: dict[str, str] | None
+    if args.no_expansion:
+        expansion = None
+    elif args.expansion:
         expansion = {}
         for line in args.expansion.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 e = json.loads(line)
                 expansion[e["id"]] = e["text"]
+    else:
+        # shipped configuration (issue #97): the pinned artifact
+        expansion = load_expansion(args.kb_dir)
 
     kb = MitreKB(args.kb_dir, expansion=expansion)
     queries = load_queries()
@@ -202,7 +209,8 @@ def main() -> None:
         rows = run_bm25(kb, queries)
         title = "BM25 (current mitre_kb scoring, cheat corpus)"
         if expansion:
-            title = f"BM25 + expansion ({len(expansion)} rows)"
+            src = "shipped" if not args.expansion else args.expansion.name
+            title = f"BM25 + expansion ({len(expansion)} rows, {src})"
         summarize(rows, title)
         print("\n" + fmt(rows))
     else:
