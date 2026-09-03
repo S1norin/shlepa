@@ -36,6 +36,7 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
 | `notes/small-models.md` | small embedding model landscape: sizes, licenses, MTEB; why nothing ≤ 5 MB exists |
 | `notes/endpoint-embeddings.md` | LLM-endpoint embeddings (llama.cpp, E5-Mistral, LLM2Vec): evidence, design limits, contest risk |
 | `notes/hybrid-fusion.md` | RRF fusion and when dense actually helps BM25 (TechniqueRAG evidence) |
+| `notes/vtx-embed.md` | `VTXAI/vtx-embed-{7M,1M}`: 4-bit static (SIF) embedders, MIT, the only retrieval-grade models found that fit the zip |
 | `analysis/queries.jsonl` | shared ground-truth query set (40 paraphrase + 8 literal, expected T-IDs) |
 | `analysis/bench.py` | harness: scores BM25 / dense / RRF on the query set (dev-only) |
 | `analysis/bm25-baseline.md` | BM25 baseline results (2026-09-03) |
@@ -58,12 +59,14 @@ a custom-distilled ~3 MB model or a model pulled into the dev image only
    endpoint (> 600 s task timeout); the contest model's embeddings are
    unknown, so doc vectors cannot be precomputed. Never a contest
    dependency — `notes/endpoint-embeddings.md`.
-5. **Recommendation.** Keep the contest core (exact-ID-first + BM25 +
-   agent re-query loop). Next experiment: **semantic keyword expansion**
-   (no runtime model, ~+200 KB zip, issue #94). In parallel, measure the
-   dense quality ceiling with MiniLM-int8 + endpoint embeddings (issue
-   #93) before investing in distillation. Detail and gating:
-   `analysis/fit-matrix.md`.
+5. **Recommendation (rev 2, 2026-09-03).** Keep the contest core
+   (exact-ID-first + BM25 + agent re-query loop). The vtx-embed
+   verification (`notes/vtx-embed.md`) adds a first option: **C′ —
+   `vtx-embed-1M` in-zip (≈ 1.0 MB, numpy+tokenizers only, no training)**,
+   measured on the query set first. In parallel: semantic keyword
+   expansion (issue #94) and the MiniLM-int8 + endpoint ceiling
+   (issue #93); distillation only if the ceiling far exceeds C′+F.
+   Detail and gating: `analysis/fit-matrix.md`.
 
 Experiments are tracked as GitHub issues: **#93** (ceiling: ONNX +
 endpoint vs BM25), **#94** (semantic keyword expansion).
