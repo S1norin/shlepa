@@ -533,3 +533,164 @@ def test_trace_export_cli_writes_batch_files(tmp_path, monkeypatch):
     assert (out / "manifest.jsonl").is_file()
     assert (out / "traces" / "task-a.json").is_file()
     assert (out / "summary.md").is_file()
+
+
+# --- Paged search + time filter (F7) ---------------------------------------
+
+
+class _PagedResult(list):
+    """List stand-in for mlflow's PagedList: carries the next-page token."""
+
+    def __init__(self, items, token):
+        super().__init__(items)
+        self.token = token
+
+
+class _PagingClient:
+    """Fake client honouring max_results/page_token like the mlflow API."""
+
+    def __init__(self, traces):
+        self.traces = traces
+        self.search_kwargs: list[dict] = []
+
+    def get_experiment_by_name(self, name):
+        return type("Exp", (), {"experiment_id": "42"})()
+
+    def search_traces(self, **kwargs):
+        self.search_kwargs.append(kwargs)
+        page_size = kwargs.get("max_results") or len(self.traces)
+        offset = int(kwargs.get("page_token") or 0)
+        page = self.traces[offset:offset + page_size]
+        next_token = str(offset + page_size)
+        if offset + page_size >= len(self.traces):
+            next_token = None
+        return _PagedResult(page, next_token)
+
+
+def test_find_batch_traces_paginates_beyond_first_page(monkeypatch):
+    """All of a batch's traces must be exported even when they sit past
+    page 1 of the (much larger) trace experiment."""
+    monkeypatch.setattr(trace_export, "TRACE_PAGE_SIZE", 3)
+    traces = [
+        _Trace(
+            f"tr-{i}",
+            [_agent_span("batch-1", f"task-{i}")],
+            tags={"service.name": "shlepa-agent"},
+        )
+        for i in range(7)
+    ]
+    client = _PagingClient(traces)
+    found = trace_export.find_batch_traces(client, _settings(), "batch-1")
+    assert [t.info.trace_id for t in found] == [
+        f"tr-{i}" for i in range(7)
+    ]
+    # 7 traces at page size 3 -> pages of 3 + 3 + 1.
+    assert len(client.search_kwargs) == 3
+    assert client.search_kwargs[0]["max_results"] == 3
+    assert client.search_kwargs[1].get("page_token") is not None
+
+    # The full export path picks up every trace too.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        summary = trace_export.export_batch(
+            client, _settings(), "batch-1", tmp
+        )
+    assert summary["traces"] == 7
+    assert len(summary["tasks"]) == 7
+
+
+def test_export_batch_since_until_filters_by_start_time(tmp_path):
+    """--since/--until bound the trace start_time without changing the
+    output format. The fake client ignores the server-side filter, so
+    the client-side request_time check is what filters here."""
+    traces = [
+        _Trace(
+            "tr-old",
+            [_agent_span("b-1", "task-old")],
+            tags={"service.name": "shlepa-agent"},
+            request_time=1_000,
+        ),
+        _Trace(
+            "tr-mid",
+            [_agent_span("b-1", "task-mid")],
+            tags={"service.name": "shlepa-agent"},
+            request_time=5_000,
+        ),
+        _Trace(
+            "tr-new",
+            [_agent_span("b-1", "task-new")],
+            tags={"service.name": "shlepa-agent"},
+            request_time=9_000,
+        ),
+    ]
+    client = _FakeClient(traces)
+    summary = trace_export.export_batch(
+        client,
+        _settings(),
+        "b-1",
+        tmp_path / "exp",
+        since="1970-01-01T00:00:04Z",
+        until="1970-01-01T00:00:08Z",
+    )
+    assert summary["traces"] == 1
+    assert summary["tasks"] == ["task-mid"]
+    line = json.loads((tmp_path / "exp" / "manifest.jsonl").read_text())
+    assert line["task"] == "task-mid"
+    assert line["trace_id"] == "tr-mid"
+    # The server-side timestamp_ms filter was sent as well.
+    kwargs = client.search_kwargs[0]
+    assert "timestamp_ms >= 4000" in kwargs["filter_string"]
+    assert "timestamp_ms <= 8000" in kwargs["filter_string"]
+
+
+def test_export_batch_rejects_malformed_since(tmp_path):
+    client = _FakeClient([])
+    with pytest.raises(ValueError, match="isoformat"):  # py3.11+: 'Invalid isoformat string'
+        trace_export.export_batch(
+            client, _settings(), "b-1", tmp_path / "exp", since="not-a-time"
+        )
+
+
+def test_trace_export_cli_since_until(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from shlepa_cli import main as cli_main
+    from shlepa_cli import mlflow_client as mlflow_module
+
+    traces = [
+        _Trace(
+            "tr-old",
+            [_agent_span("b-9", "task-old")],
+            tags={"service.name": "shlepa-agent"},
+            request_time=1_000,
+        ),
+        _Trace(
+            "tr-mid",
+            [_agent_span("b-9", "task-mid")],
+            tags={"service.name": "shlepa-agent"},
+            request_time=5_000,
+        ),
+    ]
+    client = _FakeClient(traces)
+    monkeypatch.setattr(
+        mlflow_module, "get_mlflow_client", lambda s: client
+    )
+    out = tmp_path / "out"
+    result = CliRunner().invoke(
+        cli_main.app,
+        [
+            "trace-export",
+            "--batch",
+            "b-9",
+            "--out",
+            str(out),
+            "--since",
+            "1970-01-01T00:00:04Z",
+            "--until",
+            "1970-01-01T00:00:08Z",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    line = json.loads((out / "manifest.jsonl").read_text())
+    assert line["task"] == "task-mid"

@@ -37,6 +37,12 @@ __all__ = [
     "trace_to_dict",
 ]
 
+#: Page size for the paged trace search. The search walks every page of
+#: the trace experiment, so a batch is found no matter how many traces
+#: the experiment holds (the old single-page fetch with a hard cap of 500
+#: missed fresh batches once the experiment grew past the cap).
+TRACE_PAGE_SIZE = 500
+
 
 class TraceBatchNotFound(Exception):
     """No agent traces found for a batch in the trace experiment."""
@@ -80,20 +86,66 @@ def _batch_since_ms(batch_id: str, margin_min: int = 5) -> int | None:
     return int(start.timestamp() * 1000) - margin_min * 60_000
 
 
-def find_batch_traces(client, settings, batch_id: str, limit: int = 500):
+def _parse_iso_ms(value: str | None) -> int | None:
+    """ISO 8601 string to epoch milliseconds; None for None/empty input.
+
+    A missing timezone means UTC. Raises ValueError for unparseable
+    input so CLI callers can fail fast on a malformed --since/--until.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    dt = datetime.fromisoformat(text)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _trace_window_ms(
+    batch_id: str, since: str | None, until: str | None
+) -> tuple[int | None, int | None]:
+    """Merge the batch-derived age window with explicit time bounds.
+
+    Returns ``(since_ms, until_ms)``; an explicit ISO 8601 ``since``
+    replaces the derived lower bound when it is stricter (newer).
+    """
+    since_ms = _batch_since_ms(batch_id)
+    explicit_since = _parse_iso_ms(since)
+    until_ms = _parse_iso_ms(until)
+    if explicit_since is not None and (
+        since_ms is None or explicit_since > since_ms
+    ):
+        since_ms = explicit_since
+    return since_ms, until_ms
+
+
+def find_batch_traces(
+    client,
+    settings,
+    batch_id: str,
+    since: str | None = None,
+    until: str | None = None,
+):
     """Return the raw Trace objects of one batch in the trace experiment.
 
     Candidate filtering: trace-level service.name tag, an age window
-    derived from the batch id's embedded timestamp, then a
+    derived from the batch id's embedded timestamp (narrowed by the
+    optional ISO 8601 ``since``/``until`` start-time bounds), then a
     shlepa.batch_id match at trace-tag level (fast path) or span level.
-    Never raises: any client/server problem yields an empty list.
+    The search walks every page of the experiment (page size
+    ``TRACE_PAGE_SIZE``), so a batch is found regardless of how many
+    traces the experiment holds. Never raises: any client/server
+    problem yields an empty list.
     """
     try:
         exp_id = _resolve_trace_experiment_id(client, settings)
         if exp_id is None:
             return []
+        since_ms, until_ms = _trace_window_ms(batch_id, since, until)
         return _find_batch_traces_inner(
-            client, exp_id, batch_id, _batch_since_ms(batch_id), limit
+            client, exp_id, batch_id, since_ms, until_ms
         )
     except Exception:  # noqa: BLE001 - export must not crash the caller
         return []
@@ -104,18 +156,32 @@ def _find_batch_traces_inner(
     exp_id: str,
     batch_id: str,
     since_ms: int | None,
-    limit: int,
+    until_ms: int | None,
 ) -> list:
     found: list = []
-    paged = compat.search_experiment_traces(client, exp_id, limit)
-    for trace in paged:
+    # Server-side narrowing: the MLflow 3.x trace search filter supports
+    # numeric comparison on the trace start time (``timestamp_ms``);
+    # combined with pagination it keeps the page count small for
+    # time-bound exports. The client-side request_time checks below stay
+    # the authoritative filter (they also cover backends/fakes without
+    # filter support).
+    clauses: list[str] = []
+    if since_ms is not None:
+        clauses.append(f"timestamp_ms >= {since_ms}")
+    if until_ms is not None:
+        clauses.append(f"timestamp_ms <= {until_ms}")
+    filter_string = " AND ".join(clauses) or None
+    for trace in compat.iter_experiment_traces(
+        client, exp_id, TRACE_PAGE_SIZE, filter_string
+    ):
         info = trace.info
         tags = getattr(info, "tags", None) or {}
         if tags.get("service.name") != AGENT_SERVICE:
             continue
-        if since_ms is not None and (
-            getattr(info, "request_time", None) or 0
-        ) < since_ms:
+        request_time = getattr(info, "request_time", None) or 0
+        if since_ms is not None and request_time < since_ms:
+            continue
+        if until_ms is not None and request_time > until_ms:
             continue
         if tags.get("shlepa.batch_id") == batch_id:
             found.append(trace)
@@ -186,20 +252,37 @@ def _unique_name(directory: Path, stem: str, suffix: str) -> Path:
     return name
 
 
-def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> dict:
+def export_batch(
+    client,
+    settings,
+    batch_id: str,
+    out_dir,
+    experiment=None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict:
     """Fetch the traces of one batch and write the export layout.
 
     Writes ``manifest.jsonl`` (one line per task), ``traces/<task>.json``
     (full trace_to_dict dump), ``digests/<task>.md`` and ``summary.md``.
     Raises :class:`TraceBatchNotFound` when the batch has no traces.
-    Returns a small summary dict (batch_id, traces, tasks, tokens).
+    ``since``/``until`` optionally bound the trace start time (ISO 8601
+    strings; a missing zone means UTC) — the exported formats are
+    unchanged. Returns a small summary dict (batch_id, traces, tasks,
+    tokens).
     """
+    # Parse up front so a malformed bound fails loudly instead of
+    # surfacing as an empty (never-raising) search.
+    _parse_iso_ms(since)
+    _parse_iso_ms(until)
     if experiment:
         settings = dataclasses.replace(
             settings, mlflow_telemetry_experiment_id=experiment
         )
     out_dir = Path(out_dir)
-    traces = find_batch_traces(client, settings, batch_id)
+    traces = find_batch_traces(
+        client, settings, batch_id, since=since, until=until
+    )
     if not traces:
         experiment_label = (
             settings.mlflow_telemetry_experiment_id or DEFAULT_TRACE_EXPERIMENT

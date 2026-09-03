@@ -129,6 +129,22 @@ def trace_export(
         "--experiment",
         help="Trace experiment name/id (default from settings)",
     ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Only export traces started at/after this ISO 8601 time "
+            "(UTC when no zone is given)."
+        ),
+    ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help=(
+            "Only export traces started at/before this ISO 8601 time "
+            "(UTC when no zone is given)."
+        ),
+    ),
 ) -> None:
     """Export the agent traces of one batch as JSON + digests + manifest."""
     from shlepa_cli import trace_export as trace_export_module
@@ -144,8 +160,17 @@ def trace_export(
     out_dir = out or settings.repo_root / "tmp" / "trace-export" / batch
     try:
         summary = trace_export_module.export_batch(
-            client, settings, batch, out_dir, experiment
+            client,
+            settings,
+            batch,
+            out_dir,
+            experiment,
+            since=since,
+            until=until,
         )
+    except ValueError as exc:
+        typer.echo(f"trace-export: {exc}", err=True)
+        raise typer.Exit(code=1)
     except trace_export_module.TraceBatchNotFound as exc:
         typer.echo(f"trace-export: {exc}", err=True)
         raise typer.Exit(code=1)
