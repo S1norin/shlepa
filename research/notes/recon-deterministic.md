@@ -156,6 +156,12 @@ digests for whether the agent actually consumed the recon output.
 - **Track:** convert this note's "build" item into a GitHub issue via the
   `backlog` skill when picked up.
 
+**Status (2026-09-03):** the build item is implemented as a registered in-
+package tool (Option A in `recon-tool-conversion.md`) — engine
+`shlepa_agent/recon.py` + `recon(mode, target)` tool, `+recon` and
+`read-only` arms; the script stays bundled as the CLI wrapper and as the
+script-variant prompt for arms without the tool.
+
 ## Sources
 
 - aiscan: https://github.com/chainreactors/aiscan (README, v1.0.0-rc2 releases)

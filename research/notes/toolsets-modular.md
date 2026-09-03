@@ -137,4 +137,7 @@ The literature anchors that actually support the feature:
 - DeepSeek-R1-0528 (function calling capability only):
   https://www.deepseek.com/en/news/r1-0528/
 - Internal: `research/notes/recon-deterministic.md` (A/B methodology),
-  issue #44 (recon A/B), `agent/shlepa_agent/core.py` (current tool layer).
+  `research/notes/recon-tool-conversion.md` (recon as a registered tool:
+  agent architectures survey + Option A decision record, arms `+recon` /
+  `read-only`), issue #44 (recon A/B), `agent/shlepa_agent/core.py`
+  (current tool layer).

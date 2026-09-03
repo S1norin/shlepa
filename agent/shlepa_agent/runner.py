@@ -139,6 +139,12 @@ def _is_handoff_error(exc: BaseException) -> bool:
 def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
     """Render the common system message for a phase (base + tools + task).
 
+    The ``system`` block carries a ``{recon}`` placeholder that resolves
+    to the recon prompt variant selected by the resolved tools: the tool
+    variant (``recon_tool.md``) when the recon tool is enabled (+recon /
+    read-only arms), the script variant (``recon_script.md``) otherwise —
+    the baseline stays byte-identical to the golden fixture (issue #108).
+
     The +mitre-kb arm additionally appends the KB prefix (the full
     technique index + old->new alias map, ~10K tokens of static, stable
     content) to the tools block (the decision record, Option 3; the
@@ -150,11 +156,14 @@ def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
         from shlepa_agent.mitre_kb import kb_prefix
 
         tools_block += "\n\n" + kb_prefix()
+    recon_on = any(tool.name == "recon" for tool in tools)
+    variant = "recon_tool.md" if recon_on else "recon_script.md"
+    system_block = load_prompt("base.md").replace("{recon}", load_prompt(variant))
     return render_system(
         agent_cfg,
         phase.id,
         {
-            "system": load_prompt("base.md"),
+            "system": system_block,
             "tools": tools_block,
             "task": task,
         },

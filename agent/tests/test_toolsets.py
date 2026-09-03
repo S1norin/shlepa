@@ -1,7 +1,9 @@
 """Tests for named toolset arms (AGENT_TOOLSET, agent/shlepa_agent/toolsets.py).
 
 Arms: baseline (no-op, byte-identical default), +smart-grep (rg engine),
-+sifs (SIFS engine), +forensics (log_triage), +mitre-kb (mitre_kb).
++sifs (SIFS engine), +forensics (log_triage), +mitre-kb (mitre_kb),
++recon (recon tool + the tool-variant recon prompt block), read-only
+(read/write/edit + recon, no bash).
 AGENT_TOOLSET is the sole driver of the code-search toolset when set (it
 wins over the legacy AGENT_CODE_SEARCH switch); an invalid value is
 ignored, never a crash.
@@ -17,6 +19,8 @@ from shlepa_agent.toolsets import (
     ARM_BASELINE,
     ARM_FORENSICS,
     ARM_MITRE_KB,
+    ARM_READONLY,
+    ARM_RECON,
     ARM_SIFS,
     ARM_SMART_GREP,
     KNOWN_ARMS,
@@ -204,6 +208,7 @@ def test_env_arm_invalid_is_ignored_never_crashes(monkeypatch):
         assert cfg.tools.file_outline.enabled is False, value
         assert cfg.tools.log_triage.enabled is False, value
         assert cfg.tools.mitre_kb.enabled is False, value
+        assert cfg.tools.recon.enabled is False, value
         assert cfg.code_search.engine == "auto", value
 
 
@@ -212,9 +217,10 @@ def test_env_unset_defaults_to_baseline(monkeypatch):
     cfg = load_config()
     assert cfg.arm == ARM_BASELINE
     assert cfg.code_search.engine == "auto"
-    # default agent is byte-identical to baseline: forensics + KB off too
+    # default agent is byte-identical to baseline: forensics + KB + recon off
     assert cfg.tools.log_triage.enabled is False
     assert cfg.tools.mitre_kb.enabled is False
+    assert cfg.tools.recon.enabled is False
 
 
 def test_legacy_code_search_switch_still_works_without_toolset(monkeypatch):
@@ -225,3 +231,87 @@ def test_legacy_code_search_switch_still_works_without_toolset(monkeypatch):
     assert cfg.arm == ARM_BASELINE
     assert cfg.code_search.engine == "rg"
     assert cfg.tools.code_search.enabled is True
+
+
+# ---------------------------------------------------------------------------
+# the +recon arm (recon tool)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_arm_recon_enables_tool():
+    cfg = load_config()
+    apply_arm(cfg, ARM_RECON)
+    assert cfg.arm == ARM_RECON
+    # the other families stay off (different family)
+    assert cfg.code_search.engine == "auto"
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
+    assert cfg.tools.mitre_kb.enabled is False
+    assert cfg.tools.recon.enabled is True
+    for phase_id in PHASES:
+        assert list(cfg.phases[phase_id].tools) == BASE_TOOLS + ["recon"]
+
+
+def test_env_arm_recon_enables_tool_and_prompt(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_RECON)
+    cfg = load_config()
+    assert cfg.arm == ARM_RECON
+    for phase_id in PHASES:
+        phase = get_phase(phase_id)
+        names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
+        assert names == BASE_TOOLS + ["recon"]
+        prompt = _system_prompt(cfg, phase, TASK)
+        # the tool variant replaces the script variant, in the same slot
+        assert "RECON TOOL" in prompt
+        assert 'mode "web"' in prompt
+        assert "RECON SCRIPT" not in prompt
+        assert "python3 tools/recon.py" not in prompt
+        assert "RECON TOOL" in prompt.split("ROLE AND PHASES")[0]
+
+
+def test_baseline_prompt_keeps_script_variant(monkeypatch):
+    _clear(monkeypatch)
+    cfg = load_config()
+    for phase_id in PHASES:
+        prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
+        assert "RECON SCRIPT" in prompt
+        assert "RECON TOOL" not in prompt
+        assert "python3 tools/recon.py" in prompt
+        assert "{recon}" not in prompt  # the placeholder always resolves
+
+
+# ---------------------------------------------------------------------------
+# the read-only arm (no bash)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_arm_read_only_composes_toolset():
+    cfg = load_config()
+    apply_arm(cfg, ARM_READONLY)
+    assert cfg.arm == ARM_READONLY
+    assert cfg.tools.recon.enabled is True
+    for phase_id in PHASES:
+        assert list(cfg.phases[phase_id].tools) == [
+            "read",
+            "write",
+            "edit",
+            "recon",
+        ]
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert names == ["read", "write", "edit", "recon"]
+        assert "bash" not in names
+
+
+def test_env_arm_read_only_prompt_uses_tool_variant(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_READONLY)
+    cfg = load_config()
+    assert cfg.arm == ARM_READONLY
+    for phase_id in PHASES:
+        prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
+        # the recon block is the tool variant in this arm (issue #109)
+        assert "RECON TOOL" in prompt
+        assert "RECON SCRIPT" not in prompt
+        assert "python3 tools/recon.py" not in prompt

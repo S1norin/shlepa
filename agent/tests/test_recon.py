@@ -7,7 +7,6 @@ target. Fixtures are inline (ephemeral ports, tmp_path) so the suite stays
 hermetic.
 """
 
-import importlib.util
 import json
 import socket
 import subprocess
@@ -17,17 +16,13 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
+from shlepa_agent.recon import recon_web, scan_ports
+
 RECON = Path(__file__).resolve().parents[1] / "tools" / "recon.py"
-
-
-def _load_recon_module():
-    spec = importlib.util.spec_from_file_location("recon", RECON)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-recon = _load_recon_module()
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "recon"
+WEB_GOLDEN_PORT = 18473  # fixed port used by the web golden (gen_goldens.py)
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +85,8 @@ def _wait_ready(port: int) -> None:
     raise RuntimeError(f"server on port {port} did not come up")
 
 
-def _start_web_server() -> tuple[ThreadingHTTPServer, int]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+def _start_web_server(handler=_Handler, port: int = 0) -> tuple[ThreadingHTTPServer, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -209,7 +204,7 @@ def test_scan_ports_passive_banner():
     """A service that speaks first (SSH-style) is labeled with its banner."""
     banner, bport = _start_banner_server()
     try:
-        ports = recon.scan_ports("127.0.0.1", bport, time.monotonic() + 30)
+        ports = scan_ports("127.0.0.1", bport, time.monotonic() + 30)
         assert "TestBanner" in ports.get(str(bport), "")
     finally:
         banner.close()
@@ -280,6 +275,157 @@ def test_code_mode(tmp_path):
 # ---------------------------------------------------------------------------
 # data mode
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# CLI parity against golden outputs
+#
+# Goldens in fixtures/recon/ were generated from the pre-refactor CLI
+# (regenerate with: python3 tests/fixtures/recon/gen_goldens.py). They pin
+# the CLI contract across the engine extraction into shlepa_agent.recon.
+# Volatile fields excluded: stats.elapsed_s (timing), root (absolute
+# checkout path), ports_open (depends on what else listens on the host).
+# ---------------------------------------------------------------------------
+
+
+def _strip_volatile(obj: dict) -> dict:
+    obj = dict(obj)
+    obj.pop("root", None)
+    stats = dict(obj.get("stats", {}))
+    stats.pop("elapsed_s", None)
+    obj["stats"] = stats
+    return obj
+
+
+def test_code_cli_parity():
+    proc = run_recon("--code", str(FIXTURES / "code_fixture"))
+    assert proc.returncode == 0, proc.stderr
+    live = _strip_volatile(json.loads(proc.stdout))
+    golden = _strip_volatile(
+        json.loads((FIXTURES / "code.golden.json").read_text()))
+    assert live == golden
+
+
+def test_data_cli_parity():
+    proc = run_recon("--data", str(FIXTURES / "data_fixture"))
+    assert proc.returncode == 0, proc.stderr
+    live = _strip_volatile(json.loads(proc.stdout))
+    golden = _strip_volatile(
+        json.loads((FIXTURES / "data.golden.json").read_text()))
+    assert live == golden
+
+
+def test_web_cli_parity():
+    try:
+        server, port = _start_web_server(port=WEB_GOLDEN_PORT)
+    except OSError:
+        pytest.skip(f"port {WEB_GOLDEN_PORT} is busy on this host")
+    try:
+        proc = run_recon(f"http://127.0.0.1:{port}/")
+        assert proc.returncode == 0, proc.stderr
+        live = json.loads(proc.stdout)
+        # the fixture's own port must be scanned open
+        assert str(port) in live["ports_open"]
+        live.pop("stats", None)   # elapsed_s volatile
+        live.pop("ports_open", None)  # host-dependent
+        golden = json.loads((FIXTURES / "web.golden.json").read_text())
+        assert live == golden
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_engine_exposes_entries():
+    import shlepa_agent.recon as engine
+
+    for name in ("recon_web", "recon_code", "recon_data", "render",
+                 "err_note"):
+        assert callable(getattr(engine, name)), name
+
+
+def test_engine_stdlib_only():
+    """The engine must stay importable in a bare stdlib python (task env)."""
+    import ast
+
+    import shlepa_agent.recon as engine
+
+    tree = ast.parse(Path(engine.__file__).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name.split(".")[0] in sys.stdlib_module_names, \
+                    alias.name
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level > 0 or \
+                (node.module or "").split(".")[0] in sys.stdlib_module_names, \
+                node.module
+
+
+def test_engine_matches_cli():
+    """The CLI wrapper must be a thin passthrough over the engine."""
+    import shlepa_agent.recon as engine
+
+    for flag, fixture, fn in (
+        ("--code", "code_fixture", engine.recon_code),
+        ("--data", "data_fixture", engine.recon_data),
+    ):
+        proc = run_recon(flag, str(FIXTURES / fixture))
+        assert proc.returncode == 0, proc.stderr
+        live = _strip_volatile(fn(FIXTURES / fixture))
+        cli = _strip_volatile(json.loads(proc.stdout))
+        assert live == cli
+
+
+class _SlowHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        time.sleep(2.0)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        except OSError:
+            # client timed out mid-sleep: the connection is gone; that is
+            # exactly the behavior under test
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+def test_web_mode_slow_target_deadline():
+    """A slow target must not blow the 30s per-call tool wall.
+
+    The server sleeps 2s per request, so vhost/crawl eat the budget;
+    recon_web must finish with a capped JSON, per-stage skip notes, and
+    no exception (issue #106).
+    """
+    server, port = _start_web_server(_SlowHandler)
+    try:
+        t0 = time.monotonic()
+        out = recon_web(f"http://127.0.0.1:{port}/")
+        wall = time.monotonic() - t0
+    finally:
+        server.shutdown()
+        server.server_close()
+    # completes well before the 30s per-call tool wall
+    assert out["stats"]["elapsed_s"] <= 27
+    assert wall <= 28
+    # full JSON shape, all fail-safe sections present
+    for key in ("url", "ports_open", "http", "vhosts", "endpoints",
+                "sensitive", "errors", "interesting", "stats"):
+        assert key in out
+    # base probe succeeds within its 5s timeout despite the 2s sleep
+    assert out["http"]["status"] == 200
+    # the crawl starts before the deadline on this fixture
+    assert len(out["endpoints"]) > 0
+    # the last stage is always past the deadline on this fixture
+    assert out["sensitive_note"] == "skipped (deadline)"
+    # the target port is open but silent during the 0.5s banner window
+    # (the server sleeps 2s before responding): it must be labeled open
+    # without hanging the scan
+    assert str(port) in out["ports_open"]
+
 
 def test_data_mode(tmp_path):
     (tmp_path / "notes.txt").write_text(

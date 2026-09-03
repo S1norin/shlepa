@@ -98,6 +98,13 @@ class ToolsConfig(BaseModel):
     # per-call wall safety net (the in-memory search is sub-millisecond);
     # the result is capped at ``max_output`` chars.
     mitre_kb: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8000)
+    # Recon tool: OFF by default. The AGENT_TOOLSET=+recon arm enables it
+    # (see _enable_recon_tools and toolsets.py). The ``timeout`` is the
+    # per-call wall (the v5 regime bash cap); the web engine has its own
+    # 25s internal deadline, so the wall mainly binds on code/data scans.
+    # The result is capped at ``max_output`` chars (the engine render is
+    # itself hard-capped at 8192 bytes, so the default never fires).
+    recon: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8192)
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -201,6 +208,8 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
     "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
     "SHLEPA_MITRE_KB_MAX_OUTPUT": ("tools.mitre_kb.max_output", int),
+    "SHLEPA_RECON_TIMEOUT": ("tools.recon.timeout", float),
+    "SHLEPA_RECON_MAX_OUTPUT": ("tools.recon.max_output", int),
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
 }
@@ -283,6 +292,32 @@ def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
     for phase in cfg.phases.values():
         if "mitre_kb" not in phase.tools:
             phase.tools.append("mitre_kb")
+
+
+def _enable_recon_tools(cfg: AgentConfig) -> None:
+    """Enable the recon tool (the +recon arm mutation).
+
+    Mirrors :func:`_enable_forensics_tools`: tool enabled and its name
+    appended to every phase's tool list (its note then renders into the
+    system prompt automatically). Deduped, so it is safe if a phase list
+    ever names it explicitly.
+    """
+    cfg.tools.recon.enabled = True
+    for phase in cfg.phases.values():
+        if "recon" not in phase.tools:
+            phase.tools.append("recon")
+
+
+def _apply_read_only_arm(cfg: AgentConfig) -> None:
+    """Read-only arm mutation: read/write/edit + recon, NO bash.
+
+    The experiment arm proving recon is usable by an agent without a
+    code-execution channel (deliverable writing stays possible via
+    write/edit; 'read-only' = no bash, not a read-only filesystem).
+    """
+    cfg.tools.recon.enabled = True
+    for phase in cfg.phases.values():
+        phase.tools = ["read", "write", "edit", "recon"]
 
 
 def _apply_code_search_env(cfg: AgentConfig) -> None:

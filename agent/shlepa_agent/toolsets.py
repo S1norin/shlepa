@@ -20,6 +20,13 @@ Arms (the current set; the registry grows as new tool families land):
   knowledge base; research/notes/mitre-rag-decision.md). The full
   technique index + alias map also render into the system prompt as a
   stable prefix (arm-gated in ``runner._system_prompt``).
+- ``+recon``: baseline + the recon tool (deterministic read-only
+  attack-surface recon; the prompt's recon block switches from the script
+  to the tool variant, arm-gated in ``runner._system_prompt``; see
+  research/notes/recon-tool-conversion.md).
+- ``read-only``: read/write/edit + the recon tool, NO bash — the
+  experiment arm proving recon is usable by a read-only agent (no code
+  execution channel; deliverable writing stays possible).
 
 The legacy dev switch ``AGENT_CODE_SEARCH`` (rg | sifs) still works when
 ``AGENT_TOOLSET`` is unset; when both are set, ``AGENT_TOOLSET`` wins
@@ -38,6 +45,8 @@ ARM_SMART_GREP = "+smart-grep"
 ARM_SIFS = "+sifs"
 ARM_FORENSICS = "+forensics"
 ARM_MITRE_KB = "+mitre-kb"
+ARM_RECON = "+recon"
+ARM_READONLY = "read-only"
 
 #: Every known arm, in display order.
 KNOWN_ARMS: tuple[str, ...] = (
@@ -46,6 +55,8 @@ KNOWN_ARMS: tuple[str, ...] = (
     ARM_SIFS,
     ARM_FORENSICS,
     ARM_MITRE_KB,
+    ARM_RECON,
+    ARM_READONLY,
 )
 
 #: Search arms -> the engine their code_search toolset uses.
@@ -79,8 +90,10 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
     performs; see :func:`shlepa_agent.config._enable_search_tools`).
     """
     from shlepa_agent.config import (
+        _apply_read_only_arm,
         _enable_forensics_tools,
         _enable_mitre_kb_tools,
+        _enable_recon_tools,
         _enable_search_tools,
     )
 
@@ -92,3 +105,7 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
         _enable_forensics_tools(cfg)
     elif arm == ARM_MITRE_KB:
         _enable_mitre_kb_tools(cfg)
+    elif arm == ARM_RECON:
+        _enable_recon_tools(cfg)
+    elif arm == ARM_READONLY:
+        _apply_read_only_arm(cfg)

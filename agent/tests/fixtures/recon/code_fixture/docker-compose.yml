@@ -1,0 +1,9 @@
+services:
+  web:
+    image: nginx
+    ports:
+      - "8080:80"
+  db:
+    image: postgres
+    ports:
+      - "5432:5432"

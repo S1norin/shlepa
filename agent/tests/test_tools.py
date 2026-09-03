@@ -33,6 +33,8 @@ def test_registry_has_all_tools():
         "log_triage",
         # MITRE KB tool: off by default (+mitre-kb arm), see test_mitre_kb.py
         "mitre_kb",
+        # recon tool: off by default (+recon arm), see test_recon_tool.py
+        "recon",
     }
 
 

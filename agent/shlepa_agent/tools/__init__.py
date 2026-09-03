@@ -16,6 +16,7 @@ from shlepa_agent.tools.edit import EDIT_TOOL
 from shlepa_agent.tools.log_triage import LOG_TRIAGE_TOOL
 from shlepa_agent.tools.mitre_kb import MITRE_KB_TOOL
 from shlepa_agent.tools.read import READ_TOOL
+from shlepa_agent.tools.recon import RECON_TOOL
 from shlepa_agent.tools.write import WRITE_TOOL
 
 ALL_TOOLS: dict[str, Tool] = {
@@ -36,6 +37,9 @@ ALL_TOOLS: dict[str, Tool] = {
         # Off by default: enabled by the +mitre-kb toolset arm
         # (config._enable_mitre_kb_tools).
         MITRE_KB_TOOL,
+        # Off by default: enabled by the +recon toolset arm
+        # (config._enable_recon_tools).
+        RECON_TOOL,
     )
 }
 
