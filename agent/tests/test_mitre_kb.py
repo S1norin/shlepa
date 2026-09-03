@@ -26,7 +26,9 @@ BASE_TOOLS = ["read", "write", "edit", "bash"]
 
 @pytest.fixture()
 def kb():
-    kb = engine.MitreKB(engine.KB_DIR)
+    # shipped configuration: get_kb() loads the pinned expansion
+    kb = engine.MitreKB(engine.KB_DIR,
+                        expansion=engine.load_expansion(engine.KB_DIR))
     yield kb
     engine.reset_kb_cache()
 
@@ -121,13 +123,26 @@ def test_no_match(kb):
     assert "no match" in text
 
 
-def test_expansion_default_off_is_byte_identical_corpus(kb):
-    """Shipped behavior: no expansion -> identical BM25 stats to before."""
-    assert kb.expansion is None
-    base = engine.MitreKB(engine.KB_DIR)
-    assert kb._doc_terms == base._doc_terms
-    assert kb._df == base._df
-    assert kb._avgdl == base._avgdl
+def test_get_kb_ships_pinned_expansion():
+    """Issue #97: the shipped corpus includes the pinned expansion."""
+    kb2 = engine.get_kb()
+    try:
+        assert kb2.expansion is not None
+        assert len(kb2.expansion) == 709
+    finally:
+        engine.reset_kb_cache()
+
+
+def test_default_corpus_includes_shipped_expansion(kb):
+    """Issue #97: expansion-only vocabulary ranks its row by default."""
+    # 'windowing' occurs in exactly one expansion row (T1055.011) and in
+    # no name/cheat text, so a hit can only come from the expansion
+    mode, hits, _ = kb.search("windowing")
+    assert mode == "bm25"
+    assert hits and hits[0].id == "T1055.011"
+    # the no-expansion corpus still exists (explicit opt-out for eval)
+    plain = engine.MitreKB(engine.KB_DIR)
+    assert plain._bm25("windowing") == []
 
 
 def test_expansion_hook_appends_to_bm25_corpus():
