@@ -107,6 +107,18 @@ def _final_ask_span_ctx(phase_id: str, prompt: str):
         return _NULL_CTX
 
 
+def _phase_context(phase_id: str):
+    """Per-phase execution context (F4); nullcontext when tracing is off."""
+    if os.environ.get("SLEPA_OTEL_ENABLED") != "1":
+        return _NULL_CTX
+    try:
+        from shlepa_agent import telemetry
+
+        return telemetry.phase_context(phase_id)
+    except Exception:  # pragma: no cover - defensive, must never raise
+        return _NULL_CTX
+
+
 def _stamp_final_ask(span: Any, *, ok: bool, text: str = "",
                      reason: str = "", error: str = "") -> None:
     """Stamp the outcome of a final_ask request on its span (None-safe)."""
@@ -477,7 +489,8 @@ async def _pipeline(
             elapsed_s=round(state.model.elapsed(), 1),
         )
         start_t = state.model.elapsed()
-        result = await _run_phase_with_retries(state, phase, instrument)
+        with _phase_context(phase.id):
+            result = await _run_phase_with_retries(state, phase, instrument)
         _log_event(
             "phase_done",
             id=phase.id,
@@ -530,7 +543,8 @@ async def _pipeline(
         if result.status == "timeout":
             # Time cap / context-limit breach: one toolless final_ask on the
             # same conversation, then hand off to the terminal review.
-            await _final_ask(state, phase)
+            with _phase_context(phase.id):
+                await _final_ask(state, phase)
             final_status = "timeout"
             phase_id = "commit"
             continue

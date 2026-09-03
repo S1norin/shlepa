@@ -210,3 +210,81 @@ def test_run_prompt_stamps_root_input_and_output(monkeypatch, stub_openai, tmp_p
     assert attrs.get("input.value") == "Create hello.txt"
     assert attrs.get("shlepa.status") == "done"
     assert attrs.get("output.value") == FINAL_ANSWER
+
+
+def test_phase_context_stamps_spans_with_phase_id():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            with telemetry.phase_context("plan"):
+                with provider.get_tracer("test").start_as_current_span(
+                    "chat plan"
+                ) as span:
+                    assert span is not None
+            with telemetry.phase_context("work"):
+                with provider.get_tracer("test").start_as_current_span(
+                    "execute_tool work"
+                ):
+                    pass
+            with provider.get_tracer("test").start_as_current_span("orphan"):
+                pass
+    finally:
+        provider.shutdown()
+
+    by_name = {s.name: s.attributes for s in exporter.get_finished_spans()}
+    assert by_name["chat plan"].get("shlepa.phase_id") == "plan"
+    assert by_name["execute_tool work"].get("shlepa.phase_id") == "work"
+    assert "shlepa.phase_id" not in by_name["orphan"]
+
+
+def test_run_prompt_phase_spans_carry_phase_id(monkeypatch, stub_openai, tmp_path):
+    """End-to-end: LLM spans of a 3-phase run carry the right phase labels."""
+    import asyncio
+
+    from stub_server import FINAL_ANSWER, PIPELINE_SCRIPT, stub_state
+
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        monkeypatch.setenv("SLEPA_OTEL_ENABLED", "1")
+        monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
+        monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
+        # The OTel API only allows one global tracer provider per process,
+        # and pydantic-ai resolves it at Agent construction. Route this
+        # test's provider so its spans land in this test's exporter.
+        import pydantic_ai.models.instrumented as instrumented
+
+        monkeypatch.setattr(
+            instrumented, "get_tracer_provider", lambda: provider
+        )
+
+        from shlepa_agent.runner import run_prompt
+
+        stub_state["script"] = list(PIPELINE_SCRIPT)
+        with telemetry.root_span(provider, task="contest-hello-file"):
+            output = asyncio.run(run_prompt("Create hello.txt", instrument=True))
+    finally:
+        provider.shutdown()
+
+    assert output == FINAL_ANSWER
+    labeled = {
+        s.attributes.get("shlepa.phase_id")
+        for s in exporter.get_finished_spans()
+        if s.attributes.get("shlepa.phase_id")
+    }
+    # The stub pipeline runs plan -> work -> commit.
+    assert labeled == {"plan", "work", "commit"}, (
+        f"unexpected phase labels: {labeled}"
+    )
+    # Every labeled span sits under the root span (same trace).
+    roots = _root_spans(exporter)
+    labeled_spans = [
+        s for s in exporter.get_finished_spans()
+        if s.attributes.get("shlepa.phase_id")
+    ]
+    assert all(
+        s.context.trace_id == roots[0].context.trace_id for s in labeled_spans
+    )

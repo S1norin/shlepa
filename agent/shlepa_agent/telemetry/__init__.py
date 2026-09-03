@@ -15,6 +15,7 @@ import json
 import os
 import weakref
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from shlepa_agent import __version__
@@ -50,6 +51,32 @@ _ENV_ATTRIBUTES: tuple[tuple[str, str], ...] = (
 # while it is still recording. Runs are sequential per process, one ref is
 # enough. None when no root span is open.
 _ROOT_SPAN_REF: "weakref.ref[Any] | None" = None
+
+# The pipeline phase currently being executed (F4: per-span phase labels).
+# Set by the runner around each phase execution (and its final_ask); the
+# span processor copies it onto every span started inside the phase so
+# traces can be read as PLAN -> WORK -> REVIEW. None outside a phase.
+_PHASE_ID: ContextVar[str | None] = ContextVar("shlepa_phase_id", default=None)
+
+
+@contextmanager
+def phase_context(phase_id: str):
+    """Mark the current execution as ``phase_id`` for the duration.
+
+    Spans started inside the block (tool calls, LLM requests, final_ask)
+    are stamped with ``shlepa.phase_id`` by :class:`_ShlepaSpanProcessor`.
+    Restores the previous phase on exit.
+    """
+    token = _PHASE_ID.set(phase_id)
+    try:
+        yield
+    finally:
+        _PHASE_ID.reset(token)
+
+
+def current_phase_id() -> str | None:
+    """The phase id of the current execution context, if any."""
+    return _PHASE_ID.get()
 
 
 def _set_root_ref(span: Any) -> None:
@@ -92,6 +119,9 @@ class _ShlepaSpanProcessor(SpanProcessor):
             task_slug = os.environ.get("SLEPA_TASK_SLUG")
             if task_slug and "task" not in span.attributes:
                 span.set_attribute("task", task_slug)
+            phase_id = current_phase_id()
+            if phase_id and "shlepa.phase_id" not in span.attributes:
+                span.set_attribute("shlepa.phase_id", phase_id)
         except Exception:  # pragma: no cover - defensive, must never raise
             pass
 
