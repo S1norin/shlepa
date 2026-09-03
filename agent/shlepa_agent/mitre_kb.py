@@ -70,10 +70,18 @@ class Hit:
 
 
 class MitreKB:
-    """Loaded KB: rows + aliases + cheats and a small BM25 index."""
+    """Loaded KB: rows + aliases + cheats and a small BM25 index.
 
-    def __init__(self, kb_dir: Path) -> None:
+    ``expansion`` (dev/eval hook, issue #94): optional tid -> paraphrase
+    text appended to each doc's BM25 text. ``None`` (default) keeps the
+    shipped corpus byte-identical.
+    """
+
+    def __init__(
+        self, kb_dir: Path, *, expansion: dict[str, str] | None = None
+    ) -> None:
         self.kb_dir = kb_dir
+        self.expansion = expansion
         meta = json.loads((kb_dir / "kb_meta.json").read_text(encoding="utf-8"))
         self.version = meta["attack_version"]
         self.live_patterns = meta["live_patterns"]
@@ -100,6 +108,9 @@ class MitreKB:
                 f"{tid} {self.rows[tid]['name']} {self.rows[tid]['name']} "
                 f"{self.cheats.get(tid, '')}"
             )
+            if self.expansion:
+                text += f" {self.expansion.get(tid, '')}"
+
             terms = _tokenize(text)
             tf: dict[str, int] = {}
             for t in terms:

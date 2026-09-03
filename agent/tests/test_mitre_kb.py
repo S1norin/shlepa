@@ -120,6 +120,28 @@ def test_no_match(kb):
     assert "no match" in text
 
 
+def test_expansion_default_off_is_byte_identical_corpus(kb):
+    """Shipped behavior: no expansion -> identical BM25 stats to before."""
+    assert kb.expansion is None
+    base = engine.MitreKB(engine.KB_DIR)
+    assert kb._doc_terms == base._doc_terms
+    assert kb._df == base._df
+    assert kb._avgdl == base._avgdl
+
+
+def test_expansion_hook_appends_to_bm25_corpus():
+    """Dev/eval hook (issue #94): expansion text joins the doc text."""
+    probe = "zyzwq"  # nonsense token: in no committed corpus text
+    base = engine.MitreKB(engine.KB_DIR)
+    assert base._bm25(probe) == []  # baseline: nothing matches
+    exp = engine.MitreKB(engine.KB_DIR, expansion={"T1003": probe})
+    scores = exp._bm25(probe)
+    assert scores and scores[0][0] == "T1003"
+    # ids without expansion text are unaffected
+    assert all(tid != "T1003" or s > 0 for tid, s in scores)
+    assert {tid for tid, _ in scores} == {"T1003"}
+
+
 def test_full_mode_renders_verbatim_description(kb):
     mode, hits, unknown = kb.search("T1003.003")
     text = kb.render(mode, hits, unknown, full=True)
