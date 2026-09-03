@@ -46,7 +46,20 @@ from pathlib import Path
 import numpy as np
 from tokenizers import Tokenizer
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "agent"))
+def _find_agent_dir() -> Path:
+    """Locate the agent package: repo layout in dev, /agent mount in ACP."""
+    here = Path(__file__).resolve()
+    if len(here.parents) > 3:  # repo: .../research/embeddings/analysis
+        cand = here.parents[3] / "agent"
+        if (cand / "shlepa_agent").is_dir():
+            return cand
+    cand = Path("/agent")  # ACP image (see docstring)
+    if (cand / "shlepa_agent").is_dir():
+        return cand
+    raise SystemExit("shlepa_agent package not found (repo layout, /agent)")
+
+
+sys.path.insert(0, str(_find_agent_dir()))
 
 from shlepa_agent.mitre_kb import MitreKB, KB_DIR  # noqa: E402
 

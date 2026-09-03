@@ -136,15 +136,12 @@ def run_vectors(
         }
         rows.append(entry)
         if rrf_k:
-            bm = dict((tid, i) for i, (tid, _) in
-                      enumerate(kb._bm25(q["text"])))
-            fused = {
-                tid: 1 / (rrf_k + 1 + bm.get(tid, len(tids)))
-                for tid, _ in dense_rank
-            }
+            bm = {tid: i for i, (tid, _) in enumerate(kb._bm25(q["text"]))}
+            fused = {tid: 0.0 for tid in dense_rank}
+            for i, tid in enumerate(dense_rank):
+                fused[tid] += 1 / (rrf_k + 1 + i)
             for tid, i in bm.items():
-                if tid not in fused:
-                    fused[tid] = 1 / (rrf_k + 1 + i)
+                fused[tid] = fused.get(tid, 0.0) + 1 / (rrf_k + 1 + i)
             hybrid_rank = [t for t, _ in sorted(fused.items(), key=lambda p: (-p[1], p[0]))]
             h1h, h5h = score(hybrid_rank, q["expected"], kb)
             rows.append(
