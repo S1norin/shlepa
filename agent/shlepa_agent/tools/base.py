@@ -74,6 +74,10 @@ class AgentDeps:
     #: Set while the REPAIR phase runs (w2-5); the edit tool enforces the
     #: artifact-only, one-mutation budget. None outside REPAIR.
     repair_scope: RepairScope | None = field(default=None)
+    #: Failure ledger (w3-3): canonical fingerprint -> occurrence count.
+    #: Repeated identical failed tool calls are compressed in the result
+    #: forwarded to the model (the 1st occurrence is never compressed).
+    ledger: dict[str, int] = field(default_factory=dict)
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.
@@ -86,6 +90,41 @@ def _short(value: Any) -> str:
     if len(s) <= _ARG_REPR_LIMIT:
         return s
     return s[:_ARG_REPR_LIMIT] + "…(truncated)"
+
+
+def _ledger_compress(
+    deps: "AgentDeps",
+    name: str,
+    args: Mapping[str, Any] | None,
+    body: str,
+    failed: str,
+) -> tuple[str, int]:
+    """w3-3: count this failure in the run ledger; from the 2nd identical
+    occurrence return a compact one-liner instead of the full body.
+
+    Returns (body_to_forward, count) — count 0 means "forward as usual"
+    (knob off or 1st occurrence, which is recorded but never compressed).
+    """
+    from shlepa_agent.state import (
+        canonical_failure_key,
+        extract_exit_code,
+        ledger_enabled,
+    )
+
+    if not ledger_enabled():
+        return body, 0
+    key = canonical_failure_key(name, args, body, failed)
+    count = deps.ledger.get(key, 0) + 1
+    deps.ledger[key] = count
+    if count == 1:
+        return body, 0
+    code = extract_exit_code(body)
+    return (
+        f"REPEATED FAILURE (repeated {count}x): the same {name} call "
+        f"(exit={code}) failed with an identical result as an earlier call. "
+        "The full result was already shown at the first occurrence — do not "
+        "repeat this exact call; change approach."
+    ), count
 
 
 def format_tool_result(
@@ -120,10 +159,12 @@ def format_tool_result(
         f"[tool] {name}({argstr})",
         f"  spent={spent:.2f}s ended_at={ended:.1f}s",
     ]
+    repeated = 0
     if note:
         lines.append(f"  NOTE: {note}")
     if failed:
         lines.append(f"  FAILED: {failed}")
+        body, repeated = _ledger_compress(ctx.deps, name, args, body, failed)
     if untrusted:
         lines += [
             "UNTRUSTED TEXT ---------------",
@@ -132,6 +173,8 @@ def format_tool_result(
         ]
     else:
         lines.append(body)
+    if repeated:
+        lines.append(f"  [ledger] repeated {repeated}x — result compressed")
     return "\n".join(lines)
 
 

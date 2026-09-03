@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from shlepa_agent.budget import regime
@@ -186,3 +187,50 @@ def save_state(state: RunState) -> None:
         os.replace(tmp, target)
     except OSError:
         pass  # never let state-file IO affect the run
+
+
+# -- failure ledger canonicalizer (w3-3; reused by stagnation w3-4) --------
+
+_WS_RE = re.compile(r"\s+")
+
+
+def normalize_ws(text: str) -> str:
+    """Collapse all whitespace runs to single spaces and trim."""
+    return _WS_RE.sub(" ", str(text)).strip()
+
+
+def canonical_failure_key(
+    name: str,
+    args: "Mapping[str, Any] | None",
+    body: str,
+    failed: str,
+) -> str:
+    """Stable fingerprint of one failed tool call (w3-3).
+
+    Exact tool name + whitespace-normalized args + normalized outcome.
+    The volatile instrumentation envelope (``[tool]`` header, spent /
+    ended_at lines) is added by ``format_tool_result`` after this key is
+    computed, so nothing else is stripped.
+    """
+    norm_args = ",".join(
+        f"{k}={normalize_ws(v)}" for k, v in sorted((args or {}).items())
+    )
+    key = normalize_ws(f"{name}|{norm_args}|{failed}|{body}")
+    return key[:4000]
+
+
+def extract_exit_code(body: str) -> str:
+    """Best-effort exit code from a bash-shaped body; "?" when absent."""
+    m = re.search(r"\[exit_code\] (\d+)", body)
+    if m:
+        return m.group(1)
+    m = re.search(r"exit (\d+)", body)
+    if m:
+        return m.group(1)
+    return "?"
+
+
+def ledger_enabled() -> bool:
+    """SHLEPA_LEDGER knob (w3-3): on by default; 0/false/off disables."""
+    v = os.environ.get("SHLEPA_LEDGER", "1").strip().lower()
+    return v not in ("0", "false", "off")
