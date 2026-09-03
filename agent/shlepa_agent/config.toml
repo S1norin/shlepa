@@ -34,6 +34,11 @@ send_temp = false
 max_tokens = 16384
 # Per-request open timeout (up to the first bytes).
 request_timeout = 180.0
+# w3-5: consecutive terminal endpoint failures (429/402/5xx storm) that
+# trigger endpoint_finalized — stop issuing requests, persist the best
+# deliverable, tag the run and exit 0 (the only observable proxy for the
+# invisible external token cap).
+endpoint_fail_limit = 3
 
 [tools.bash]
 # Per-call timeout in seconds: default 30, hard cap 30 (the fixed regime

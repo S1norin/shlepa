@@ -407,6 +407,9 @@ async def _run_phase_with_retries(
     max_retries = 0 if phase.terminal else state.cfg.phases[phase.id].max_retries
     attempts = 1
     while result.status == "error" and attempts <= max_retries:
+        # w3-5: never issue another request to a stalled endpoint.
+        if _model_endpoint_stalled(state):
+            break
         attempts += 1
         _log_event(
             "phase_retry",
@@ -746,6 +749,37 @@ def _restore_best_on_exit(state: RunState) -> None:
         _log_event("agent_error", error=f"restore best: {type(e).__name__}: {str(e)[:200]}")
 
 
+def _endpoint_finalize(state: RunState) -> str:
+    """w3-5: reactive endpoint shutdown.
+
+    Consecutive terminal endpoint failures (429/402/5xx) are the only
+    observable proxy for the invisible external token cap: stop issuing
+    new LLM requests, persist the best deliverable snapshot (or the file
+    on disk when no snapshot exists), tag the root span
+    ``shlepa.termination_reason=endpoint_finalized`` and end the run
+    normally (the process exits 0).
+    """
+    model = state.model
+    _log_event(
+        "endpoint_finalized",
+        reason="consecutive terminal endpoint failures",
+        failures=model.endpoint_failure_count,
+    )
+    _restore_best_on_exit(state)
+    _telemetry_call("mark_termination", "endpoint_finalized")
+    return "done"
+
+
+def _model_endpoint_stalled(state: RunState) -> bool:
+    """w3-5: has the model seen >= endpoint_fail_limit consecutive
+    terminal endpoint failures? Best-effort: False when the model does
+    not expose the counter (dev wrappers / stubs)."""
+    try:
+        return bool(state.model.endpoint_stalled)
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _commit_fallback_hints(state: RunState, check: dict | None) -> None:
     """w2-6: on a deterministic VERIFY fallback, make sure the next plan
     sees the recorded failed checks as hints (the plan prompt renders
@@ -875,6 +909,16 @@ async def _pipeline(
             duration_s=round(state.model.elapsed() - start_t, 1),
             elapsed_s=round(state.model.elapsed(), 1),
         )
+        # w3-5: the endpoint is down (N consecutive terminal failures) —
+        # finalize reactively: no further requests, the best deliverable
+        # is persisted, the run ends normally (exit 0).
+        if _model_endpoint_stalled(state):
+            _log_event(
+                "endpoint_stalled",
+                phase=phase.id,
+                failures=state.model.endpoint_failure_count,
+            )
+            return "done", _endpoint_finalize(state)
         save_state(state)
         # Track the human-readable final output (terminal text wins).
         if result.summary:

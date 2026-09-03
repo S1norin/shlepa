@@ -66,6 +66,10 @@ class BudgetConfig(BaseModel):
     max_tokens: int = 16_384
     # Per-request open timeout (up to the first bytes).
     request_timeout: float = 180.0
+    # w3-5: after this many CONSECUTIVE terminal endpoint failures
+    # (429/402/5xx) the runner finalizes the run: no further LLM
+    # requests, the best deliverable is persisted, exit stays 0.
+    endpoint_fail_limit: int = 3
 
 
 class ToolConfig(BaseModel):

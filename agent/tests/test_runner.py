@@ -339,14 +339,18 @@ def test_commit_api_failure_reports_timeout(
     monkeypatch, stub_openai, tmp_path, events
 ):
     # A review that dies on a persistent model error (HTTP 500) is a normal
-    # hand-off: the run must end as "timeout", not "done".
+    # hand-off to the next cycle. A PERSISTENT storm (>= endpoint_fail_limit
+    # consecutive terminal failures) now triggers w3-5 endpoint_finalized:
+    # the run stops issuing requests and ends "done" (exit 0).
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
         {"error": 500},
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "timeout"
+    assert _status(events) == "done"
+    fin = [e for e in events if e.get("event") == "endpoint_finalized"]
+    assert fin and fin[0]["failures"] >= 3
 
 
 def test_commit_invalid_verdict_reports_error(
