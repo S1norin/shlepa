@@ -15,10 +15,14 @@ research/
 │   ├── notes/         # one digest per benchmark/paper: <slug>.md
 │   ├── papers/        # benchmark PDFs: <slug>.pdf + registry table
 │   └── analysis/      # cross-cutting analysis docs
-└── code_search/       # code-search tooling research (self-contained)
+├── code_search/       # code-search tooling research (self-contained)
+│   ├── README.md      # context, hard constraints, master index, decision record
+│   ├── notes/         # one digest per tool: <slug>.md
+│   └── analysis/      # cross-cutting analysis (fit matrix)
+└── embeddings/        # semantic-search/embeddings research (self-contained)
     ├── README.md      # context, hard constraints, master index, decision record
-    ├── notes/         # one digest per tool: <slug>.md
-    └── analysis/      # cross-cutting analysis (fit matrix)
+    ├── notes/         # one digest per option: <slug>.md
+    └── analysis/      # query set, bench harness, fit matrix, baselines
 ```
 
 - `notes/` + `papers/` (top level) are for **agent-architecture and general
@@ -31,6 +35,10 @@ research/
   engines and retrieval techniques the agent can use to find code with less
   context. Self-contained like `benchmarks/` (own README index, notes,
   analysis).
+- `embeddings/` is for **semantic-search / embeddings research** — dense
+  retrieval options for the agent's knowledge bases (MITRE KB line): model
+  landscape, endpoint embeddings, hybrid fusion, measurement harness.
+  Self-contained like `code_search/` (own README index, notes, analysis).
 
 ## Rules
 
