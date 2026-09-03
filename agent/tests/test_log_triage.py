@@ -145,3 +145,32 @@ def test_hour_spike_reported(tmp_path: Path):
     out = log_triage(str(f), workdir=tmp_path)
     assert "peak 2026-04-17T14:00 (30 rec)" in out
     assert "≈ 10× median" in out
+
+
+# ---------------------------------------------------------------------------
+# arm wiring: model-facing tool name
+# ---------------------------------------------------------------------------
+
+
+def test_build_phase_agent_exposes_log_triage_name(monkeypatch):
+    """Regression: pydantic-ai registers under the function name, so the
+    tool function must be named exactly ``log_triage`` (the Tool record
+    name) — the model calls it by that name, and the arm prompt note
+    references it by that name too."""
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.runner import build_phase_agent
+    from shlepa_agent.toolsets import ARM_FORENSICS
+
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_FORENSICS)
+    cfg = load_config()
+    model = TrackedModel(
+        "m", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+    agent = build_phase_agent(model, cfg, get_phase("work"), "TASK")
+    names = set(agent._function_toolset.tools)
+    assert "log_triage" in names
+    assert "log_triage_tool" not in names

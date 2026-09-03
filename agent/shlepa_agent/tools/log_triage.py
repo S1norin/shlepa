@@ -29,7 +29,7 @@ from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
 DEFAULT_WALL_S = 30.0
 
 
-async def log_triage_tool(
+async def log_triage(
     ctx: "RunContext[AgentDeps]",
     path: str = ".",
 ) -> str:
@@ -66,6 +66,7 @@ async def log_triage_tool(
 
 
 LOG_TRIAGE_TOOL = Tool(
+    # function name == model-facing tool name (pydantic-ai default)
     name="log_triage",
     note=(
         "log_triage: deterministic read-only triage of log/evidence files "
@@ -74,5 +75,5 @@ LOG_TRIAGE_TOOL = Tool(
         "candidates, peak hour. Call it FIRST on forensics/log tasks before "
         "grep/read round trips."
     ),
-    run=log_triage_tool,
+    run=log_triage,
 )
