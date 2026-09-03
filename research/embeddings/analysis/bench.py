@@ -175,10 +175,21 @@ def main() -> None:
     ap.add_argument("--query-vectors", type=Path, help="json: qid -> vector")
     ap.add_argument("--rrf-k", type=int, default=None,
                     help="also report RRF fusion with BM25 (vectors mode)")
+    ap.add_argument("--expansion", type=Path,
+                    help="jsonl semantic expansion artifact (id/v/text); "
+                         "appended to the BM25 doc corpus (issue #94)")
     ap.add_argument("--save", type=Path, help="save per-query rows (jsonl)")
     args = ap.parse_args()
 
-    kb = MitreKB(args.kb_dir)
+    expansion: dict[str, str] | None = None
+    if args.expansion:
+        expansion = {}
+        for line in args.expansion.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                e = json.loads(line)
+                expansion[e["id"]] = e["text"]
+
+    kb = MitreKB(args.kb_dir, expansion=expansion)
     queries = load_queries()
     bad = validate_queries(kb, queries)
     if bad:
@@ -189,7 +200,10 @@ def main() -> None:
 
     if args.mode == "bm25":
         rows = run_bm25(kb, queries)
-        summarize(rows, "BM25 (current mitre_kb scoring, cheat corpus)")
+        title = "BM25 (current mitre_kb scoring, cheat corpus)"
+        if expansion:
+            title = f"BM25 + expansion ({len(expansion)} rows)"
+        summarize(rows, title)
         print("\n" + fmt(rows))
     else:
         if not args.doc_vectors or not args.query_vectors:

@@ -1,9 +1,10 @@
 """Tests for named toolset arms (AGENT_TOOLSET, agent/shlepa_agent/toolsets.py).
 
 Arms: baseline (no-op, byte-identical default), +smart-grep (rg engine),
-+sifs (SIFS engine). AGENT_TOOLSET is the sole driver of the code-search
-toolset when set (it wins over the legacy AGENT_CODE_SEARCH switch); an
-invalid value is ignored, never a crash.
++sifs (SIFS engine), +forensics (log_triage), +mitre-kb (mitre_kb).
+AGENT_TOOLSET is the sole driver of the code-search toolset when set (it
+wins over the legacy AGENT_CODE_SEARCH switch); an invalid value is
+ignored, never a crash.
 """
 
 import pytest
@@ -14,6 +15,8 @@ from shlepa_agent.runner import _system_prompt
 from shlepa_agent.tools import get_tools
 from shlepa_agent.toolsets import (
     ARM_BASELINE,
+    ARM_FORENSICS,
+    ARM_MITRE_KB,
     ARM_SIFS,
     ARM_SMART_GREP,
     KNOWN_ARMS,
@@ -110,6 +113,73 @@ def test_env_arm_enables_tools_and_engine(monkeypatch, arm, engine):
         assert "file_outline: list def/class/func symbols" in prompt
 
 
+# ---------------------------------------------------------------------------
+# the +forensics arm (log_triage)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_arm_forensics_enables_log_triage():
+    cfg = load_config()
+    apply_arm(cfg, ARM_FORENSICS)
+    assert cfg.arm == ARM_FORENSICS
+    # the search tools stay off (different family)
+    assert cfg.code_search.engine == "auto"
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is True
+    for phase_id in PHASES:
+        assert list(cfg.phases[phase_id].tools) == BASE_TOOLS + ["log_triage"]
+
+
+def test_env_arm_forensics_enables_tool_and_prompt(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_FORENSICS)
+    cfg = load_config()
+    assert cfg.arm == ARM_FORENSICS
+    for phase_id in PHASES:
+        phase = get_phase(phase_id)
+        names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
+        assert names == BASE_TOOLS + ["log_triage"]
+        prompt = _system_prompt(cfg, phase, TASK)
+        assert "log_triage: deterministic read-only triage" in prompt
+
+
+# ---------------------------------------------------------------------------
+# the +mitre-kb arm (mitre_kb)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_arm_mitre_kb_enables_tool():
+    cfg = load_config()
+    apply_arm(cfg, ARM_MITRE_KB)
+    assert cfg.arm == ARM_MITRE_KB
+    # the other families stay off (different family)
+    assert cfg.code_search.engine == "auto"
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
+    assert cfg.tools.mitre_kb.enabled is True
+    for phase_id in PHASES:
+        assert list(cfg.phases[phase_id].tools) == BASE_TOOLS + ["mitre_kb"]
+
+
+def test_env_arm_mitre_kb_enables_tool_and_prompt(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_MITRE_KB)
+    cfg = load_config()
+    assert cfg.arm == ARM_MITRE_KB
+    for phase_id in PHASES:
+        phase = get_phase(phase_id)
+        names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
+        assert names == BASE_TOOLS + ["mitre_kb"]
+        prompt = _system_prompt(cfg, phase, TASK)
+        assert "mitre_kb: search the pinned MITRE ATT&CK" in prompt
+        # the arm-gated stable prefix: index + alias map
+        assert "MITRE ATT&CK knowledge base" in prompt
+        assert "T1003.003 NTDS" in prompt
+        assert "T1562.001 -> T1685" in prompt
+
+
 def test_env_arm_baseline_forces_tools_off_over_legacy_switch(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("AGENT_TOOLSET", ARM_BASELINE)
@@ -119,6 +189,7 @@ def test_env_arm_baseline_forces_tools_off_over_legacy_switch(monkeypatch):
     assert cfg.code_search.engine == "auto"
     assert cfg.tools.code_search.enabled is False
     assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
     for phase_id in PHASES:
         assert list(cfg.phases[phase_id].tools) == BASE_TOOLS
 
@@ -131,6 +202,8 @@ def test_env_arm_invalid_is_ignored_never_crashes(monkeypatch):
         assert cfg.arm == ARM_BASELINE, value
         assert cfg.tools.code_search.enabled is False, value
         assert cfg.tools.file_outline.enabled is False, value
+        assert cfg.tools.log_triage.enabled is False, value
+        assert cfg.tools.mitre_kb.enabled is False, value
         assert cfg.code_search.engine == "auto", value
 
 
@@ -139,6 +212,9 @@ def test_env_unset_defaults_to_baseline(monkeypatch):
     cfg = load_config()
     assert cfg.arm == ARM_BASELINE
     assert cfg.code_search.engine == "auto"
+    # default agent is byte-identical to baseline: forensics + KB off too
+    assert cfg.tools.log_triage.enabled is False
+    assert cfg.tools.mitre_kb.enabled is False
 
 
 def test_legacy_code_search_switch_still_works_without_toolset(monkeypatch):

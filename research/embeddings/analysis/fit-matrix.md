@@ -18,7 +18,7 @@ token budget. Baseline to beat: option A's measured numbers
 | **C′** | in-zip **`vtx-embed-1M`** (static SIF, LF4 4-bit, MIT — `notes/vtx-embed.md`) | **≈ 1.0 MB** (model 0.75 + tokenizer 0.36 + fitted SIF/PC + int8 doc vectors + code) | numpy + tokenizers (both in ACP; `safetensors` absent → build-time `.npy` conversion) | measured 0.02–0.08 ms/query (dev/ACP) | **measured 2026-09-03**: mini-256 dense paraphrase P@5 37.5% / RRF 27.5% (vs BM25 20.0%), literal held; nano-64 marginal (RRF 22.5%) — `analysis/vtx-results.md` | **low** (no training; ~1 day: port loader, fit SIF on KB, bench, wire into `mitre_kb`) | medium — self-reported benchmarks, single-author project |
 | D | dev-only MiniLM-int8 arm (SIFS pattern, cf. #57) | 0 (dev image only) | onnxruntime (in ACP) | measured in #93 | MiniLM-class | low | low — A/B only, never ships |
 | E | endpoint `/v1/embeddings` | 0 | endpoint only | per endpoint | unknown (vanilla LLM) | low (user restarts llama.cpp) | **high** — contest contract undocumented; startup embedding of 709 docs ≈ 2–5 min > 600 s wall |
-| F | **semantic keyword expansion** (LLM-generated paraphrases merged into BM25 corpus, build-time) | ~+200 KB | stdlib | ~0 ms | unknown — directly targets the measured gap | medium (generator script + artifact pinning) | low — pure corpus data, same runtime path as A |
+| F | **semantic keyword expansion** (LLM-generated paraphrases merged into BM25 corpus, build-time) | measured **+97,785 B zipped** | stdlib | ~0 ms | **measured 2026-09-03**: paraphrase P@5 40.0% / literal 100% (vs BM25 20.0%/100%) — `analysis/expansion-results.md`; above C′ dense (37.5%) | **done** (issue #94: generator + pinned artifact + hook) | low — pure corpus data, same runtime path as A |
 
 Notes: `vtx-embed-7M` (mini, 5.41 MB) does **not** fit with the current
 zip (projected ≈ 10.2 MB); it fits only if the opt-in (a) verbatim-rows
@@ -41,8 +41,13 @@ vectors, are the cost.
    fits the zip only if the 1.19 MB verbatim-rows fallback is dropped
    (→ ≈ 9.1 MB); then wire mini-256 + RRF into `mitre_kb.py` as a
    toolset arm and A/B via `shlepa run --arm`.
-2. **Run F in parallel (#94).** No-model BM25-side improvement;
-   complementary to C′ (corpus data vs vector model) — both can ship.
+2. **F measured, GO (#94, DONE 2026-09-03).** Result
+   (`analysis/expansion-results.md`, `notes/expansion-go-no-go.md`):
+   paraphrase P@5 40.0% (vs 20.0% BM25, 37.5% C′ dense), literal held,
+   +97,785 B zipped, zero runtime cost. Next: wire `expansion.jsonl`
+   into the shipped loader (`kb_meta` files entry + `get_kb()`) and
+   A/B baseline vs expansion via `shlepa run --arm`. Complementary to
+   C′ (corpus data vs vector model) — both can ship.
 3. **Run D+E as the quality ceiling (#93), dev-only.** MiniLM-int8
    answers "how far above can a real transformer get"; if the ceiling is
    barely above C′+F, stop there. E probes the vanilla-LLM-endpoint
@@ -66,8 +71,10 @@ vectors, are the cost.
 - The contest documents an embeddings endpoint with a stable model →
   re-evaluate E as a first-class option (still no precomputed vectors:
   the model may change between contests).
-- #94 shows expansion regresses the literal split (over-generic
-  vocabulary) → fall back to A until a better expansion prompt exists.
+- ~~#94 shows expansion regresses the literal split~~ — measured
+  2026-09-03: literal held at 100%, GO (`analysis/expansion-results.md`);
+  the residual risk is the 2/40 paraphrase top-5 regressions (p01 T1047,
+  p31 T1083), a candidate for a prompt-v2 pass, not a blocker.
 
 ## Sources
 

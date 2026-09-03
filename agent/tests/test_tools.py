@@ -28,6 +28,11 @@ def test_registry_has_all_tools():
         # test_code_search_tools.py
         "code_search",
         "file_outline",
+        # forensics tools: off by default (+forensics arm), see
+        # test_toolsets.py / test_log_triage.py
+        "log_triage",
+        # MITRE KB tool: off by default (+mitre-kb arm), see test_mitre_kb.py
+        "mitre_kb",
     }
 
 
