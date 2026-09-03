@@ -17,7 +17,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 RECON = Path(__file__).resolve().parents[1] / "tools" / "recon.py"
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "recon"
+WEB_GOLDEN_PORT = 18473  # fixed port used by the web golden (gen_goldens.py)
 
 
 def _load_recon_module():
@@ -90,8 +94,8 @@ def _wait_ready(port: int) -> None:
     raise RuntimeError(f"server on port {port} did not come up")
 
 
-def _start_web_server() -> tuple[ThreadingHTTPServer, int]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+def _start_web_server(port: int = 0) -> tuple[ThreadingHTTPServer, int]:
+    server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -280,6 +284,64 @@ def test_code_mode(tmp_path):
 # ---------------------------------------------------------------------------
 # data mode
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# CLI parity against golden outputs
+#
+# Goldens in fixtures/recon/ were generated from the pre-refactor CLI
+# (regenerate with: python3 tests/fixtures/recon/gen_goldens.py). They pin
+# the CLI contract across the engine extraction into shlepa_agent.recon.
+# Volatile fields excluded: stats.elapsed_s (timing), root (absolute
+# checkout path), ports_open (depends on what else listens on the host).
+# ---------------------------------------------------------------------------
+
+
+def _strip_volatile(obj: dict) -> dict:
+    obj = dict(obj)
+    obj.pop("root", None)
+    stats = dict(obj.get("stats", {}))
+    stats.pop("elapsed_s", None)
+    obj["stats"] = stats
+    return obj
+
+
+def test_code_cli_parity():
+    proc = run_recon("--code", str(FIXTURES / "code_fixture"))
+    assert proc.returncode == 0, proc.stderr
+    live = _strip_volatile(json.loads(proc.stdout))
+    golden = _strip_volatile(
+        json.loads((FIXTURES / "code.golden.json").read_text()))
+    assert live == golden
+
+
+def test_data_cli_parity():
+    proc = run_recon("--data", str(FIXTURES / "data_fixture"))
+    assert proc.returncode == 0, proc.stderr
+    live = _strip_volatile(json.loads(proc.stdout))
+    golden = _strip_volatile(
+        json.loads((FIXTURES / "data.golden.json").read_text()))
+    assert live == golden
+
+
+def test_web_cli_parity():
+    try:
+        server, port = _start_web_server(port=WEB_GOLDEN_PORT)
+    except OSError:
+        pytest.skip(f"port {WEB_GOLDEN_PORT} is busy on this host")
+    try:
+        proc = run_recon(f"http://127.0.0.1:{port}/")
+        assert proc.returncode == 0, proc.stderr
+        live = json.loads(proc.stdout)
+        # the fixture's own port must be scanned open
+        assert str(port) in live["ports_open"]
+        live.pop("stats", None)   # elapsed_s volatile
+        live.pop("ports_open", None)  # host-dependent
+        golden = json.loads((FIXTURES / "web.golden.json").read_text())
+        assert live == golden
+    finally:
+        server.shutdown()
+        server.server_close()
+
 
 def test_data_mode(tmp_path):
     (tmp_path / "notes.txt").write_text(

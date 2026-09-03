@@ -1,0 +1,7 @@
+2026-05-01T09:00:00 level=INFO user=admin ip=10.0.0.5 action=login
+2026-05-01T09:01:12 level=WARN user=guest ip=192.168.1.44 action=upload
+2026-05-01T09:02:33 level=ERROR user=svc ip=172.16.0.9 action=export
+user=admin action=login status=ok
+user=guest action=upload status=err
+flag{d4t4_sUrfaC3}
+deadbeefcafe0123deadbeefcafe0123deadbeef
