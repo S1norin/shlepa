@@ -94,6 +94,9 @@ class AgentDeps:
     #: The current phase window (w3-2); None outside a phase (the
     #: finalization reserve guard is then inert).
     phase_window: PhaseWindow | None = field(default=None)
+    #: Stagnation tracker (w3-4, shadow-only): {"phase_id", "seq"} of
+    #: recent failure keys within the current phase.
+    stagnation: dict = field(default_factory=dict)
 
 
 #: Values longer than this in the ``[tool] name(args=...)`` header are cut.
@@ -141,6 +144,54 @@ def _ledger_compress(
         "The full result was already shown at the first occurrence — do not "
         "repeat this exact call; change approach."
     ), count
+
+
+def _is_adverse(name: str, body: str, failed: str | None) -> bool:
+    """w3-4: a call counts as a failure for the ledger/stagnation when it
+    was flagged by the tool (``failed``) or, for bash-shaped results,
+    exited non-zero (the body carries ``[exit_code] N``)."""
+    from shlepa_agent.state import extract_exit_code
+
+    if failed is not None:
+        return True
+    code = extract_exit_code(body)
+    return code not in ("?", "0")
+
+
+def _stagnation_track(
+    deps: "AgentDeps",
+    name: str,
+    args: Mapping[str, Any] | None,
+    body: str,
+    failed: str | None,
+) -> None:
+    """w3-4: shadow-only stagnation signal — >=3 consecutive identical
+    failed calls within one phase log a ``stagnation`` event. No
+    blocking, no synthetic result, never raises.
+    """
+    try:
+        from shlepa_agent.log import _log_event
+        from shlepa_agent.state import canonical_failure_key, stagnation_check
+
+        phase_id = deps.phase_window.phase_id if deps.phase_window else "none"
+        if failed is None:
+            # a non-identical (successful) call breaks the streak
+            deps.stagnation["phase_id"] = phase_id
+            deps.stagnation["seq"] = []
+            return
+        key = canonical_failure_key(name, args, body, failed)
+        streak = stagnation_check(deps.stagnation, phase_id, key)
+        if streak is not None:
+            _log_event(
+                "stagnation",
+                phase=phase_id,
+                tool=name,
+                streak=streak,
+                key=key[:120],
+                note="shadow only — no blocking",
+            )
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def finalizing_result(
@@ -215,7 +266,13 @@ def format_tool_result(
         lines.append(f"  NOTE: {note}")
     if failed:
         lines.append(f"  FAILED: {failed}")
-        body, repeated = _ledger_compress(ctx.deps, name, args, body, failed)
+    if _is_adverse(name, body, failed):
+        # w3-4: the stagnation key is computed on the ORIGINAL body —
+        # before the ledger compresses the body of repeated failures.
+        _stagnation_track(ctx.deps, name, args, body, failed or "")
+        body, repeated = _ledger_compress(ctx.deps, name, args, body, failed or "")
+    else:
+        _stagnation_track(ctx.deps, name, args, body, None)
     if untrusted:
         lines += [
             "UNTRUSTED TEXT ---------------",

@@ -234,3 +234,31 @@ def ledger_enabled() -> bool:
     """SHLEPA_LEDGER knob (w3-3): on by default; 0/false/off disables."""
     v = os.environ.get("SHLEPA_LEDGER", "1").strip().lower()
     return v not in ("0", "false", "off")
+
+
+def stagnation_check(state: dict, phase_id: str, key: str) -> int | None:
+    """w3-4: >=3 consecutive identical failure keys WITHIN ONE phase.
+
+    ``state`` is the mutable per-run dict held by ``AgentDeps.stagnation``
+    (``{"phase_id": ..., "seq": [...]}``); a different phase or a
+    different key breaks the streak (the tail of ``seq`` encodes the
+    current run of identical keys). Returns the consecutive streak length
+    when the shadow threshold is met (>=3), else None. Shadow-only: no
+    blocking.
+    """
+    if state.get("phase_id") != phase_id:
+        state["phase_id"] = phase_id
+        state["seq"] = []
+    seq: list[str] = state["seq"]
+    seq.append(key)
+    if len(seq) > 8:  # bounded memory; the threshold is 3
+        del seq[: len(seq) - 8]
+    if len(seq) < 3 or not (seq[-1] == seq[-2] == seq[-3]):
+        return None
+    n = 1
+    for prev in reversed(seq[:-1]):
+        if prev == key:
+            n += 1
+        else:
+            break
+    return n
