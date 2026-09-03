@@ -95,11 +95,70 @@ Routing rules (runner):
   (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
   the task workdir; the structured bridge between phases and cycles.
 
+## Loop regimes: `agent.loop`
+
+`[agent].loop` selects the pipeline regime (env `SHLEPA_LOOP`, CLI
+`shlepa run --loop`): `cycles` (the default — the v5 plan → work → review
+pipeline above) or `v3` (the budgeted single-loop regime,
+`shlepa_agent/v3loop.py`). The loop axis is **orthogonal to the toolset
+arm** (`AGENT_TOOLSET` / `--arm`): any arm runs under either regime.
+The runner branches on the regime (`runner.run_prompt`); the v3 regime
+logs its own `agent_start` (with the `[v3loop]` budget fields, plus
+`loop="v3"`) and `agent_done` (`status` ∈ `done` / `budget` / `error`).
+
+### The v3 budgeted loop
+
+One open, free-text `main` phase (no typed output, **no plan/review
+phases** — that is the point of the regime), bounded by the depleting
+`[v3loop]` budget instead of per-phase caps:
+
+- **Soft wall** (`soft_time`, 500s) and **hard wall** (`hard_time`,
+  585s) — checked before every LLM request by the `BudgetedModel`; a
+  breach raises `BudgetExceeded` and the run hands off to the terminal
+  `commit` phase (final status `budget`).
+- **Request limit** (`request_limit`, 90) — checked before each request
+  (pydantic-ai `UsageLimits`).
+- **Total-token budget** (`token_budget`, 300k) — checked after each
+  response (pydantic-ai `UsageLimits`).
+- **Persistent model errors** (`ModelAPIError`) also hand off to the
+  commit (v3 parity: the deliverable may already be partially usable on
+  disk).
+
+The **commit phase** (`prompts/v3commit.md`, terminal, free text):
+
+- Resumes the main conversation (`trim_history`: no dangling tool
+calls); if the history is empty it re-states the original task.
+- Cap = `min(commit_time_cap, hard_time − elapsed)`: the soft check is
+  disabled for the commit (it may spend the remaining hard window), the
+  hard check stays active. Below 10s the commit is skipped (logged as a
+  `commit` event, the run still ends `budget`).
+- Its own request limit (`commit_request_limit`, 25) and the reasoning
+  effort from `[phases.commit].reasoning_effort` (sent as
+  `reasoning_effort` **only** for the commit phase).
+- The commit never fails the run: timeouts and errors are logged
+  (`commit` events), the final status stays `budget`.
+
+Commit semantics (v3 parity):
+
+- **Commit only on budget breach** (soft/hard wall, request limit, token
+  budget) or a persistent model error: a `budget` event
+  (`reason="usage_or_time"`) + the commit events, final status `budget`.
+- **A normal main finish does NOT commit** (status `done`; the main run
+  already wrote the deliverable).
+- **A non-budget error ends the run without a commit** (status `error`).
+
+The main system prompt is `prompts/main.md` (the v3 PROTOCOL / FORMAT
+DISCIPLINE / CODE FIX TASKS / BUDGET sections + the arm's tool notes) with
+one line rendered from the `[v3loop]` values; the task instruction is the
+first user message. The per-request wall is `[v3loop].request_wall`
+(240s) instead of the cycles regime's fixed 180s `llm_wall`.
+
 ## Env-var overrides
 
 | Env var | Config key | Type |
 |---|---|---|
 | `SHLEPA_TEMP` | `agent.temp` | float (sent only when `send_temp` is on) |
+| `SHLEPA_LOOP` | `agent.loop` | str (`cycles` the default v5 pipeline, or `v3`; unset/invalid keep the toml value) |
 | `SHLEPA_SEND_TEMP` | `agent.send_temp` | 1/0 (bool) |
 | `SHLEPA_MAX_STEPS` | `agent.max_steps` | int (0 = off, the run cycles until done) |
 | `SHLEPA_STATE_FILE` | — | run-state file path (default `/tmp/shlepa_state.json`, never the workdir) |
@@ -113,6 +172,19 @@ Routing rules (runner):
 | `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 45s) | float |
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
 | `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
+
+`SHLEPA_V3_*` (the v3 loop regime's budget — used only when
+`agent.loop = "v3"`):
+
+| Env var | Config key | Type |
+|---|---|---|
+| `SHLEPA_V3_SOFT_TIME` | `v3loop.soft_time` | float (s) |
+| `SHLEPA_V3_HARD_TIME` | `v3loop.hard_time` | float (s) |
+| `SHLEPA_V3_REQUEST_LIMIT` | `v3loop.request_limit` | int |
+| `SHLEPA_V3_TOKEN_BUDGET` | `v3loop.token_budget` | int |
+| `SHLEPA_V3_COMMIT_TIME` | `v3loop.commit_time_cap` | float (s) |
+| `SHLEPA_V3_COMMIT_REQUEST_LIMIT` | `v3loop.commit_request_limit` | int |
+| `SHLEPA_V3_REQUEST_WALL` | `v3loop.request_wall` | float (s, per-request wall) |
 
 Model/endpoint variables are unchanged (set by the harness, not the
 config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
@@ -173,12 +245,16 @@ mutation.
 
 ## Sections overview
 
-- `[agent]` — pipeline entry (dev knob, default `plan`), temperature
+- `[agent]` — pipeline entry (dev knob, default `plan`), **loop regime**
+  (`loop`: `cycles` the default v5 pipeline or `v3` the budgeted loop —
+  see Loop regimes), temperature
   (opt-in: sent to the endpoint only when `send_temp` is enabled; default:
   not sent, the endpoint decides), step guard (dev knob), emergency
   phase name (unused in v5).
 - `[budget]` — per-request caps: `max_tokens`, `request_timeout`
   (the phase caps are constants in `budget.py`).
+- `[v3loop]` — the depleting budget of the v3 loop regime (active only
+  when `agent.loop = "v3"`; see Loop regimes).
 - `[tools.*]` — per-tool `enabled` plus caps: `timeout`/`max_timeout`/
   `max_output` (bash), `max_limit`/`max_output`/`max_file_mb` (read),
   `max_file_mb` (edit). File tools (read/write/edit) have a hard 5s

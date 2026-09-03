@@ -4,6 +4,11 @@ An arm is a stable name for a tool-combination config mutation (the A/B
 design in research/notes/toolsets-modular.md). The run loop selects one
 arm per run: the CLI passes ``AGENT_TOOLSET`` into the container and
 tags the MLflow run with the same string, so runs are filterable by arm.
+The arm axis is **orthogonal to the loop regime** (``[agent].loop`` /
+``SHLEPA_LOOP``: ``cycles`` the v5 pipeline, ``v3`` the budgeted
+loop — research/notes/v3loop-regime.md): an arm mutates the toolset, a
+regime selects the pipeline that consumes it; every arm runs under
+either regime.
 
 Arms (the current set; the registry grows as new tool families land):
 
