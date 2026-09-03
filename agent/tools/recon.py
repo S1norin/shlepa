@@ -15,7 +15,9 @@ Contract:
   - deterministic: fixed probe lists and order; only stats.elapsed_s varies
   - fail-safe: a stage failure emits its section with an error note and never
     aborts the run; exit code 0 on any completed mode
-  - internal wall budget ~100s so the run fits the bash tool's 120s cap
+  - internal wall budget 25s so the run completes under the 30s per-call
+    tool cap; stages past the deadline are skipped with a "skipped
+    (deadline)" note
 
 This script is a thin CLI wrapper; the engine lives in
 ``shlepa_agent.recon`` (also importable by the agent's recon tool).

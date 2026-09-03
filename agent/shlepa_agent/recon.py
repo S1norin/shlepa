@@ -18,6 +18,9 @@ Contract:
   - fail-safe: a stage failure emits its section with an error note and
     never aborts the run
   - pure stdlib; no side effects on import
+  - web mode completes within DEADLINE_S (25s), under the 30s per-call
+    tool wall; stages past the deadline are skipped with a "skipped
+    (deadline)" note instead of aborting
 
 Design rules (see research/notes/recon-deterministic.md):
 deterministic engine + LLM interpretation; signals, not verdicts.
@@ -40,7 +43,12 @@ from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
 
 MAX_TOTAL = 8192          # hard cap on serialized output bytes
-DEADLINE_S = 100.0        # internal wall budget for the crawl
+# Internal wall budget. Must stay well under the 30s per-call tool wall
+# (budget.py BASH_MAX / config.toml [tools.bash] max_timeout) so the JSON
+# always completes before any wall. Per-request timeouts clamp to the
+# remaining time, so overrun beyond the deadline is bounded by one
+# in-flight wave (~0.5s).
+DEADLINE_S = 25.0
 MAX_REQUESTS = 150        # crawl + sensitive combined
 MAX_BODY = 16384          # per-response body cap for parsing
 BINARY_EXT = re.compile(
@@ -399,8 +407,10 @@ def recon_web(url: str) -> dict:
     baseline = None
     base: dict = {}
     try:
+        base_timeout = max(0.5, min(5.0, deadline - time.monotonic()))
         status, hdrs, body, final_path, redirects = http_get(
-            ip, port, seed_path, scheme, host_header=None, timeout=5.0)
+            ip, port, seed_path, scheme, host_header=None,
+            timeout=base_timeout)
         requests += 1
         base = {"status": status, "final_path": final_path}
         for h in ("server", "x-powered-by", "www-authenticate"):
@@ -410,7 +420,7 @@ def recon_web(url: str) -> dict:
                    (hdrs.get("set-cookie") or "").split(", ") if c]
         if cookies:
             base["cookies"] = cookies[:4]
-        if scheme == "https":
+        if scheme == "https" and time.monotonic() < deadline - 1:
             try:
                 with socket.create_connection((ip, port), timeout=4) as raw:
                     ctx = ssl.create_default_context()
@@ -440,7 +450,7 @@ def recon_web(url: str) -> dict:
 
     # stage 3: vhost discovery (Host header probing against the IP)
     vhosts = []
-    if baseline and time.monotonic() < deadline - 30:
+    if baseline and time.monotonic() < deadline - 8:
         candidates = [h for h in VHOSTS if h.lower() != host.lower()]
         found: dict[str, dict] = {}
 
@@ -448,8 +458,10 @@ def recon_web(url: str) -> dict:
             if time.monotonic() > deadline:
                 return name, None
             try:
+                remaining = max(0.5, min(3.0, deadline - time.monotonic()))
                 status, hdrs, body, _, _ = http_get(
-                    ip, port, "/", scheme, host_header=name, timeout=3.0)
+                    ip, port, "/", scheme, host_header=name,
+                    timeout=remaining)
             except Exception:
                 return name, None
             sig = (status, hdrs.get("server", ""), _title(body) or "",
@@ -465,11 +477,18 @@ def recon_web(url: str) -> dict:
                 return name, entry
             return name, None
 
-        with cf.ThreadPoolExecutor(6) as ex:
-            for name, entry in ex.map(vprobe, candidates):
-                if entry:
-                    found[name] = entry
+        # 6-probe waves with a deadline check between waves: a full 31-probe
+        # batch queued in one executor would run far past the deadline
+        for i in range(0, len(candidates), 6):
+            if time.monotonic() >= deadline:
+                break
+            with cf.ThreadPoolExecutor(6) as ex:
+                for name, entry in ex.map(vprobe, candidates[i:i + 6]):
+                    if entry:
+                        found[name] = entry
         vhosts = [found[name] for name in sorted(found)]
+    elif baseline:
+        out["vhosts_note"] = "skipped (deadline)"
     out["vhosts"] = vhosts
 
     # stage 4: endpoint inventory (wordlist seeds + BFS crawl)
@@ -483,9 +502,12 @@ def recon_web(url: str) -> dict:
         except Exception as e:
             return {"path": path, "error": err_note(e)}
 
-    if baseline and time.monotonic() < deadline - 15:
+    crawl_skipped = False
+    if baseline and time.monotonic() < deadline - 5:
         frontier = [seed_path] + [p for p in CRAWL_PATHS if p != seed_path]
         for depth in range(3):
+            if time.monotonic() >= deadline:
+                break
             if not frontier:
                 break
             batch = [p for p in frontier if p not in results]
@@ -493,15 +515,23 @@ def recon_web(url: str) -> dict:
             batch = batch[: max(0, budget)]
             if not batch:
                 break
-            with cf.ThreadPoolExecutor(8) as ex:
-                futs = {ex.submit(probe, p): p for p in batch}
-                for fut in cf.as_completed(futs):
-                    p = futs[fut]
-                    try:
-                        results[p] = fut.result()
-                    except Exception as e:
-                        results[p] = {"path": p, "error": err_note(e)}
-                    requests += 1
+            # 8-request waves with a deadline check between waves: a full
+            # ~70-path batch queued in one executor would run far past the
+            # deadline, so wave-chunking bounds the overrun to one wave
+            # (per-request timeouts clamp to the remaining time, floor 0.5s)
+            for i in range(0, len(batch), 8):
+                if time.monotonic() >= deadline:
+                    break
+                wave = batch[i:i + 8]
+                with cf.ThreadPoolExecutor(8) as ex:
+                    futs = {ex.submit(probe, p): p for p in wave}
+                    for fut in cf.as_completed(futs):
+                        p = futs[fut]
+                        try:
+                            results[p] = fut.result()
+                        except Exception as e:
+                            results[p] = {"path": p, "error": err_note(e)}
+                        requests += 1
             if depth < 2:
                 nxt: set[str] = set()
                 for p, entry in results.items():
@@ -527,6 +557,8 @@ def recon_web(url: str) -> dict:
                 frontier = batch_new
             else:
                 frontier = []
+    elif baseline:
+        crawl_skipped = True
     # ordered output: seed paths (wordlist order) first, then BFS discoveries
     ordered = []
     seen_p: set[str] = set()
@@ -543,31 +575,41 @@ def recon_web(url: str) -> dict:
         [e for e in ordered if e.get("status") == 404]
     out["endpoints"] = ordered[:40]
     dropped += max(0, len(ordered) - 40)
+    if crawl_skipped:
+        out["endpoints_note"] = "skipped (deadline)"
 
     # stage 5: sensitive paths
     sensitive = []
-    if baseline and time.monotonic() < deadline - 10:
+    if baseline and time.monotonic() < deadline - 2:
         budget = MAX_REQUESTS - (len(results) + len(sensitive))
         todo = [p for p in SENSITIVE_PATHS
                 if p not in results][: max(0, budget)]
-        with cf.ThreadPoolExecutor(8) as ex:
-            futs = {ex.submit(probe, p): p for p in todo
-                    if requests < MAX_REQUESTS}
-            for fut in cf.as_completed(futs):
-                p = futs[fut]
-                try:
-                    entry = fut.result()
-                except Exception as e:
-                    entry = {"path": p, "error": err_note(e)}
-                requests += 1
-                if entry.get("status") in (200, 204, 301, 302):
-                    s: dict = {"path": p, "status": entry["status"]}
-                    excerpt = entry.get("excerpt")
-                    if excerpt:
-                        s["excerpt"] = excerpt[:120]
-                    sensitive.append(s)
+        # 8-request waves, same overrun bound as the crawl
+        for i in range(0, len(todo), 8):
+            if time.monotonic() >= deadline:
+                break
+            if requests >= MAX_REQUESTS:
+                break
+            wave = todo[i:i + min(8, MAX_REQUESTS - requests)]
+            with cf.ThreadPoolExecutor(8) as ex:
+                futs = {ex.submit(probe, p): p for p in wave}
+                for fut in cf.as_completed(futs):
+                    p = futs[fut]
+                    try:
+                        entry = fut.result()
+                    except Exception as e:
+                        entry = {"path": p, "error": err_note(e)}
+                    requests += 1
+                    if entry.get("status") in (200, 204, 301, 302):
+                        s: dict = {"path": p, "status": entry["status"]}
+                        excerpt = entry.get("excerpt")
+                        if excerpt:
+                            s["excerpt"] = excerpt[:120]
+                        sensitive.append(s)
         sensitive.sort(key=lambda s: SENSITIVE_PATHS.index(
             s["path"]) if s["path"] in SENSITIVE_PATHS else 999)
+    elif baseline:
+        out["sensitive_note"] = "skipped (deadline)"
     out["sensitive"] = sensitive[:16]
 
     # derived: errors (404s are wordlist noise; signal = 5xx and auth)
