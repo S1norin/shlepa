@@ -1,0 +1,1 @@
+{"timestamp":"2026-04-16T09:02:13Z","eventSource":"s3.amazonaws.com","eventName":"PutBucketPolicy","sourceIPAddress":"10.10.5.162","userIdentity":{"type":"IAMUser","userName":"m.jones"},"requestParameters":{"bucketName":"corp-sensitive-data-prod","bucketPolicy":"{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}"}}

@@ -1,0 +1,3 @@
+{"timestamp":"2026-04-10T14:22:17.003Z","operation":"Consent to application","user":"cfo@contoso.com","target_resource":"DocuSign Pro Helper (a3b9c2d1-...)","ip_address":"198.51.100.47","permissions_granted":["Mail.ReadWrite","Mail.Send","offline_access"]}
+{"timestamp":"2026-04-10T14:22:17.003Z","operation":"Add OAuth2PermissionGrant","initiated_by":"cfo@contoso.com","app_display_name":"DocuSign Pro Helper","scope":"Mail.ReadWrite Mail.Send offline_access","consent_type":"AllPrincipals"}
+{"timestamp":"2026-04-08T09:15:00Z","operation":"Consent to application","user":"user@contoso.com","target_resource":"Zoom (legitimate)","permissions_granted":["User.Read"]}

@@ -1,0 +1,4 @@
+{"timestamp":"2026-04-10T14:23:01.441Z","operation":"New-InboxRule","user":"cfo@contoso.com","client_app":"DocuSign Pro Helper","rule_name":" ","forward_to":"exfil@protonmail.com","delete_message":true}
+{"timestamp":"2026-04-10T14:23:45.001Z","operation":"MailItemsAccessed","user":"cfo@contoso.com","client_app":"DocuSign Pro Helper","access_type":"Bind","folder":"Inbox","item_count":3847}
+{"timestamp":"2026-04-10T14:30:00Z","operation":"MailItemsAccessed","user":"cfo@contoso.com","client_app":"DocuSign Pro Helper","access_type":"Bind","folder":"SentItems","item_count":1203}
+{"timestamp":"2026-04-10T14:23:00Z","operation":"MailItemsAccessed","user":"cfo@contoso.com","client_app":"Outlook","access_type":"Bind","folder":"Inbox","item_count":12}

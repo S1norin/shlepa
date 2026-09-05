@@ -1,0 +1,36 @@
+schema_version = "1.2"
+
+[task]
+name = "local/find-ssrf-go"
+description = "Audit a synthetic Go URL-preview service and report its SSRF flaw."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "audit", "go", "ssrf", "cwe-918"]
+source = "own"
+url = "https://github.com/Andrchest/shlepa/tree/dev/tasks/contest-find-ssrf-go"
+synced_at = "2026-09-05"
+
+[verifier]
+timeout_sec = 120.0
+
+[agent]
+timeout_sec = 600.0
+
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+
+[verifier.env]
+
+[environment.env]
+
+[solution.env]

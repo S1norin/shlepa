@@ -1,0 +1,4 @@
+package main
+import ("html"; "strings"; "testing")
+func TestEscapesAllHTMLFields(t *testing.T) { vals:=[]string{"<script>alert('x')</script>",`<img src=x onerror="alert(1)">`,`<a href="javascript:alert(1)">x</a>`}; b,e:=BuildFeedbackEmail("user@example.com","support@example.com",vals[0],vals[1],vals[2]); if e!=nil {t.Fatal(e)}; for _,v:=range vals {if strings.Contains(b,v) || !strings.Contains(b,html.EscapeString(v)){t.Fatalf("unescaped or missing value %q in %q",v,b)}} }
+func TestRejectsHeaderInjection(t *testing.T) { cases:=[][5]string{{"user@example.com\r\nBcc: evil@example.com","support@example.com","u","s","f"},{"user@example.com","support@example.com","u","ok\r\nBcc: evil@example.com","f"}}; for _,c:=range cases {if _,e:=BuildFeedbackEmail(c[0],c[1],c[2],c[3],c[4]); e==nil {t.Fatalf("header injection accepted: %#v",c)}} }

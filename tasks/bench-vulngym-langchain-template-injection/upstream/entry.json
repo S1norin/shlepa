@@ -1,0 +1,73 @@
+{
+  "commit": "b7d1831f9d3560ed4fb45134861eef3f4544eff3",
+  "critical_operation": {
+    "code": "                        resolved_scope = getattr(resolved_scope, child)",
+    "desc": "getattr(resolved_scope, child) 在 dict 下标访问抛出 TypeError 或 AttributeError 后作为兜底手段被无条件执行，child 直接取自模板点分路径的当前片段，未经类型检查或名称白名单过滤。这是整条漏洞链路的最终汇聚点：当模板路径含 __class__ 等 Python 内置属性名时，getattr 直接对渲染上下文中的任意对象执行属性访问，致使对象内部状态通过渲染结果外泄。",
+    "file": "libs/core/langchain_core/utils/mustache.py",
+    "line": 382
+  },
+  "entry_id": "entry-00067",
+  "entry_point": {
+    "code": "def mustache_formatter(template: str, /, **kwargs: Any) -> str:",
+    "desc": "mustache_formatter 是 Mustache 模板渲染的公开接口函数，以位置参数接收外部传入的 template 字符串，以 **kwargs 接收任意键值对作为渲染上下文。函数体不对模板内容作任何语法或语义校验，直接将输入下发至内部 mustache 引擎。在漏洞链路中，此函数是不可信模板字符串的流入节点：若调用方将外部字符串作为模板传入，其中携带的点分属性路径将从此处无阻进入渲染流程。",
+    "file": "libs/core/langchain_core/prompts/string.py",
+    "line": 111
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "langchain-core",
+  "repo_url": "https://github.com/langchain-ai/langchain",
+  "report_id": "GHSA-6QV9-48XG-FC7F",
+  "source_link": "https://github.com/advisories/GHSA-6qv9-48xg-fc7f",
+  "trace": [
+    {
+      "code": "def mustache_formatter(template: str, /, **kwargs: Any) -> str:",
+      "desc": "mustache_formatter 函数签名定义了 Mustache 渲染的调用契约：template 以纯位置参数形式接收模板字符串，**kwargs 接收键值渲染数据，二者均未经内容格式校验。作为调用链的起始节点，此函数将来自上层调用者的外部输入无条件汇聚并向下传递；若模板字符串携带含点分属性路径的恶意内容，漏洞利用路径即从此节点启动，随后进入渲染下游。",
+      "file": "libs/core/langchain_core/prompts/string.py",
+      "line": 111
+    },
+    {
+      "code": "    return mustache.render(template, kwargs)",
+      "desc": "mustache.render(template, kwargs) 将未经清洗的模板字符串和数据字典整体交给 mustache 引擎的核心渲染函数，标志调用栈从 prompts/string.py 跨越至 utils/mustache.py。模板字符串的控制权在此完全移交底层引擎，随后的 tokenize 与变量解析将决定点分路径如何被处理；这是漏洞路径从接口层向核心执行层传递的关键跳转，也是调用链中最后一个可插入验证逻辑的上层节点。",
+      "file": "libs/core/langchain_core/prompts/string.py",
+      "line": 121
+    },
+    {
+      "code": "        tokens = tokenize(template, def_ldel, def_rdel)",
+      "desc": "tokenize(template, def_ldel, def_rdel) 将原始模板字符串解析为 (tag_type, key) 令牌流，其中变量标签的 key 保留完整点分路径原文（如 __class__.__name__），不作标识符合法性校验。随后这些令牌被 render() 主循环逐一消费；每个 variable 类型令牌的点分 key 将被原样传入 _get_key()，使恶意属性路径在此环节得以完整保存，为下游属性遍历提供未经过滤的输入。",
+      "file": "libs/core/langchain_core/utils/mustache.py",
+      "line": 482
+    },
+    {
+      "code": "            thing = _get_key(",
+      "desc": "_get_key(key, scopes, ...) 调用点将当前 variable 令牌的完整点分路径 key 连同作用域栈 scopes 传入键解析函数，是 render() 主循环向属性遍历逻辑的分发节点。在调用栈下游，_get_key 将对 key 逐段解析；若路径含攻击者注入的属性名，执行流自此进入实际 Python 对象属性访问路径，是漏洞从渲染主循环向底层 getattr 逻辑扩散的关键跳转点。",
+      "file": "libs/core/langchain_core/utils/mustache.py",
+      "line": 513
+    },
+    {
+      "code": "            for child in key.split(\".\"):",
+      "desc": "key.split(\".\") 将点分路径拆解为独立片段，for child in ... 循环驱动 _get_key() 对每个 child 依次推进当前作用域对象的解析。此循环是多级属性遍历成为可能的结构根源：路径 a.b.c 产生三次独立迭代，每次均执行下标访问或 getattr 尝试。在漏洞链路中，正是这一循环使 __class__.__name__ 等嵌套敏感路径能被逐级穿透，随后每次迭代的兜底 getattr 依次暴露对象内部状态。",
+      "file": "libs/core/langchain_core/utils/mustache.py",
+      "line": 371
+    },
+    {
+      "code": "                try:",
+      "desc": "内层 try 块为每个路径片段 child 建立双重降级策略：首先尝试 dict 下标访问（resolved_scope[child]），捕获 TypeError 或 AttributeError 后进入嵌套 try，再尝试 getattr(resolved_scope, child)，仍失败则回退列表整数下标。这套无限制降级机制使字典之外的任意 Python 对象成为属性遍历的目标；在漏洞链路中，此 try 块是 getattr 被触发的直接前驱：渲染上下文含非字典对象时执行流必然进入 getattr 分支。",
+      "file": "libs/core/langchain_core/utils/mustache.py",
+      "line": 377
+    },
+    {
+      "code": "                        resolved_scope = getattr(resolved_scope, child)",
+      "desc": "getattr(resolved_scope, child) 作为下标访问失败后的兜底被无条件执行，child 直接取自点分路径的当前片段，无任何合法性校验，访问结果被赋回 resolved_scope 供后续循环迭代继续向下遍历。在调用栈的最底层，此行实现对当前作用域对象的任意属性读取，是整条调用链的最终执行位置：含 __class__ 等敏感属性名的路径至此被 Python 运行时直接解析，内部对象状态随渲染结果暴露给调用方。",
+      "file": "libs/core/langchain_core/utils/mustache.py",
+      "line": 382
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "模板注入",
+  "vuln_category_l2": "服务端模板注入 (SSTI)",
+  "vuln_ids": [
+    "CVE-2025-65106",
+    "GHSA-6QV9-48XG-FC7F"
+  ],
+  "vuln_title": "LangChain Template Injection via Attribute Access in Prompt Templates (GHSA-6qv9-48xg-fc7f) - mustache.py"
+}

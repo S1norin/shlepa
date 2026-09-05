@@ -1,0 +1,32 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/vulngym-google-adk-module-import"
+description = "Audit a Google ADK server source snapshot and report the unauthenticated code-loading path."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["bench", "vulnerability-detection", "source-audit", "python", "code-injection"]
+source = "Tencent/VulnGym"
+url = "https://github.com/Tencent/VulnGym/tree/v0.1.4"
+reference = "https://github.com/advisories/GHSA-rg7c-g689-fr3x"
+synced_at = "2026-09-05"
+
+[verifier]
+timeout_sec = 120.0
+[agent]
+timeout_sec = 600.0
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+[verifier.env]
+[environment.env]
+[solution.env]

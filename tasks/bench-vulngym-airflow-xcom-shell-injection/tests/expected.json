@@ -1,0 +1,15 @@
+{
+  "type_aliases": ["command injection", "shell injection", "cwe-78"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "airflow-core/src/airflow/example_dags/example_xcom.py", "start": 83, "end": 83},
+  "critical_operation": {"file": "airflow-core/src/airflow/example_dags/example_xcom.py", "start": 80, "end": 87},
+  "minimum_flow_nodes": 3,
+  "flow_landmarks": [
+    {"file": "airflow-core/src/airflow/example_dags/example_xcom.py", "start": 83, "end": 83},
+    {"file": "airflow-core/src/airflow/example_dags/example_xcom.py", "start": 84, "end": 84},
+    {"file": "airflow-core/src/airflow/example_dags/example_xcom.py", "start": 80, "end": 87}
+  ],
+  "source_sha256": {
+    "airflow-core/src/airflow/example_dags/example_xcom.py": "43226e9a884bea17a7e991a4cbe479c83304d6e49e000fdd1d503cf00f420784"
+  }
+}

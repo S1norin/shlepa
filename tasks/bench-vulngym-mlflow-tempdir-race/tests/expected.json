@@ -1,0 +1,18 @@
+{
+  "type_aliases": ["insecure permissions", "unsafe temporary", "tempdir race", "race condition", "cwe-377"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "mlflow/pyfunc/__init__.py", "start": 2049, "end": 2049},
+  "critical_operation": {"file": "mlflow/utils/file_utils.py", "start": 761, "end": 761},
+  "minimum_flow_nodes": 4,
+  "flow_landmarks": [
+    {"file": "mlflow/pyfunc/__init__.py", "start": 2049, "end": 2049},
+    {"file": "mlflow/pyfunc/__init__.py", "start": 2334, "end": 2334},
+    {"file": "mlflow/utils/file_utils.py", "start": 758, "end": 758},
+    {"file": "mlflow/utils/file_utils.py", "start": 761, "end": 761}
+  ],
+  "source_sha256": {
+    "mlflow/pyfunc/__init__.py": "4c9dd0009de586fe0df85a89294fe625a55c6ca920414563a20985610e454321",
+    "mlflow/utils/file_utils.py": "d6184b69903b53cc5de61291dc2a06e1e82c59cfa040b7e928d4a44eafcf9d78"
+  }
+}
+

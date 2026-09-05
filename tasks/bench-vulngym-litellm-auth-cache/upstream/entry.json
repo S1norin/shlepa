@@ -1,0 +1,55 @@
+{
+  "commit": "24f847b84c947e13b765edaf172f646fd1b06297",
+  "critical_operation": {
+    "code": "cache_key = f\"oidc_userinfo_{token[:20]}\"  # Use first 20 chars of token as cache key",
+    "desc": "get_oidc_userinfo 以 token 的前20字节截断构造缓存键，形如 oidc_userinfo_ 加上截断串，随即通过 async_get_cache 查询已缓存的用户信息。RS256 等算法生成的 JWT 令牌头部编码固定，致使不同令牌的前20字节几乎相同，缓存键严重不唯一，缓存命中时函数直接返回已存储身份，是认证绕过的核心缺陷点。",
+    "file": "litellm/proxy/auth/handle_jwt.py",
+    "line": 506
+  },
+  "entry_id": "entry-00419",
+  "entry_point": {
+    "code": "async def user_api_key_auth(",
+    "desc": "user_api_key_auth 是 FastAPI 的 HTTP 认证依赖注入函数，在每次请求到达时从请求头中提取 api_key 令牌并启动认证流程。作为漏洞链路的外部可达入口，外部提供的令牌字符串在此处首次被接收，随后流向下游认证构建器。",
+    "file": "litellm/proxy/auth/user_api_key_auth.py",
+    "line": 1209
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "litellm",
+  "repo_url": "https://github.com/BerriAI/litellm",
+  "report_id": "GHSA-JJHC-V7C2-5HH6",
+  "source_link": "https://github.com/advisories/GHSA-jjhc-v7c2-5hh6",
+  "trace": [
+    {
+      "code": "user_api_key_auth_obj = await _user_api_key_auth_builder(",
+      "desc": "_user_api_key_auth_builder 的调用将外部传入的 api_key 从入口函数向下传递到内部认证构建器，完成从 caller 到 callee 的边界跨越。随后认证逻辑在构建器内部展开，包括 JWT 分支的识别与分派，是令牌从可信边界入口流入认证子系统的关键传递步骤。",
+      "file": "litellm/proxy/auth/user_api_key_auth.py",
+      "line": 1236
+    },
+    {
+      "code": "if general_settings.get(\"enable_jwt_auth\", False) is True:",
+      "desc": "general_settings.get 检查 enable_jwt_auth 标志位，确认启用后调用 jwt_handler.is_jwt 判断令牌是否为 JWT 格式，随后将通过格式检查的令牌分派至 JWTAuthManager.auth_builder 处理。此分支是漏洞路径的激活前提，api_key 在此处从通用认证流进入专属的 JWT 缓存验证链路。",
+      "file": "litellm/proxy/auth/user_api_key_auth.py",
+      "line": 500
+    },
+    {
+      "code": "if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled:",
+      "desc": "jwt_handler.litellm_jwtauth.oidc_userinfo_enabled 标志位的检查决定是否绕过标准签名验证路径，直接调用 get_oidc_userinfo 查询用户信息。在调用栈下游，当此标志位为真时，api_key 原样流入缓存查询逻辑，使携带碰撞键值的令牌得以触发缺陷，是整条漏洞路径中不可或缺的激活节点。",
+      "file": "litellm/proxy/auth/handle_jwt.py",
+      "line": 1146
+    },
+    {
+      "code": "cache_key = f\"oidc_userinfo_{token[:20]}\"  # Use first 20 chars of token as cache key",
+      "desc": "在调用栈下游，cache_key 由 token 的前20字节前缀拼接而成，async_get_cache 以此键检索缓存，命中时直接返回存储的身份信息，跳过对令牌签名和有效期的完整验证。此步骤与 entry_point 传入的令牌字符串直接关联，是截断键碰撞最终转化为身份冒用结果的执行点。",
+      "file": "litellm/proxy/auth/handle_jwt.py",
+      "line": 506
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "业务逻辑",
+  "vuln_category_l2": "BL-AUTH-BYPASS(身份认证绕过)",
+  "vuln_ids": [
+    "CVE-2026-35030",
+    "GHSA-JJHC-V7C2-5HH6"
+  ],
+  "vuln_title": "litellm JWT 认证缓存键碰撞导致身份认证绕过"
+}

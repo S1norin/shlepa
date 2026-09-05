@@ -1,0 +1,28 @@
+schema_version = "1.2"
+[task]
+name = "own/bench-seccodebench-cwe79-go"
+description = "Fix stored HTML injection in a Go feedback-email builder without breaking valid Unicode content."
+authors = []
+keywords = []
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["local", "bench", "xss", "cwe-79", "go", "code-fix"]
+source = "own"
+url = "https://github.com/Andrchest/shlepa/tree/dev/tasks/bench-seccodebench-cwe79-go"
+synced_at = "2026-09-05"
+[verifier]
+timeout_sec = 120.0
+[agent]
+timeout_sec = 600.0
+[environment]
+build_timeout_sec = 900.0
+cpus = 2
+memory_mb = 3072
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+[verifier.env]
+[environment.env]
+[solution.env]

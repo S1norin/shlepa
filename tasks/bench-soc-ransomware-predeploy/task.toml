@@ -1,0 +1,28 @@
+schema_version = "1.2"
+[task]
+name = "bench/soc-ransomware-predeploy"
+description = "Investigate multi-source telemetry for ransomware reconnaissance, recovery inhibition, and payload staging."
+authors = []
+keywords = []
+[metadata]
+difficulty = "hard"
+category = "security"
+tags = ["local", "bench", "forensics", "ransomware", "windows-event-log", "sysmon", "zeek"]
+source = "Abhiro0p/SOCBench"
+url = "https://github.com/Abhiro0p/SOCBench"
+synced_at = "2026-09-05"
+[verifier]
+timeout_sec = 120.0
+[agent]
+timeout_sec = 600.0
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+[verifier.env]
+[environment.env]
+[solution.env]

@@ -1,0 +1,17 @@
+{
+  "type_aliases": ["cross-client", "data leak", "race condition", "state isolation", "cwe-362"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "src/server/webStandardStreamableHttp.ts", "start": 321, "end": 321},
+  "critical_operation": {"file": "src/server/webStandardStreamableHttp.ts", "start": 938, "end": 938},
+  "minimum_flow_nodes": 4,
+  "flow_landmarks": [
+    {"file": "src/server/webStandardStreamableHttp.ts", "start": 321, "end": 321},
+    {"file": "src/server/webStandardStreamableHttp.ts", "start": 700, "end": 700},
+    {"file": "src/server/webStandardStreamableHttp.ts", "start": 751, "end": 751},
+    {"file": "src/server/webStandardStreamableHttp.ts", "start": 938, "end": 938}
+  ],
+  "source_sha256": {
+    "src/server/webStandardStreamableHttp.ts": "1aff139acee9fb8ae41c722566ca02bf8696120c6d48682e88d88b498517fc0e"
+  }
+}
+
