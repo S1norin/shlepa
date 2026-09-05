@@ -1,32 +1,47 @@
-"""Pipeline runner (v5): the plan -> work -> review cycle.
+"""Pipeline runner (v6-rewrite): the HARD cycle regime.
 
-Walks the phase graph (phase ids: plan, work, commit — the commit phase is
-the REVIEWER):
+Exactly ``[agent].max_cycles`` (env ``SHLEPA_MAX_CYCLES``, default 2) plan
+-> work cycles, with a REVIEW RELAY after every cycle except the last:
 
-    plan -> work -> review (commit)
-        ^                |
-        |                | verdict = "next_round"
-        +----------------+  (a new cycle starts on every next_round)
+    plan_1 -> work_1 -> review_1 (relay) -> plan_2 -> work_2 -> exit
 
-There is NO task time limit T, NO global hard stop and NO cycle cap: the
-agent cycles until the review verdict is "done" (or an unrecoverable
-error). The container itself is killed at the task's own limit, and the
-work phase keeps the deliverable file fresh on disk, so whatever exists at
-kill time is what scores. The only bounds are the fixed per-operation ones
-(plan 60s / work 120s / review 45s / bash 30s / llm wall 180s —
-``budget.py``); explicit positive ``[phases.*].time`` values override the
-phase caps (dev knob). The emergency phase (v4 terminal rescue) is UNUSED
-in v5 — routing to it is hard-off; the class and its config section are
-kept for compatibility.
+The relay is a toolless distillation of the just-finished WORK transcript:
+it emits the typed ``ReviewResult`` (summary / done / problems /
+hints_next) that the next cycle's PLAN (together with the previous work
+result) and WORK (the relay alone) receive. It never judges, never routes
+and never decides the exit — the run always ends right after the last
+WORK, and the final status is decided by that last WORK alone (a PLAN
+timeout or error does not change the outcome once its WORK ran).
+
+There is NO task time limit T and NO soft cycle cap: the container is
+killed at the task's own limit, and the work phase keeps the deliverable
+file fresh on disk, so whatever exists at kill time is what scores (the
+mechanical ``deliverable_check`` gate runs after every work; the w2-9
+best-at-exit snapshot is DISABLED, functions kept on disk). The only
+bounds are the fixed per-operation ones (plan 30s / work 120s / review
+45s / bash 30s / llm wall 180s — ``budget.py``; plus the 15 s
+finalization reserve); explicit positive ``[phases.*].time`` values
+override the phase caps (dev knob).
+
+Disabled phases (files, prompts and config sections stay on disk for a
+later re-enable; the runner never routes to them): commit (the v6
+verifier), repair, salvage and emergency. Their routing logic is kept
+behind the ``[tool_policy].disabled`` list in ``config.toml``.
 
 Rules:
-- A phase time cap (or a context-limit / persistent model error) is a
-  NORMAL hand-off, never a retryable error: it triggers ONE extra toolless
-  ``final_ask`` request on the same conversation ("write the deliverable
-  now"), then hands off to the review phase (terminal).
-- A phase ERROR (any other exception) in plan/work is retried up to the
-  phase's ``max_retries`` (fresh run per attempt), then routes to the
-  review phase. The review phase is never retried.
+- A phase time cap (or a context-limit / persistent model error) in PLAN
+  is a NORMAL hand-off, never a retryable error: a typed partial handoff
+  (``PartialHandoff``) is built for the WORK's LAST_TOOLS block and the
+  WORK runs anyway. A PLAN error (any other exception) is retried up to
+  the phase's ``max_retries`` (fresh run per attempt), then the same
+  hand-off applies.
+- A WORK time cap triggers ONE extra toolless ``final_ask`` request on
+  the same conversation ("write the deliverable now"); then the run
+  either exits (last cycle) or hands off to the relay (cycles before
+  the last). A WORK error is retried up to ``max_retries``, then the
+  same path.
+- The relay is never retried; its timeout/error is logged as
+  ``review_fallback`` and the next cycle proceeds without it.
 - The step guard (``[agent].max_steps`` when > 0, dev knob, off by
   default) bounds total phase runs; when exhausted the run stops with the
   status "timeout".
@@ -38,8 +53,8 @@ Log contract (the CLI dev engine parses a subset — ``usage`` and
 ``llm_tool_call`` — keep those fields stable; unknown events are ignored
 by the CLI): agent_start, usage, llm_thinking, llm_tool_call,
 llm_tool_result, run_usage, budget, phase, phase_done, phase_retry,
-cycle, final_ask, commit (legacy, terminal-phase marker), agent_done,
-agent_error.
+cycle, final_ask, deliverable_check, endpoint_error, endpoint_stalled,
+endpoint_finalized, test_guard, test_tamper, agent_done, agent_error.
 """
 
 from __future__ import annotations
@@ -236,13 +251,14 @@ def build_phase_agent(
     phase: Phase,
     task: str,
     instrument: bool = False,
+    cycle: int = 1,
 ) -> Agent:
-    """Build a pydantic-ai agent for one phase (toolset from phase config).
+    """Build a pydantic-ai agent for one phase (toolset from the tool policy).
 
-    Phases with an ``output_type`` (plan, work) get the typed output tool;
-    commit/emergency stay free text.
+    Phases with an ``output_type`` (plan, work, review) get the typed output
+    tool; disabled free-text phases (commit, emergency) would stay free text.
     """
-    tools = get_tools(agent_cfg, phase.tools(agent_cfg))
+    tools = get_tools(agent_cfg, phase.tools(agent_cfg, cycle))
     kwargs: dict[str, Any] = {}
     if phase.output_type is not None:
         kwargs["output_type"] = phase.output_type
@@ -277,7 +293,7 @@ def _phase_cap(phase_id: str, limits: Any, cfg: AgentConfig) -> float:
         return PLAN_CAP
     if phase_id == "work":
         return WORK_CAP
-    if phase_id == "commit":  # review phase
+    if phase_id in ("commit", "review"):  # relay (v6-rewrite) / verifier (disabled)
         return REVIEW_CAP
     return 60.0
 
@@ -390,18 +406,20 @@ async def _run_phase(
 
 
 async def _run_phase_with_retries(
-    state: RunState, phase: Phase, instrument: bool
+    state: RunState, phase: Phase, instrument: bool, cycle: int = 1
 ) -> PhaseResult:
     """Run a phase; retry ERROR results up to its max_retries.
 
     Timeout results (time cap / context-limit breach) are a normal hand-off
-    (never retried), and the terminal phase is never retried. Each retry is
-    a fresh run on the shared TrackedModel. The result is stored in
-    state.results after every attempt, so a retry's prompt can see the
-    previous attempt.
+    (never retried). Each retry is a fresh run on the shared TrackedModel.
+    The result is stored in state.results after every attempt, so a retry's
+    prompt can see the previous attempt. ``cycle`` selects the per-iteration
+    tool policy (``<phase>_c<N>`` overrides, v6-rewrite).
     """
     result = await _run_phase(
-        state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
+        state, phase, build_phase_agent(
+            state.model, state.cfg, phase, state.task, instrument, cycle=cycle
+        )
     )
     state.results[phase.id] = result
     max_retries = 0 if phase.terminal else state.cfg.phases[phase.id].max_retries
@@ -419,7 +437,9 @@ async def _run_phase_with_retries(
             error=result.error or "",
         )
         result = await _run_phase(
-            state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
+            state, phase, build_phase_agent(
+                state.model, state.cfg, phase, state.task, instrument, cycle=cycle
+            )
         )
         state.results[phase.id] = result
     return result
@@ -496,32 +516,28 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
 
 
 async def _plan_handoff(state: RunState, phase: Phase) -> None:
-    """Plan-timeout hand-off (v6): one toolless final_ask, then store the
-    hand-off payload in ``state.plan_handoff`` for the work prompt.
+    """Plan-timeout hand-off (v6-rewrite, the only plan-failure route):
+    one toolless TYPED final_ask, then store the hand-off payload in
+    ``state.plan_handoff`` for the work prompt.
 
-    With ``agent.handoff = "partial"`` (the v6 default) the final_ask is
-    typed: it emits a ``PartialHandoff`` via the ``final_result`` output
+    The final_ask emits a ``PartialHandoff`` via the ``final_result`` output
     tool. Independently of the model's answer, the harness extracts the
     deterministic LAST_TOOLS tail of the plan conversation — key evidence
-    survives even when the summary is weak. With ``handoff = "off"`` the
-    v5 final_ask message is used and nothing is stored (A1 arm).
+    survives even when the summary is weak. (The legacy A0/A1 knob
+    SHLEPA_HANDOFF is removed; the typed hand-off is the single behavior.)
     """
     cfg = state.cfg
     model = state.model
-    mode = (cfg.agent.handoff or "partial").lower()
-    typed = mode != "off"
+    mode = "partial"
     cap = FINAL_ASK_CAP_S
     history = trim_history(model.last_messages) or None
-    kwargs: dict[str, Any] = {}
-    if typed:
-        kwargs["output_type"] = PartialHandoff
     agent = Agent(
         model,
         deps_type=AgentDeps,
         system_prompt=_system_prompt(cfg, phase, state.task),
-        **kwargs,
+        output_type=PartialHandoff,
     )
-    message = PARTIAL_HANDOFF_MESSAGE if typed else FINAL_ASK_MESSAGE
+    message = PARTIAL_HANDOFF_MESSAGE
     _log_event(
         "final_ask",
         phase=phase.id,
@@ -549,13 +565,10 @@ async def _plan_handoff(state: RunState, phase: Phase) -> None:
                             output = out
                             text = str(out)
             model.log_pending_usage()
-            if typed:
-                if isinstance(output, PartialHandoff):
-                    handoff_json = output.model_dump_json()
-                else:
-                    _log_event(
-                        "agent_error", error="plan handoff: missing typed output"
-                    )
+            if isinstance(output, PartialHandoff):
+                handoff_json = output.model_dump_json()
+            else:
+                _log_event("agent_error", error="plan handoff: missing typed output")
             _stamp_final_ask(span, ok=True, text=text or (handoff_json or ""))
             _log_event(
                 "final_ask",
@@ -585,8 +598,6 @@ async def _plan_handoff(state: RunState, phase: Phase) -> None:
                 mode=mode,
                 error=f"{type(e).__name__}: {str(e)[:200]}",
             )
-    if not typed:
-        return  # "off": v5 behavior — no hand-off block
     state.plan_handoff = {
         "handoff": handoff_json,
         "last_tools": extract_last_tools(model.last_messages),
@@ -667,7 +678,10 @@ def _post_work_check(state: RunState) -> None:
         state.deliverable_check = check_deliverable(
             state.deps.workdir, spec
         ).to_dict()
-        _maybe_snapshot_best(state)
+        # v6-rewrite: best-at-exit snapshots are DISABLED (single source of
+        # truth is the file after the last work). _maybe_snapshot_best /
+        # _restore_best_on_exit stay on disk for a later re-enable.
+        # _maybe_snapshot_best(state)
     except Exception as e:  # pragma: no cover - defensive
         _log_event("agent_error", error=f"post-work check: {type(e).__name__}: {str(e)[:200]}")
         state.deliverable_check = None
@@ -864,26 +878,31 @@ async def _pipeline(
     entry: str,
     max_steps: int | None,
 ) -> tuple[str, str]:
-    """Walk the v5 pipeline (plan -> work -> review cycles); returns (status, output).
+    """Walk the v6-rewrite pipeline: a HARD cycle loop; returns (status, output).
 
-    status is the decisive outcome: "done" (the review verdict was done),
-    "timeout" (a phase time cap / context-limit hand-off with no review
-    verdict, or a step-guard stop), "error" (a phase failed after its
-    retries). There is NO task time limit T, NO cycle cap and NO emergency
-    routing: a "next_round" verdict ALWAYS starts a new plan/work cycle.
+    Regime: exactly ``agent.max_cycles`` (env: SHLEPA_MAX_CYCLES, default 2)
+    plan -> work cycles. After every cycle EXCEPT the last, a REVIEW relay
+    (toolless distillation on the resumed work transcript, typed
+    ReviewResult) hands the state over to the next cycle: PLAN of cycle
+    i >= 2 receives the previous work result plus the previous relay, and
+    WORK of cycle i >= 2 additionally receives the previous relay.
+
+    The relay NEVER routes and NEVER decides: the run ends exactly after
+    WORK_N (status = the last work's outcome; "done" / "timeout" / "error"),
+    then the mechanical exit gate (deliverable check + test hashes) runs in
+    run_prompt. The commit/repair/salvage/emergency phases exist on disk
+    but are never routed to (disabled, kept for re-enable).
     """
-    phase_id = entry
+    n_cycles = max(1, int(state.cfg.agent.max_cycles or 2))
     steps = 0
     final_status = "done"
     output = ""
+    cycle = 1  # 1-based; state.cycles (0-based replan count) stays in sync
 
     while True:
-        # Step guard (dev knob only; off by default).
-        if (
-            max_steps is not None
-            and steps >= max_steps
-            and phase_id != "commit"
-        ):
+        # Step guard (dev knob only; off by default). It stops between
+        # cycles, never in the middle of the last one.
+        if max_steps is not None and steps >= max_steps and cycle < n_cycles:
             _log_event(
                 "budget",
                 reason="max_steps",
@@ -891,7 +910,12 @@ async def _pipeline(
             )
             return "timeout", output
         steps += 1
-        phase = phase_factory(phase_id)
+        state.cycles = cycle - 1
+
+        # ---- PLAN_c (fresh context) --------------------------------------
+        # cycle 1: the instruction only; cycle >= 2: the instruction plus
+        # the previous work result and the previous review relay.
+        phase = phase_factory("plan")
         _log_event(
             "phase",
             id=phase.id,
@@ -901,7 +925,9 @@ async def _pipeline(
         )
         start_t = state.model.elapsed()
         with _phase_context(phase.id):
-            result = await _run_phase_with_retries(state, phase, instrument)
+            result = await _run_phase_with_retries(
+                state, phase, instrument, cycle=cycle
+            )
         _log_event(
             "phase_done",
             id=phase.id,
@@ -909,9 +935,6 @@ async def _pipeline(
             duration_s=round(state.model.elapsed() - start_t, 1),
             elapsed_s=round(state.model.elapsed(), 1),
         )
-        # w3-5: the endpoint is down (N consecutive terminal failures) —
-        # finalize reactively: no further requests, the best deliverable
-        # is persisted, the run ends normally (exit 0).
         if _model_endpoint_stalled(state):
             _log_event(
                 "endpoint_stalled",
@@ -920,187 +943,126 @@ async def _pipeline(
             )
             return "done", _endpoint_finalize(state)
         save_state(state)
-        # Track the human-readable final output (terminal text wins).
-        if result.summary:
-            if phase.id == "work" and result.output is not None:
-                output = result.output.summary or output
-            elif phase.terminal:
-                if isinstance(result.output, BaseModel):
-                    # Typed terminal output (ReviewResult): report the
-                    # deliverable path, or the notes line if any.
-                    output = (
-                        getattr(result.output, "notes", "")
-                        or getattr(result.output, "artifact", "")
-                        or ""
-                    )
-                else:
-                    output = result.summary
-            elif phase.id != "plan":
-                output = result.summary
-        if phase.terminal:
-            # v6 (w2-6): a VERIFY cut by its subcap is routed
-            # deterministically by the harness — no LLM. A valid
-            # deliverable ends the run "done"; a broken one starts a new
-            # cycle carrying the recorded failed checks as hints. (A
-            # commit ERROR — the model never produced a valid verdict —
-            # still ends the run as "error": no fallback loop.)
-            if result.status == "timeout":
-                if phase.id == "commit":
-                    check = state.deliverable_check
-                    _log_event(
-                        "review_fallback",
-                        reason=result.status,
-                        valid=bool(check and check.get("valid")),
-                        check=check,
-                    )
-                    if check and check.get("valid"):
-                        return "done", output
-                    _commit_fallback_hints(state, check)
-                    state.cycles += 1
-                    _log_event(
-                        "cycle",
-                        reason="review_fallback",
-                        cycle=state.cycles,
-                        elapsed_s=round(state.model.elapsed(), 1),
-                    )
-                    final_status = "done"
-                    phase_id = "plan"
-                    continue
-            # A review that itself failed (error after zero retries) or
-            # was cut by its own time cap otherwise reports its own
-            # status — not "done".
-            if result.status in ("timeout", "error"):
-                return result.status, output
-            # v6 (w2-5): repair_scope='local' with a named failing check
-            # enters the bounded REPAIR phase (artifact-only, one mutation);
-            # every other scope/verdict never does.
-            scope = getattr(result.output, "repair_scope", None)
-            if phase.id == "commit" and scope == "local":
-                spec = state.deliverable_spec
-                if spec and spec.get("path"):
-                    p = Path(spec["path"])
-                    if not p.is_absolute():
-                        p = state.deps.workdir / p
-                    state.deps = replace(
-                        state.deps, repair_scope=RepairScope(path=p.resolve())
-                    )
-                    _log_event("repair_enter", path=str(p))
-                    phase_id = "repair"
-                    final_status = "done"
-                    continue
-                _log_event("repair_skipped", reason="no_deliverable_path")
-            # Review phase: "done" stops the run. A "next_round" verdict
-            # starts a new cycle ONLY when it names a failing check the
-            # local repair could not close (repair_scope 'local' without a
-            # deliverable path, or 'needs_next_round') — never on "could be
-            # better" (scope 'none'), never on time conditions (the
-            # container kill is the only external bound).
-            verdict = getattr(result.output, "verdict", None)
-            if verdict == "next_round" and scope in ("local", "needs_next_round"):
-                state.cycles += 1
-                _log_event(
-                    "cycle",
-                    reason="next_round",
-                    cycle=state.cycles,
-                    scope=scope,
-                    elapsed_s=round(state.model.elapsed(), 1),
-                )
-                final_status = "done"
-                phase_id = "plan"
-                continue
-            if verdict == "next_round":
-                # "could be better" without a named failing scope: the run
-                # ends on the current deliverable.
-                _log_event(
-                    "next_round_ignored", reason="no_named_failure_scope", scope=scope
-                )
-            return (
-                final_status if final_status in ("timeout", "error") else "done",
-                output,
-            )
-        if phase.id == "plan" and result.status in ("timeout", "error"):
-            # v6 routing invariant: every failed plan reaches WORK (a fresh
-            # run), never the review shortcut. The dev knob
-            # SHLEPA_ROUTE_PLAN_TIMEOUT=commit restores the v5 routes
-            # (timeout: final_ask -> review; error -> review) for A0.
-            route = (state.cfg.agent.route_plan_failure or "work").lower()
-            if route == "commit":
-                if result.status == "timeout":
-                    with _phase_context(phase.id):
-                        await _final_ask(state, phase)
-                final_status = result.status
-                phase_id = "commit"
-            else:
-                if result.status == "timeout":
-                    with _phase_context(phase.id):
-                        await _plan_handoff(state, phase)
-                # WORK gets a note about the failed plan (error) or the
-                # hand-off block (timeout); the review verdict is decisive
-                # for the final status.
-                final_status = "done"
-                phase_id = "work"
-            continue
-        if phase.id == "salvage":
-            # v6 (w2-3): salvage is done — persist the body fallback if the
-            # model never wrote the file, re-check (the refreshed result is
-            # what REVIEW sees), then hand off to the terminal review.
-            # A salvage timeout/error never triggers final_ask: salvage
-            # IS the rescue.
-            _persist_salvage_body(state)
-            _post_work_check(state)
-            phase_id = "commit"
-            continue
-        if phase.id == "repair":
-            # v6 (w2-5): the harness re-runs the mechanical check; the
-            # result drives the exit — the model's words do not (external
-            # feedback, not a self-grading loop). A repair timeout/error
-            # re-checks the same way: still broken -> new cycle.
-            _post_work_check(state)
-            check = state.deliverable_check
-            passed = bool(check and check.get("valid"))
-            state.deps = replace(state.deps, repair_scope=None)
-            _log_event("repair_done", passed=passed, check=check)
-            if passed:
-                return "done", output
-            state.cycles += 1
-            _log_event(
-                "cycle",
-                reason="repair_failed",
-                cycle=state.cycles,
-                elapsed_s=round(state.model.elapsed(), 1),
-            )
-            final_status = "done"
-            phase_id = "plan"
-            continue
+        # v6 routing invariant: WORK is never skipped. A plan timeout
+        # becomes a typed PartialHandoff for the work prompt; a plan error
+        # becomes a "no plan — execute directly" note. The work outcome
+        # decides the run's status, not the plan's.
         if result.status == "timeout":
-            # WORK time cap / context-limit breach (unchanged from v5): one
-            # toolless final_ask on the same conversation, then hand off to
-            # the terminal review (via the salvage gate when the
-            # deliverable is missing/empty, w2-3).
+            with _phase_context(phase.id):
+                await _plan_handoff(state, phase)
+
+        # ---- WORK_c (fresh context) --------------------------------------
+        # cycle 1: the current plan; cycle >= 2: the current plan plus the
+        # previous review relay (the previous work result is already in
+        # the plan's context — the relay distills the delta).
+        phase = phase_factory("work")
+        _log_event(
+            "phase",
+            id=phase.id,
+            start=True,
+            cycle=state.cycles,
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        start_t = state.model.elapsed()
+        with _phase_context(phase.id):
+            result = await _run_phase_with_retries(
+                state, phase, instrument, cycle=cycle
+            )
+        _log_event(
+            "phase_done",
+            id=phase.id,
+            status=result.status,
+            duration_s=round(state.model.elapsed() - start_t, 1),
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        if _model_endpoint_stalled(state):
+            _log_event(
+                "endpoint_stalled",
+                phase=phase.id,
+                failures=state.model.endpoint_failure_count,
+            )
+            return "done", _endpoint_finalize(state)
+        save_state(state)
+        if result.output is not None:
+            output = getattr(result.output, "summary", "") or output
+        if result.status == "timeout":
+            # WORK time cap: one toolless final_ask on the same
+            # conversation, then — in the last cycle — exit; between
+            # cycles the relay still runs (it distills the cut-off state).
             with _phase_context(phase.id):
                 await _final_ask(state, phase)
             final_status = "timeout"
-            _post_work_check(state)
-            phase_id = "salvage" if _salvage_needed(state) else "commit"
-            continue
-        if result.status == "error":
+        elif result.status == "error":
             final_status = "error"
-            _post_work_check(state)
-            phase_id = "salvage" if _salvage_needed(state) else "commit"
-            continue
-        if phase.id == "plan":
-            # v6: the plan -> commit shortcut is gone — every done plan
-            # flows to WORK (the pipeline is strictly linear; PlanResult
-            # carries no routing decision).
-            phase_id = "work"
+        else:
             final_status = "done"
-            continue
-        # work -> review (there is no decision in WorkResult; the review's
-        # verdict decides done vs. a new cycle). The post-work gate (w2-3)
-        # routes through salvage first when the deliverable is missing/empty.
         _post_work_check(state)
-        phase_id = "salvage" if _salvage_needed(state) else "commit"
-        final_status = "done"
+
+        # ---- exit gate (last cycle) --------------------------------------
+        if cycle >= n_cycles:
+            _log_event(
+                "run_finish",
+                status=final_status,
+                cycle=cycle,
+                max_cycles=n_cycles,
+                check=state.deliverable_check,
+                elapsed_s=round(state.model.elapsed(), 1),
+            )
+            return final_status, output
+
+        # ---- REVIEW_c relay (only between cycles) ------------------------
+        # Toolless distillation on the resumed work transcript; typed
+        # ReviewResult lands in state.results["review"] and is consumed by
+        # the next PLAN and WORK. A relay timeout/error never blocks the
+        # loop — the next cycle simply runs without the relay.
+        cycle += 1
+        state.cycles = cycle - 1
+        _log_event(
+            "cycle",
+            reason="relay",
+            cycle=state.cycles,
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        phase = phase_factory("review")
+        _log_event(
+            "phase",
+            id=phase.id,
+            start=True,
+            cycle=state.cycles,
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        start_t = state.model.elapsed()
+        with _phase_context(phase.id):
+            result = await _run_phase_with_retries(
+                state, phase, instrument, cycle=cycle
+            )
+        _log_event(
+            "phase_done",
+            id=phase.id,
+            status=result.status,
+            duration_s=round(state.model.elapsed() - start_t, 1),
+            elapsed_s=round(state.model.elapsed(), 1),
+        )
+        if _model_endpoint_stalled(state):
+            _log_event(
+                "endpoint_stalled",
+                phase=phase.id,
+                failures=state.model.endpoint_failure_count,
+            )
+            return "done", _endpoint_finalize(state)
+        save_state(state)
+        if result.status in ("timeout", "error"):
+            _log_event(
+                "review_fallback",
+                reason=result.status,
+                cycle=state.cycles,
+                error=result.error or "",
+            )
+        # The relay is never terminal and never retried further: the loop
+        # continues to the next cycle's PLAN. (The old v6 verifier/repair/
+        # salvage routing lived here and was replaced by the hard-cycle
+        # regime; the phase files, prompts and config sections it used
+        # stay on disk for a later re-enable — [tool_policy].disabled.)
         continue
 
 
@@ -1121,11 +1083,12 @@ async def run_prompt(
     cfg = agent_cfg or load_config()
     model: TrackedModel | None = None
     try:
-        # v5 pipeline values: no time horizon — the entry is always "plan"
-        # (a ``[agent].entry`` override is a dev knob) and there is NO cycle
-        # cap: "next_round" always starts a new cycle.
+        # v6-rewrite regime values: no time horizon, HARD cycle count
+        # (env: SHLEPA_MAX_CYCLES, default 2); the entry is always "plan"
+        # (a ``[agent].entry`` override is a dev knob).
         entry = cfg.agent.entry or "plan"
         max_steps: int | None = cfg.agent.max_steps or None  # dev knob, off by default
+        max_cycles: int = max(1, int(cfg.agent.max_cycles or 2))
 
         workdir = _resolve_workdir()
         model = TrackedModel(
@@ -1162,6 +1125,7 @@ async def run_prompt(
             bash_cap=round(regime()["bash"], 1),
             llm_wall=round(regime()["llm_wall"], 1),
             max_steps=max_steps,
+            max_cycles=max_cycles,
         )
         _log_event(
             "budget",
@@ -1176,9 +1140,11 @@ async def run_prompt(
         # v6 (w3-6): the run's own test results are only trustworthy if
         # the in-environment test files were not mutated mid-run.
         _verify_test_hashes(state)
-        # v6 (w2-9): best-at-exit — a later round that left a broken
-        # deliverable cannot regress an earlier check-passing one.
-        _restore_best_on_exit(state)
+        # v6-rewrite: best-at-exit is DISABLED (single source of truth is
+        # the file after the last work). _restore_best_on_exit stays on
+        # disk for a later re-enable; it is a no-op while snapshots are
+        # off (no best_snapshot is ever taken).
+        # _restore_best_on_exit(state)
         model.log_pending_usage()
         _log_event(
             "agent_done",
