@@ -21,35 +21,29 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 class AgentSection(BaseModel):
-    """Run-level settings: pipeline entry, emergency phase, step guard.
+    """Run-level settings: pipeline entry, cycle count, step guard.
 
-    v5: there is NO task time limit T and NO cycle cap — the agent works in
-    plan/work/review cycles until the review verdict is "done"; a new round
-    starts on every "next_round" verdict.
+    v6-rewrite: HARD cycle regime — the run executes exactly ``max_cycles``
+    plan -> work cycles (plus a review relay after every cycle except the
+    last, env: SHLEPA_MAX_CYCLES, default 2). There is NO task time limit T;
+    the container is killed at the task's own limit.
     """
 
     #: Entry phase. Empty = "plan".
     entry: str = ""
-    #: Name of the emergency phase (UNUSED in v5, kept for compatibility).
+    #: Name of the emergency phase (disabled, kept for compatibility).
     emergency: str = "emergency"
-    # Total phase-run guard (dev knob). 0 = off — the run cycles until done.
+    # Total phase-run guard (dev knob). 0 = off.
     max_steps: int = Field(default=0, ge=0)
+    #: Hard cycle count (v6-rewrite, env: SHLEPA_MAX_CYCLES). The run
+    #: executes exactly this many plan -> work cycles; the review relay
+    #: runs after every cycle except the last.
+    max_cycles: int = Field(default=2, ge=1)
     #: Sampling temperature; sent to the endpoint only when ``send_temp``
     #: is enabled (default: the endpoint decides).
     temp: float = 0.6
     #: Send ``temp`` in model settings (env: SHLEPA_SEND_TEMP, 1/0).
     send_temp: bool = False
-    #: Plan-failure routing (v6, env: SHLEPA_ROUTE_PLAN_TIMEOUT).
-    #: "work" (default) — every failed plan (timeout or error) flows into
-    #: WORK; "commit" — v5 routing (timeout: final_ask -> review;
-    #: error -> review), kept for the A0 baseline arm.
-    route_plan_failure: str = "work"
-    #: Plan-timeout hand-off mode (v6, env: SHLEPA_HANDOFF).
-    #: "partial" (default) — the timeout final_ask is typed (emits a
-    #: PartialHandoff) and WORK receives the hand-off JSON plus the
-    #: harness's deterministic LAST_TOOLS block; "off" — the v5 final_ask
-    #: message, no hand-off block (A1 arm).
-    handoff: str = "partial"
 
 
 class BudgetConfig(BaseModel):
@@ -116,16 +110,19 @@ class BlockWrapper(BaseModel):
 
 
 class PhaseConfig(BaseModel):
-    """One phase of the pipeline: toolset, hard/advisory limits, template
-    overrides.
+    """One phase of the pipeline: hard/advisory limits, template overrides.
 
     - ``time``: explicit hard wall-clock cap for the phase run. ``None``
       (omitted) = the fixed regime constant for the phase (``budget.py``).
     - ``soft_time`` / ``soft_tokens``: advisory only. Rendered into the phase
       prompt and status lines; they never cut the phase.
+
+    The toolset is NOT declared here anymore (v6-rewrite): the single source
+    is the ``[tool_policy]`` section. ``tools`` is a legacy fallback for
+    dev/test configs that predate the policy section.
     """
 
-    tools: list[str] = Field(min_length=1)
+    tools: list[str] = Field(default_factory=list)
     requests: int = Field(ge=1)
     time: float | None = Field(default=None, gt=0)
     soft_time: float | None = Field(default=None, gt=0)
@@ -134,6 +131,40 @@ class PhaseConfig(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     # Per-phase template wrapper overrides: block name -> before/after.
     template: dict[str, BlockWrapper] = Field(default_factory=dict)
+
+
+class ToolPolicy(BaseModel):
+    """Single source of tool availability: the phase x iteration matrix
+    (v6-rewrite decision).
+
+    ``phases`` maps a phase id to its tool list; an optional per-iteration
+    override key ``"<phase>_c<N>"`` (N >= 1) beats the phase entry for that
+    iteration only. ``disabled`` lists phase ids that exist in code and
+    config but are never routed to (commit/repair/salvage/emergency: kept
+    on disk for a later re-enable).
+    """
+
+    phases: dict[str, list[str]] = Field(default_factory=dict)
+    disabled: list[str] = Field(default_factory=list)
+
+    def tools_for(
+        self, phase_id: str, cycle: int = 1, fallback: list[str] | None = None
+    ) -> list[str]:
+        """Resolve the tool list for one phase run in iteration ``cycle``.
+
+        Precedence: per-iteration override ``<phase>_c<N>`` -> phase entry ->
+        legacy ``[phases.<id>].tools`` fallback (dev/test configs).
+        """
+        override = self.phases.get(f"{phase_id}_c{max(1, cycle)}")
+        if override is not None:
+            return list(override)
+        entry = self.phases.get(phase_id)
+        if entry is not None:
+            return list(entry)
+        return list(fallback or [])
+
+    def is_disabled(self, phase_id: str) -> bool:
+        return phase_id in self.disabled
 
 
 class TemplateConfig(BaseModel):
@@ -153,6 +184,7 @@ class AgentConfig(BaseModel):
     agent: AgentSection = Field(default_factory=AgentSection)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     phases: dict[str, PhaseConfig] = Field(min_length=1)
     template: TemplateConfig = Field(
         default_factory=lambda: TemplateConfig(blocks=["system", "tools", "task"])
@@ -185,8 +217,8 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
     "SHLEPA_PLAN_TIME": ("phases.plan.time", float),
     "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
-    "SHLEPA_ROUTE_PLAN_TIMEOUT": ("agent.route_plan_failure", str),
-    "SHLEPA_HANDOFF": ("agent.handoff", str),
+    "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
+    "SHLEPA_REVIEW_TIME": ("phases.review.time", float),
 }
 
 

@@ -112,8 +112,17 @@ class Phase(ABC):
     terminal: bool = False
 
     # -- config-driven defaults ------------------------------------------
-    def tools(self, cfg: AgentConfig) -> list[str]:
-        return cfg.phases[self.id].tools
+    def tools(self, cfg: AgentConfig, cycle: int = 1) -> list[str]:
+        """Tool list for this phase run (v6-rewrite).
+
+        Single source: the ``[tool_policy]`` section (phase x iteration
+        matrix, per-iteration ``<phase>_c<N>`` overrides). Falls back to the
+        legacy ``[phases.<id>].tools`` for configs without the policy
+        section (dev/test).
+        """
+        return cfg.tool_policy.tools_for(
+            self.id, cycle, fallback=cfg.phases[self.id].tools
+        )
 
     def limits(self, cfg: AgentConfig) -> PhaseLimits:
         p = cfg.phases[self.id]
@@ -137,11 +146,13 @@ class Phase(ABC):
         if self.id == "plan":
             cap = lim.time if lim.time is not None else PLAN_CAP
             parts.append(f"this phase is hard-capped at {cap:.0f}s")
+            if state.cycles > 0:
+                parts.append(f"this is re-plan cycle {state.cycles + 1}")
         elif self.id == "work":
             cap = lim.time if lim.time is not None else WORK_CAP
             parts.append(f"this cycle is hard-capped at {cap:.0f}s")
             parts.append(f"this is cycle {state.cycles + 1}")
-        elif self.id == "commit":  # review phase
+        elif self.id in ("commit", "review"):  # relay (v6-rewrite) / verifier (disabled)
             cap = lim.time if lim.time is not None else REVIEW_CAP
             parts.append(f"this phase is hard-capped at {cap:.0f}s")
         else:

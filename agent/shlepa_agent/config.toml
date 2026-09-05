@@ -5,17 +5,19 @@
 # here; see docs/agent-config.md for the full mapping.
 
 [agent]
-# Pipeline: plan -> work -> review (commit), in cycles. Entry phase, total
-# step guard, temperature.
-#
-# v5: there is NO task time limit T and NO cycle cap — the agent cycles
-# plan -> work -> review until the review verdict is "done" (a "next_round"
-# verdict starts a new round). The container itself is killed at the
-# task's own limit; the emergency phase name is UNUSED (kept for compat).
+# Pipeline (v6-rewrite): HARD cycle regime — exactly max_cycles plan -> work
+# cycles, with a review RELAY (distillation) after every cycle except the
+# last. There is NO task time limit T: the container is killed at the
+# task's own limit. Emergency is disabled (kept for compat).
 entry = ""
 emergency = "emergency"
-# Total phase-run guard (dev knob). 0 = off — the run cycles until done.
+# Total phase-run guard (dev knob). 0 = off.
 max_steps = 0
+# Hard cycle count (env: SHLEPA_MAX_CYCLES). The run executes exactly this
+# many plan -> work cycles; cycle N >= 2 receives the previous work result
+# and the previous review relay in its PLAN, and the review relay in its
+# WORK.
+max_cycles = 2
 temp = 0.6
 # Send `temp` to the LLM endpoint. Default: off — the endpoint picks its
 # own temperature (some endpoints reject or ignore an explicit value).
@@ -24,7 +26,7 @@ send_temp = false
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
 # budget.py (plan 30 / work 120 / review 45 / bash 30 / llm wall 180;
-# plus the w3-2 finalization reserve — last 10 s of a phase cap disable
+# plus the w3-2 finalization reserve — last 15 s of a phase cap disable
 # bash/search/recon, override: SHLEPA_FINALIZE_RESERVE, 0 = off).
 # There is NO task time limit T, NO global hard stop, NO request-start
 # gate, NO global token budget and NO request-count limit: token usage is
@@ -82,15 +84,37 @@ max_output = 8192
 enabled = true
 max_output = 8192
 
+[tool_policy]
+# SINGLE SOURCE of tool availability: the phase x iteration matrix
+# (v6-rewrite decision). Per-iteration overrides use "<phase>_c<N>" keys
+# (N >= 1); a missing phase falls back to the legacy [phases.<id>].tools.
+# Phases listed in `disabled` exist in code/config but are NEVER routed:
+# their files and [phases.*] sections stay on disk for a later re-enable.
+disabled = ["commit", "repair", "salvage", "emergency"]
+
+[tool_policy.phases]
+# PLAN: read-only exploration surface (no bash/write/edit — recon + search
+# replace the raw read-and-probe pass).
+plan = ["read", "recon", "search"]
+# WORK: full toolset; recon + search stay (cheap structured exploration
+# instead of ad-hoc bash probes).
+work = ["read", "write", "edit", "bash", "recon", "search"]
+# REVIEW relay: NO tools — a pure distillation on the resumed work
+# transcript (the relay's job is summarizing, not exploring).
+review = []
+# Disabled phases (unrouted; files kept):
+commit = ["read", "search"]
+repair = ["read", "search", "edit"]
+salvage = ["write"]
+emergency = ["read", "write", "edit", "bash"]
+
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
 # structured plan. Hard cap is the fixed regime constant (plan = 30s,
 # budget.py; env-overridable via SHLEPA_PLAN_TIME). An explicit `time`
 # value would override the cap (dev knob; omitted here). Soft values are
 # advisory (rendered into the prompt).
-# v6: read-only exploration surface — bash/write/edit are structurally
-# absent (recon + search replace the raw read-and-probe pass).
-tools = ["read", "recon", "search"]
+# Tools: see [tool_policy].
 requests = 25
 soft_time = 25.0
 soft_tokens = 15000
@@ -102,21 +126,28 @@ max_retries = 1
 # (work = 120s, budget.py; an explicit `time` would override it). The soft
 # time is advisory and stays under the hard cap; there is NO soft_tokens for
 # work (the "keep the output lean" note applies to plan/review only).
-# v6: recon + search join the work toolset — cheap structured exploration
-# (surface map / grep-glob-ls) instead of ad-hoc bash probes.
-tools = ["read", "write", "edit", "bash", "recon", "search"]
+# Tools: see [tool_policy].
 requests = 100
 soft_time = 105.0
 max_retries = 1
 
+[phases.review]
+# REVIEW relay (v6-rewrite): a toolless distillation that resumes the
+# just-finished WORK transcript and emits the typed ReviewResult
+# (summary / done / problems / hints_next) consumed by the next cycle's
+# PLAN and WORK. Hard cap is the fixed regime constant (review = 45 s,
+# budget.py; env-overridable via SHLEPA_REVIEW_TIME). Never retried.
+requests = 20
+soft_tokens = 20000
+reasoning_effort = "low"
+max_retries = 0
+
 [phases.commit]
-# Terminal REVIEW phase (v6 VERIFY): read-only verifier on a fresh harness
-# packet (spec + preloaded artifact + mechanical check + decision summary).
-# No bash/write/edit — repair is a separate bounded phase (w2-5). The
-# explicit `time` IS the VERIFY subcap (w2-6): 15 s, under the 45 s
-# review-stage envelope (budget.py). A/B knobs: SHLEPA_REVIEW_SUBCAPS=0
-# restores the v5 single 45 s request; SHLEPA_REVIEW_CTX=full restores the
-# v5 resumed-transcript behaviour.
+# DISABLED (v6-rewrite): the v6 VERIFY verifier — replaced by the review
+# relay. The phase file, prompt and config stay for a later re-enable; the
+# runner never routes to it. Legacy A/B knobs (SHLEPA_REVIEW_SUBCAPS /
+# SHLEPA_REVIEW_CTX) still read its explicit `time` (the 15 s VERIFY
+# subcap).
 tools = ["read", "search"]
 requests = 20
 time = 15.0
@@ -126,29 +157,25 @@ reasoning_effort = "low"
 max_retries = 0
 
 [phases.repair]
-# v6 (w2-5): bounded artifact-only repair, entered only when the review
-# verdict carries repair_scope='local' with a named failing check. The edit
-# tool enforces the artifact-only, one-mutation budget; the harness
-# re-runs the mechanical check afterwards (pass -> done, fail -> new
-# plan/work cycle). 20 s explicit cap (the regime has no repair constant).
+# DISABLED (v6-rewrite): v6 (w2-5) bounded artifact-only repair. The
+# runner no longer routes verdicts to it; files/config stay for a later
+# re-enable. 20 s explicit cap (the regime has no repair constant).
 tools = ["read", "search", "edit"]
 requests = 3
 time = 20.0
 max_retries = 0
 
 [phases.salvage]
-# v6 (w2-3): write-only rescue after WORK left the deliverable missing or
-# empty on disk. Fresh context, one tool (write), 30 s explicit cap (the
-# regime has no salvage constant — the explicit `time` IS the cap). The
-# harness persists final_result.body atomically if the model never wrote
-# the file. Kill-switch: SHLEPA_SALVAGE=0.
+# DISABLED (v6-rewrite): v6 (w2-3) write-only rescue after a WORK that
+# left the deliverable missing/empty. The runner no longer routes to it;
+# files/config stay for a later re-enable. Kill-switch: SHLEPA_SALVAGE=0.
 tools = ["write"]
 requests = 5
 time = 30.0
 max_retries = 0
 
 [phases.emergency]
-# UNUSED in v5 (kept for compatibility): the v4 terminal rescue. The runner
+# DISABLED (kept for compatibility): the v4 terminal rescue. The runner
 # never routes to it.
 tools = ["read", "write", "edit", "bash"]
 requests = 20
