@@ -45,5 +45,5 @@ def test_regime_snapshot():
         "llm_wall": 180.0,
         # w3-2: finalization reserve (last R s of a phase cap ->
         # exploratory tools disabled).
-        "finalize_reserve": 10.0,
+        "finalize_reserve": 15.0,  # v6-rewrite: widened from 10 s
     }

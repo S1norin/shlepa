@@ -47,7 +47,7 @@ LLM_WALL = 180.0
 #: v6 (w3-2): finalization reserve — in the last R seconds of a phase cap
 #: the exploratory tools (bash/search/recon) are disabled so the model
 #: spends the window finalizing the deliverable instead of exploring.
-FINALIZE_RESERVE = 10.0
+FINALIZE_RESERVE = 15.0  # v6-rewrite: widened from 10 s (decision 2026-09-05)
 
 
 def finalize_reserve() -> float:
