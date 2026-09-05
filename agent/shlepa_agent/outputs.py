@@ -209,65 +209,70 @@ class WorkResult(BaseModel):
 
 
 class ReviewResult(BaseModel):
-    """Structured output of the terminal review phase (v5).
+    """Typed output of the REVIEW relay (v6-rewrite).
 
-    The review phase (phase id ``commit``) verifies — and, when needed,
-    repairs — the deliverable with full tools, then decides the run:
-    ``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
-    plan/work cycle (always — there is no time or cycle cap).
+    The review relay is the HAND-OFF between cycles: it resumes the
+    just-finished WORK transcript (no tools) and distills what the next
+    cycle's PLAN and WORK need — what was done, whether the deliverable
+    is complete, what is wrong, and what to do next. It never routes the
+    pipeline and never decides the run: the run ends exactly after the
+    last work cycle (the ``done`` flag is context, not a control signal).
     """
 
-    status: Literal["ok", "partial"] = Field(
+    summary: str = Field(
         description=(
-            "'ok' — the deliverable exists and ALL mechanical checks passed; "
-            "'partial' — best-effort: something is missing, broken or "
-            "unchecked."
+            "What was accomplished in the cycle just finished: the key "
+            "actions, the current state of the deliverable (path, format, "
+            "what is in it), and anything the next cycle must not redo. "
+            "Facts only — no plans, no evaluation."
         )
     )
-    verdict: Literal["done", "next_round"] = Field(
+    done: bool = Field(
         description=(
-            "'done' — stop now with the current deliverable (best effort if "
-            "partial); 'next_round' — a new plan/work round would materially "
-            "improve the result."
+            "True when the deliverable is complete and correct as it stands "
+            "(you believe nothing more needs to be done); False when the "
+            "next cycle should continue or fix it."
         )
     )
-    artifact: str = Field(
-        description=(
-            "Absolute path of the deliverable file (empty if none was "
-            "written)."
-        )
-    )
-    checks: list[str] = Field(
+    problems: list[str] = Field(
         default_factory=list,
         description=(
-            "Each mechanical check run and its outcome, e.g. "
-            "'jq . /app/out.json -> valid'. Empty if nothing was checked."
-        ),
+            "Concrete known problems with the current result: failed or "
+            "unrun verification, missing/incorrect content, format errors, "
+            "unresolved task requirements. Empty when you see no problems."
+        )
     )
-    hints: list[str] = Field(
+    hints_next: list[str] = Field(
         default_factory=list,
         description=(
-            "For verdict='next_round' only: concrete hints for the next "
-            "plan/work round — what was wrong and what must change. Empty "
-            "for 'done'."
-        ),
+            "Concrete instructions for the next cycle: the 3-7 highest-value "
+            "actions to do or fix first. Empty when nothing is left to do."
+        )
     )
-    notes: str = Field(
-        default="",
-        description=(
-            "One line: what the deliverable is (empty if self-evident)."
-        ),
-    )
-    repair_scope: Literal["none", "local", "needs_next_round"] = Field(
-        default="none",
-        description=(
-            "Who can fix a failing check: 'none' — nothing to repair; "
-            "'local' — ONE in-place edit of the deliverable fixes it (name "
-            "the failing check in 'checks'); 'needs_next_round' — the fix "
-            "requires new investigation or work (pair with verdict "
-            "'next_round')."
-        ),
-    )
+
+
+def render_review_relay(result: ReviewResult) -> str:
+    """Render a typed relay for the next cycle's PLAN/WORK prompts.
+
+    All four fields are carried over — the relay's value is in the
+    problems and the next actions, not just the summary.
+    """
+    parts: list[str] = [result.summary or "(the relay produced no summary)"]
+    if result.done:
+        parts.append(
+            "the relay judged the deliverable complete and correct as it "
+            "stands — verify rather than redo"
+        )
+    if result.problems:
+        parts.append("known problems:\n- " + "\n- ".join(result.problems))
+    if result.hints_next:
+        parts.append(
+            "do next (by value):\n"
+            + "\n".join(
+                f"{i}. {hint}" for i, hint in enumerate(result.hints_next, 1)
+            )
+        )
+    return "\n\n".join(parts)
 
 
 class SalvageResult(BaseModel):

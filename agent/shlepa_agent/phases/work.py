@@ -1,15 +1,22 @@
-"""Work phase: execute the plan, self-review, decide commit or replan.
+"""Work phase: execute the plan and produce the deliverable.
 
-Every work run is fresh: the plan (and, on a retry/replan, the previous
-attempt) arrives in the ``previous_results`` user-message block. Ends with
-a structured ``WorkResult`` (pydantic output tool).
+Every work run is fresh. Cycle 1: the current plan arrives in the
+``previous_results`` user-message block. Cycle i >= 2: the current plan
+PLUS the previous REVIEW relay (summary / done / problems / hints_next)
+— the relay is the hand-off from the previous cycle. A failed plan
+(timeout hand-off / error note) also arrives here. Ends with a structured
+``WorkResult`` (pydantic output tool).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from shlepa_agent.outputs import WorkResult, output_schema_note
+from shlepa_agent.outputs import (
+    WorkResult,
+    output_schema_note,
+    render_review_relay,
+)
 from shlepa_agent.phases.base import Phase, RunState
 from shlepa_agent.template import load_prompt, render_user
 
@@ -66,6 +73,13 @@ class WorkPhase(Phase):
                 prev_parts.append(
                     "previous work attempt failed with:\n" + prev_work.error
                 )
+        relay = state.results.get("review")
+        if relay is not None and relay.output is not None:
+            prev_parts.append(
+                "review relay (previous cycle) — distillation of the "
+                "previous work cycle; do what it says to do next:\n"
+                + render_review_relay(relay.output)
+            )
         if prev_parts:
             contents["previous_results"] = "\n\n".join(prev_parts)
         return render_user(cfg, self.id, contents)
