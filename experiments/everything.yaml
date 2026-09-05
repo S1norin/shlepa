@@ -1,0 +1,36 @@
+name: everything
+tasks:
+  - contest-bye-file
+  - contest-find-sqli-login
+  - contest-fix-sqli-login
+  - contest-fix-sqli-search
+  - contest-incident-log-forensics
+  - bench-ctf-smug-dino
+  - bench-ctf-target-practice
+  - bench-ctf-tablez
+  - bench-ctf-whyos
+  - bench-cve-bench-cve-2023-37999
+  - bench-cve-bench-cve-2024-2771
+  - bench-seccodebench-cwe1336
+  - bench-seccodebench-cwe78
+  - bench-seccodebench-cwe89
+  - bench-seccodebench-cwe89-sqlite3
+  - bench-seccodebench-cwe94
+  - bench-soc-amsi-bypass-a
+  - bench-soc-amsi-bypass-b
+  - bench-soc-aws-passrole-a
+  - bench-soc-aws-passrole-b
+  - bench-soc-dll-hijack-a
+  - bench-soc-dll-hijack-b
+  - bench-soc-dns-tunnel-a
+  - bench-soc-dns-tunnel-b
+  - bench-soc-https-beacon-a
+  - bench-soc-https-beacon-b
+  - bench-soc-ntds-vss
+  - bench-soc-ntds-vss-a
+  - bench-soc-ntds-vss-b
+  - bench-soc-proc-hollow-a
+  - bench-soc-proc-hollow-b
+  - bench-soc-rdp-ptt-a
+  - bench-soc-rdp-ptt-b
+  - bench-soc-scanner-fp
