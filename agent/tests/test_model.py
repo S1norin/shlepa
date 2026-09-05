@@ -247,7 +247,7 @@ def test_endpoint_storm_finalizes_run(monkeypatch, stub_openai, tmp_path, events
         },
         {"error": 429},  # work (2nd request of the phase) -> #1
         {"error": 429},  # work-timeout final_ask -> #2
-        {"error": 429},  # review -> #3 -> stalled -> finalize
+        {"error": 429},  # review relay -> #3 -> stalled -> finalize
     ]
     out = _run(monkeypatch, stub_openai, tmp_path)
 
@@ -260,7 +260,7 @@ def test_endpoint_storm_finalizes_run(monkeypatch, stub_openai, tmp_path, events
     assert [e["consecutive"] for e in errors] == [1, 2, 3]
     assert all(e["status"] == 429 for e in errors)
 
-    assert ev.get(("endpoint_stalled", "commit"), {}).get("failures") == 3
+    assert ev.get(("endpoint_stalled", "review"), {}).get("failures") == 3
     fin = [e for e in events if e.get("event") == "endpoint_finalized"]
     assert fin and fin[0]["failures"] == 3
 

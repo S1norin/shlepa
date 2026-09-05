@@ -93,14 +93,15 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg, task="t"):
 
 
 def _script(bash_cmd: str | None):
-    from tests.test_snapshot import _plan_step, _review_step, _work_step
+    """plan -> work (+bash) -> relay -> plan -> work (max_cycles = 2)."""
+    from tests.test_snapshot import _plan_step, _relay_step, _work_step
 
     steps = [_plan_step()]
     if bash_cmd:
         steps.append(
             {"tool_call": {"name": "bash", "arguments": {"command": bash_cmd}}}
         )
-    steps += [_work_step(), _review_step("done")]
+    steps += [_work_step(), _relay_step(done=True), _plan_step(), _work_step()]
     return steps
 
 

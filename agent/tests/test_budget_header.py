@@ -73,20 +73,22 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg, task="t"):
 def test_every_phase_request_carries_the_header(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    from tests.test_snapshot import _cfg, _plan_step, _review_step, _work_step
+    from tests.test_snapshot import _cfg, _plan_step, _relay_step, _work_step
 
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        _review_step("done"),
+        _relay_step(done=True),
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, _cfg(tmp_path))
 
     bodies = [json.dumps(b) for b in stub_state["bodies"]]
     assert bodies, "no requests recorded"
-    # plan, work and commit (review) requests all carry their header
+    # plan, work and review (relay) requests all carry their header
     assert any("[phase=plan" in b for b in bodies)
     assert any("[phase=work" in b for b in bodies)
-    assert any("[phase=commit" in b for b in bodies)
+    assert any("[phase=review" in b for b in bodies)
     # the header uses only known quantities
     assert "elapsed=" in bodies[0] and "remaining=" in bodies[0]

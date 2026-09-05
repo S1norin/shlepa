@@ -1,9 +1,15 @@
-"""t6: runner tests — v5 pipeline, handoffs, final_ask, retries.
+"""v6-rewrite runner tests: the HARD cycle regime.
 
-The runner (shlepa_agent.runner) walks the plan -> work -> review cycle
-(no task time limit T, no cycle cap): per-phase fixed time caps, the
-one-shot toolless final_ask after a phase time-out, per-phase error
-retries, and a stable log contract for the CLI.
+The runner (shlepa_agent.runner) executes exactly ``max_cycles``
+(default 2) plan -> work cycles with a REVIEW relay (toolless
+distillation, typed ReviewResult) between cycles:
+
+    plan -> work -> review -> plan -> work -> exit
+
+Per-phase fixed time caps, the one-shot toolless final_ask after a work
+time-out, typed partial plan hand-off, per-phase error retries, relay
+failures that never block the loop, and a stable log contract for the
+CLI.
 """
 
 import asyncio
@@ -54,8 +60,15 @@ def _run(
     )
 
 
-def _cfg(tmp_path, plan_time=60.0, work_time=180.0, commit_time=45.0, max_steps=8):
-    """Small test config for the v5 pipeline (short phase caps)."""
+def _cfg(
+    tmp_path,
+    plan_time=60.0,
+    work_time=180.0,
+    review_time=45.0,
+    max_steps=8,
+    max_cycles=2,
+):
+    """Small test config for the hard-cycle pipeline (short phase caps)."""
     p = tmp_path / "cfg.toml"
     p.write_text(
         f"""
@@ -65,6 +78,7 @@ send_temp = true
 entry = "plan"
 emergency = "emergency"
 max_steps = {max_steps}
+max_cycles = {max_cycles}
 
 [budget]
 max_tokens = 16384
@@ -94,10 +108,16 @@ time = {work_time}
 soft_time = 105.0
 max_retries = 1
 
+[phases.review]
+requests = 20
+time = {review_time}
+reasoning_effort = "low"
+max_retries = 0
+
 [phases.commit]
 tools = ["read", "write", "edit", "bash"]
 requests = 20
-time = {commit_time}
+time = 45.0
 reasoning_effort = "low"
 max_retries = 0
 
@@ -119,8 +139,7 @@ blocks = ["system", "tools", "task", "extra", "previous_results",
 
 
 def _plan_step():
-    # v6: PlanResult carries no `decision` field (w1-7) — every plan flows
-    # to WORK; the former work|commit argument was removed.
+    # Every plan flows to WORK (no decision field); the work phase writes.
     return {
         "tool_call": {
             "name": "final_result",
@@ -134,8 +153,6 @@ def _plan_step():
 
 
 def _work_step():
-    # v5: WorkResult has no decision — the work phase always hands off to
-    # the review phase.
     return {
         "tool_call": {
             "name": "final_result",
@@ -150,7 +167,7 @@ def _work_step():
 
 
 def _handoff_step():
-    # The typed partial_handoff final_ask answer (plan-timeout hand-off, v6).
+    # The typed partial_handoff final_ask answer (plan-timeout hand-off).
     return {
         "tool_call": {
             "name": "final_result",
@@ -179,18 +196,25 @@ def _bad_work():
     return step
 
 
-def _review_step(status="ok", verdict="done", repair_scope=None):
-    arguments = {
-        "status": status,
-        "verdict": verdict,
-        "artifact": "/app/hello.txt",
-        "checks": ["re-read the file -> content matches"],
-        "hints": [] if verdict == "done" else ["re-examine the target"],
-        "notes": "wrote hello.txt",
+def _relay_step(done=False, problems=None, hints=None):
+    """One typed relay step (the new ReviewResult schema)."""
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": "wrote hello.txt",
+                "done": done,
+                "problems": problems if problems is not None else [],
+                "hints_next": hints if hints is not None else [],
+            },
+        }
     }
-    if repair_scope is not None:
-        arguments["repair_scope"] = repair_scope
-    return {"tool_call": {"name": "final_result", "arguments": arguments}}
+
+
+def _bad_relay():
+    step = _relay_step()
+    step["tool_call"]["arguments"]["done"] = "explode"  # invalid: bool
+    return step
 
 
 def _phase_starts(events, phase):
@@ -239,50 +263,88 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     plain = build_phase_agent(model, cfg, plan, "some task", instrument=False)
     assert instrumented.instrument is True
     assert not plain.instrument  # untouched default is None
-    # plan and commit are typed-output phases
+    # plan and review are typed-output phases
     assert plan.output_type is PlanResult
-    assert get_phase("commit").output_type is ReviewResult
+    assert get_phase("review").output_type is ReviewResult
 
 
 # -- pipeline graph ---------------------------------------------------------
-def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
+def test_pipeline_hard_cycle_two_cycles(monkeypatch, stub_openai, tmp_path, events):
+    # The shipped default: exactly two plan/work cycles, a relay between
+    # them, no relay after the last cycle, and no commit phase at all.
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     output = _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert output == "wrote hello.txt"  # ReviewResult.notes
+    assert output == "wrote hello.txt and verified it"  # the last work summary
     assert _status(events) == "done"
     starts = [(e["id"], e["cycle"]) for e in events if e.get("event") == "phase" and e.get("start")]
-    assert [i for i, _ in starts] == ["plan", "work", "commit"]
-    assert all(c == 0 for _, c in starts)  # no replan cycle
-    assert len(stub_state["bodies"]) == 3  # one request per phase
-    # phase_done events carry the phase statuses
+    assert starts == [
+        ("plan", 0),
+        ("work", 0),
+        ("review", 1),
+        ("plan", 1),
+        ("work", 1),
+    ]
+    assert len(stub_state["bodies"]) == 5  # one request per phase
     dones = [e for e in events if e.get("event") == "phase_done"]
-    assert [e["status"] for e in dones] == ["done", "done", "done"]
+    assert [e["status"] for e in dones] == ["done"] * 5
+    # the relay runs between cycles only
+    relays = [e for e in events if e.get("event") == "cycle" and e.get("reason") == "relay"]
+    assert len(relays) == 1
+
+
+def test_max_cycles_knob_one_cycle(monkeypatch, stub_openai, tmp_path, events):
+    # max_cycles=1: no relay at all — the relay only exists between cycles.
+    stub_state["script"] = [_plan_step(), _work_step()]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path, max_cycles=1))
+    assert _status(events) == "done"
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work"]
+    assert not [e for e in events if e.get("event") == "cycle" and e.get("reason") == "relay"]
+    assert len(stub_state["bodies"]) == 2
+
+
+def test_relay_error_does_not_block_next_cycle(monkeypatch, stub_openai, tmp_path, events):
+    # A relay that exhausts its output retries is an error for the relay
+    # ONLY: the harness logs review_fallback and the next cycle starts.
+    stub_state["script"] = [
+        _plan_step(),
+        _work_step(),
+        _bad_relay(),  # clamped: every relay attempt sees the same bad step
+        _plan_step(),
+        _work_step(),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "done"
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work", "review", "plan", "work"]
+    fb = [e for e in events if e.get("event") == "review_fallback"]
+    assert fb and fb[0]["reason"] == "error"
 
 
 def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events):
-    # v6: the plan toolset is read-only (read, recon, search). A model that
-    # still asks for bash is refused by the tool surface (unknown tool),
-    # nothing is executed, and the run carries on to work.
+    # The shipped plan tool surface is read-only (read, recon, search) via
+    # the tool policy: a model that still asks for bash is refused by the
+    # tool surface (unknown tool), nothing is executed, run continues.
     from shlepa_agent.config import load_config
 
-    # This test is about the plan tool surface, not the v6 salvage gate
-    # (covered in test_salvage.py): keep the v5-shaped sequence.
-    monkeypatch.setenv("SHLEPA_SALVAGE", "0")
     stub_state["script"] = [
         {"tool_call": {"name": "bash", "arguments": {"command": "touch hello.txt"}}},
         _plan_step(),
         _work_step(),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert _status(events) == "done"
     starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
-    assert starts == ["plan", "work", "commit"]
-    # the bash call was refused, never executed
+    assert starts == ["plan", "work", "review", "plan", "work"]
     refused = [
         e for e in events
         if e.get("event") == "llm_tool_result" and e.get("tool") == "bash"
@@ -292,126 +354,46 @@ def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events)
     assert not (tmp_path / "hello.txt").exists()
 
 
-def test_trivial_plan_still_flows_through_work(monkeypatch, stub_openai, tmp_path, events):
-    # v6 routing invariant: the plan -> commit shortcut is gone — even a
-    # trivial plan (answer already known in PLAN) flows PLAN -> WORK ->
-    # REVIEW; the work phase is what writes the file.
-    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "done"
-    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
-    assert starts == ["plan", "work", "commit"]
-    assert len(stub_state["bodies"]) == 3
-
-
-def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, events):
-    # v6 (w2-8): a "next_round" verdict with a named failing scope
-    # (needs_next_round) starts a new plan/work cycle — no cycle cap, the
-    # container kill is the only external bound. The fresh PLAN receives
-    # the review hints as a structured block.
-    stub_state["script"] = [
-        _plan_step(),                # plan, cycle 0
-        _work_step(),
-        _review_step(verdict="next_round", repair_scope="needs_next_round"),
-        _plan_step(),                # plan, cycle 1 (review asked for it)
-        _work_step(),
-        _review_step(),              # done
-    ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "done"
-    plan_starts = _phase_starts(events, "plan")
-    assert [e["cycle"] for e in plan_starts] == [0, 1]
-    cyc = [
-        e
-        for e in events
-        if e.get("event") == "cycle" and e.get("reason") == "next_round"
-    ]
-    assert cyc and cyc[0].get("scope") == "needs_next_round"
-    # the fresh plan (request 4) carries the review hints block
-    plan_text = json.dumps(stub_state["bodies"][3])
-    assert "review phase verdict (previous cycle): next_round" in plan_text
-    assert "re-examine the target" in plan_text
-    assert len(stub_state["bodies"]) == 6
-
-
-# -- final_ask handoff on phase hard timeout ---------------------------------
-def test_commit_api_failure_reports_timeout(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # A review that dies on a persistent model error (HTTP 500) is a normal
-    # hand-off to the next cycle. A PERSISTENT storm (>= endpoint_fail_limit
-    # consecutive terminal failures) now triggers w3-5 endpoint_finalized:
-    # the run stops issuing requests and ends "done" (exit 0).
+def test_relay_fields_carried_into_cycle2(monkeypatch, stub_openai, tmp_path, events):
+    # The relay's typed fields (summary/problems/hints_next) all reach the
+    # cycle-2 PLAN and WORK prompts — not just the summary.
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        {"error": 500},
+        _relay_step(done=True, problems=["out.json is not valid json"], hints=["rewrite it"])
+        ,
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
-    fin = [e for e in events if e.get("event") == "endpoint_finalized"]
-    assert fin and fin[0]["failures"] >= 3
+    bodies = stub_state["bodies"]
+    plan2 = json.dumps(bodies[3])
+    work2 = json.dumps(bodies[4])
+    for body in (plan2, work2):
+        assert "out.json is not valid json" in body
+        assert "rewrite it" in body
+        assert "known problems" in body
+        assert "do next (by value)" in body
+        assert "complete and correct" in body  # done=True context note
 
 
-def test_commit_invalid_verdict_reports_error(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # A review that exhausts output retries with an invalid verdict is an
-    # unexpected error: the run must end as "error", not "done" (and NOT
-    # fall into a review_fallback cycle — the fallback routes timeouts
-    # only, never model output failures).
-    bad_review = _review_step()
-    bad_review["tool_call"]["arguments"]["verdict"] = "explode"
-    stub_state["script"] = [
-        _plan_step(),
-        _work_step(),
-        bad_review,  # clamped by the stub: every retry sees the same bad step
-    ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "error"
-    assert not [e for e in events if e.get("event") == "review_fallback"]
-
-
-def test_commit_time_cap_falls_back_to_new_cycle(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # v6 (w2-6): a review cut by its subcap with a missing deliverable is
-    # routed deterministically — a new plan/work cycle starts (the run
-    # still ends "timeout" via the step guard, not "done").
-    stub_state["script"] = [
-        _plan_step(),
-        _work_step(),
-        {"delay": 2.5, "tool_call": _review_step()["tool_call"]},
-    ]
-    _run(
-        monkeypatch,
-        stub_openai,
-        tmp_path,
-        agent_cfg=_cfg(tmp_path, commit_time=1.0, max_steps=4),
-    )
-    fb = [e for e in events if e.get("event") == "review_fallback"]
-    assert fb and fb[0]["reason"] == "timeout" and fb[0]["valid"] is False
-    assert any(
-        e.get("event") == "cycle" and e.get("reason") == "review_fallback"
-        for e in events
-    )
-    assert _status(events) == "timeout"
-
-
+# -- final_ask / handoff / caps ---------------------------------------------
 def test_plan_time_cap_handoff_to_work(monkeypatch, stub_openai, tmp_path, events):
-    # v6: a plan cut by its cap gets ONE toolless final_ask (typed
-    # partial_handoff), then routes to WORK (a fresh run) — the review is
-    # reached only through a completed work phase.
+    # A plan cut by its cap gets ONE toolless final_ask (typed
+    # partial_handoff), then WORK starts (a fresh run). The run still
+    # completes its cycles; the plan cut does not change the final status.
     stub_state["script"] = [
         {"delay": 2.5, "final": "too slow — plan timed out"},
         _handoff_step(),
         _work_step(),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "done"  # plan was cut, but work + review finished
-    # the test config has send_temp on: every request (incl. final_ask) sends it
+    assert _status(events) == "done"  # plan was cut, but work finished
     assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
     # plan was cut by its hard cap (budget), NOT retried
     assert any(
@@ -424,8 +406,8 @@ def test_plan_time_cap_handoff_to_work(monkeypatch, stub_openai, tmp_path, event
     assert asks[0].get("mode") == "partial"
     assert asks[-1].get("ok") is True
     starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
-    assert starts == ["plan", "work", "commit"]
-    assert len(stub_state["bodies"]) == 4
+    assert starts == ["plan", "work", "review", "plan", "work"]
+    assert len(stub_state["bodies"]) == 6
     # WORK's user message carries the cut-off note + the hand-off JSON.
     work_text = json.dumps(stub_state["bodies"][2])
     assert "cut off by its time cap" in work_text
@@ -437,47 +419,24 @@ def test_plan_time_cap_handoff_to_work(monkeypatch, stub_openai, tmp_path, event
     fa = next(
         b
         for b in bodies
-        if any(
-            "TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"]
-        )
+        if any("TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"])
     )
     plan = bodies[0]
     assert fa["messages"][0] == plan["messages"][0]  # system: byte-identical
     assert fa["messages"][:-1] == plan["messages"][:-1]  # history prefix
 
 
-def test_plan_time_cap_v5_routing_under_knobs(monkeypatch, stub_openai, tmp_path, events):
-    # A0 baseline arm: SHLEPA_ROUTE_PLAN_TIMEOUT=commit + SHLEPA_HANDOFF=off
-    # reproduce the v5 routes — the v5 final_ask message, no hand-off block,
-    # and the review straight after (work never starts).
-    monkeypatch.setenv("SHLEPA_ROUTE_PLAN_TIMEOUT", "commit")
-    monkeypatch.setenv("SHLEPA_HANDOFF", "off")
-    stub_state["script"] = [
-        {"delay": 2.5, "final": "too slow — plan timed out"},
-        {"final": "FINAL-ASK: wrote hello.txt"},
-        _review_step(),
-    ]
-    cfg = _cfg(tmp_path, plan_time=1.0)
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "timeout"  # v5: a plan breach ends "timeout"
-    asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
-    assert asks and asks[0].get("mode") == "off"
-    assert not _phase_starts(events, "work")
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 3
-
-
 def test_plan_error_routes_to_work(monkeypatch, stub_openai, tmp_path, events):
-    # v6: a plan that fails after its retries still reaches WORK, with a
+    # A plan that fails after its retries still reaches WORK, with a
     # direct-execution note (there is no plan to follow). Each failed plan
     # attempt consumes two stub steps (initial output call + one output
     # retry), so the script carries two bad steps per attempt.
-    stub_state["script"] = [*(_bad_plan() for _ in range(4)), _work_step(), _review_step()]
+    stub_state["script"] = [*(_bad_plan() for _ in range(4)), _work_step(), _relay_step(), _plan_step(), _work_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    assert _status(events) == "done"  # work + review finished the task
+    assert _status(events) == "done"  # work finished the task
     starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
     # the plan retry happens inside the plan phase (one start event)
-    assert starts == ["plan", "work", "commit"]
+    assert starts == ["plan", "work", "review", "plan", "work"]
     assert any(
         e.get("event") == "phase_retry" and e.get("phase") == "plan" for e in events
     )
@@ -486,13 +445,13 @@ def test_plan_error_routes_to_work(monkeypatch, stub_openai, tmp_path, events):
     assert "execute the task directly" in work_text
 
 
-# -- v6 routing invariant: table-driven coverage of all plan/work outcomes ---
-V6_ROUTING_CASES = [
+# -- routing table: every plan/work outcome under the hard-cycle regime ----
+ROUTING_CASES = [
     {
         "name": "plan_done_work",
-        "script": [_plan_step(), _work_step(), _review_step()],
+        "script": [_plan_step(), _work_step(), _relay_step(), _plan_step(), _work_step()],
         "cfg": {},
-        "phases": ["plan", "work", "commit"],
+        "phases": ["plan", "work", "review", "plan", "work"],
         "status": "done",
     },
     {
@@ -501,94 +460,68 @@ V6_ROUTING_CASES = [
             {"delay": 2.5, "final": "slow plan"},
             _handoff_step(),
             _work_step(),
-            _review_step(),
+            _relay_step(),
+            _plan_step(),
+            _work_step(),
         ],
         "cfg": {"plan_time": 1.0},
-        "phases": ["plan", "work", "commit"],
+        "phases": ["plan", "work", "review", "plan", "work"],
         "status": "done",
     },
     {
         "name": "plan_error_direct_execution",
-        # 2 failed plan attempts x 2 output calls each, then work + review.
-        "script": [*(_bad_plan() for _ in range(4)), _work_step(), _review_step()],
+        "script": [*(_bad_plan() for _ in range(4)), _work_step(), _relay_step(), _plan_step(), _work_step()],
         "cfg": {},
-        # the plan retry happens inside the plan phase (one start event)
-        "phases": ["plan", "work", "commit"],
+        "phases": ["plan", "work", "review", "plan", "work"],
         "status": "done",
     },
     {
-        "name": "work_timeout_final_ask_review",
+        "name": "work_timeout_final_ask_then_relay",
+        # work cut in cycle 1 -> final_ask -> relay -> cycle 2 -> done.
         "script": [
             _plan_step(),
             {"delay": 2.5, "final": "slow work"},
             {"final": "FINAL-ASK: wrote hello.txt"},
-            _review_step(),
+            _relay_step(),
+            _plan_step(),
+            _work_step(),
         ],
         "cfg": {"work_time": 1.0},
-        "phases": ["plan", "work", "commit"],
+        "phases": ["plan", "work", "review", "plan", "work"],
+        "status": "done",
+    },
+    {
+        "name": "work_timeout_last_cycle_reports_timeout",
+        # work cut in the LAST cycle -> final_ask -> run ends "timeout".
+        "script": [
+            _plan_step(),
+            _work_step(),
+            _relay_step(),
+            _plan_step(),
+            {"delay": 2.5, "final": "slow work"},
+            {"final": "FINAL-ASK: wrote hello.txt"},
+        ],
+        "cfg": {"work_time": 1.0},
+        "phases": ["plan", "work", "review", "plan", "work"],
         "status": "timeout",
     },
     {
-        "name": "work_error_review",
-        # 2 failed work attempts x 2 output calls each, then the review.
-        "script": [
-            _plan_step(),
-            *(_bad_work() for _ in range(4)),
-            _review_step(),
-        ],
+        "name": "work_error_last_cycle_reports_error",
+        "script": [_plan_step(), _work_step(), _relay_step(), _plan_step(), *(_bad_work() for _ in range(2))],
         "cfg": {},
-        # the work retry happens inside the work phase (one start event)
-        "phases": ["plan", "work", "commit"],
+        "phases": ["plan", "work", "review", "plan", "work"],
         "status": "error",
-    },
-    {
-        # w2-5: REPAIR is entered ONLY on repair_scope='local' — 'none'
-        # (and no scope at all) never does.
-        "name": "review_scope_none_never_repairs",
-        "script": [_plan_step(), _work_step(), _review_step(repair_scope="none")],
-        "cfg": {},
-        "phases": ["plan", "work", "commit"],
-        "status": "done",
-    },
-    {
-        # w2-8: a "next_round" verdict WITHOUT a named failing scope is
-        # "could be better" — the harness ignores it and ends on the
-        # current deliverable.
-        "name": "review_next_round_without_scope_ends_done",
-        "script": [
-            _plan_step(),
-            _work_step(),
-            _review_step(verdict="next_round", repair_scope="none"),
-        ],
-        "cfg": {},
-        "phases": ["plan", "work", "commit"],
-        "status": "done",
-    },
-    {
-        # w2-5: repair_scope='needs_next_round' routes straight to a new
-        # cycle (plan -> work -> review again), never through repair.
-        "name": "review_needs_next_round_cycles",
-        "script": [
-            _plan_step(),
-            _work_step(),
-            _review_step(verdict="next_round", repair_scope="needs_next_round"),
-            _plan_step(),
-            _work_step(),
-            _review_step(),
-        ],
-        "cfg": {},
-        "phases": ["plan", "work", "commit", "plan", "work", "commit"],
-        "status": "done",
     },
 ]
 
 
 @pytest.mark.parametrize(
-    "case", V6_ROUTING_CASES, ids=[case["name"] for case in V6_ROUTING_CASES]
+    "case", ROUTING_CASES, ids=[case["name"] for case in ROUTING_CASES]
 )
-def test_v6_routing_table(monkeypatch, stub_openai, tmp_path, events, case):
-    # The v6 default knobs route every plan outcome to WORK and keep the
-    # v5 work-timeout/error routes to the review.
+def test_routing_table(monkeypatch, stub_openai, tmp_path, events, case):
+    # The hard-cycle regime: every plan outcome reaches WORK, every work
+    # timeout gets a final_ask, the relay only ever runs between cycles,
+    # and the LAST work decides the final status.
     stub_state["script"] = case["script"]
     cfg = _cfg(tmp_path, **case["cfg"])
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
@@ -597,37 +530,43 @@ def test_v6_routing_table(monkeypatch, stub_openai, tmp_path, events, case):
     assert _status(events) == case["status"], case["name"]
 
 
-def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, tmp_path, events):
+def test_work_time_cap_triggers_final_ask_then_relay(monkeypatch, stub_openai, tmp_path, events):
+    # Cycle-1 work cut: final_ask (toolless) then the relay — the relay
+    # does NOT judge, it distills; the next cycle still runs.
     stub_state["script"] = [
         _plan_step(),
         {"delay": 2.5, "final": "too slow — work timed out"},
         {"final": "FINAL-ASK: wrote hello.txt"},
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     cfg = _cfg(tmp_path, work_time=1.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "timeout"  # work was cut by its cap
+    assert _status(events) == "done"  # cycle-2 work finished
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "work"]
     assert asks and asks[-1].get("ok") is True
-    assert len(_phase_starts(events, "work")) == 1  # work was NOT rerun
-    assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 4
+    assert len(_phase_starts(events, "work")) == 2  # the work phase reran (cycle 2)
+    assert len(_phase_starts(events, "review")) == 1  # relay between the cycles
+    assert len(stub_state["bodies"]) == 6
 
 
 def test_step_guard_exhaustion_stops_run(monkeypatch, stub_openai, tmp_path, events):
-    # max_steps=1 (dev knob): the plan phase runs, then the guard stops the
-    # walk at the work boundary — with "timeout", no emergency routing.
-    cfg = _cfg(tmp_path, max_steps=1)
-    stub_state["script"] = [_plan_step()]
+    # max_steps=1 + max_cycles=3 (dev knobs): cycle 1 (plan+work) runs,
+    # the relay starts, then the guard stops the walk BETWEEN cycles —
+    # with "timeout" (it stops between cycles, never mid-last-cycle).
+    cfg = _cfg(tmp_path, max_steps=1, max_cycles=3)
+    stub_state["script"] = [_plan_step(), _work_step(), _relay_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
     assert _status(events) == "timeout"
     assert any(
         e.get("event") == "budget" and e.get("reason") == "max_steps" for e in events
     )
-    assert not _phase_starts(events, "work")
+    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
+    assert starts == ["plan", "work", "review"]  # cycle 2 never starts
     assert not _phase_starts(events, "commit")
     assert not _phase_starts(events, "emergency")
-    assert len(stub_state["bodies"]) == 1
+    assert len(stub_state["bodies"]) == 3
 
 
 # -- retries -----------------------------------------------------------------
@@ -647,17 +586,19 @@ def test_plan_error_retried_once_then_work(monkeypatch, stub_openai, tmp_path, e
         return _FlakyPlan() if phase_id == "plan" else get_phase(phase_id)
 
     stub_state["script"] = [
-        _plan_step(),        # attempt 2 (attempt 1 dies before the request)
+        _plan_step(),  # attempt 2 (attempt 1 dies before the request)
         _work_step(),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), phase_factory=factory)
     assert _status(events) == "done"
     retries = [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
     assert [e["attempt"] for e in retries] == [2]
-    # one phase entry; the retry is tracked by phase_retry, not a new phase start
-    assert len(_phase_starts(events, "plan")) == 1
-    assert len(stub_state["bodies"]) == 3  # no model request on the failed attempt
+    # one start per cycle (2 cycles); the retry is phase_retry, not a new start
+    assert len(_phase_starts(events, "plan")) == 2
+    assert len(stub_state["bodies"]) == 5  # no model request on the failed attempt
 
 
 # -- temperature opt-in -----------------------------------------------------
@@ -666,7 +607,7 @@ def test_temperature_not_sent_by_default(monkeypatch, stub_openai, tmp_path, eve
 
     monkeypatch.delenv("SHLEPA_SEND_TEMP", raising=False)
     monkeypatch.delenv("SHLEPA_TEMP", raising=False)
-    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _relay_step(), _plan_step(), _work_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all("temperature" not in b for b in stub_state["bodies"])
@@ -678,7 +619,7 @@ def test_temperature_sent_when_send_temp_enabled(monkeypatch, stub_openai, tmp_p
     from shlepa_agent.config import load_config
 
     monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
-    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _relay_step(), _plan_step(), _work_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
@@ -691,7 +632,7 @@ def test_temperature_env_value_override(monkeypatch, stub_openai, tmp_path, even
 
     monkeypatch.setenv("SHLEPA_SEND_TEMP", "1")
     monkeypatch.setenv("SHLEPA_TEMP", "0.9")
-    stub_state["script"] = [_plan_step(), _work_step(), _review_step()]
+    stub_state["script"] = [_plan_step(), _work_step(), _relay_step(), _plan_step(), _work_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=load_config())
     assert stub_state["bodies"]
     assert all(b.get("temperature") == 0.9 for b in stub_state["bodies"])
@@ -703,7 +644,9 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         {"tool_call": {"name": "bash", "arguments": {"command": "echo hi"}}},
         _plan_step(),
         _work_step(),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     names = {e.get("event") for e in events}
@@ -723,14 +666,14 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "entry",
     ):
         assert field in start, f"agent_start lost stable field {field}"
-    # v5 fixed-regime details are additive (unknown to the CLI, but logged);
-    # there is NO t / t_source / hard_time / soft_time / commit_deadline
+    # fixed-regime details are additive; no t / hard_time / soft_time fields
     assert {"plan_cap", "work_cap", "review_cap", "bash_cap", "llm_wall"} <= set(start)
-    assert start["plan_cap"] == pytest.approx(30.0)  # v6 regime
+    assert start["plan_cap"] == pytest.approx(30.0)
     assert start["work_cap"] == pytest.approx(120.0)
     assert start["review_cap"] == pytest.approx(45.0)
     assert start["bash_cap"] == pytest.approx(30.0)
     assert start["llm_wall"] == pytest.approx(180.0)
+    assert start["max_cycles"] == 2
     usage = next(e for e in events if e.get("event") == "usage")
     for field in (
         "request",
@@ -744,17 +687,18 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "cumulative_cache_write",
     ):
         assert field in usage
-    # v5 pipeline events
-    assert {"phase", "phase_done"} <= names
+    # hard-cycle pipeline events
+    assert {"phase", "phase_done", "cycle"} <= names
     assert "llm_tool_call" in names  # the bash round-trip in the plan phase
     done = next(e for e in events if e.get("event") == "agent_done" and "status" in e)
     assert done["status"] in ("done", "timeout", "error")
     assert "elapsed_s" in done and "output" in done
 
 
-# -- w2-6: review subcaps + deterministic VERIFY fallback --------------------
+# -- caps: relay envelope -------------------------------------------------------
 def test_review_subcaps_configured():
-    # VERIFY/REPAIR/decide are separate requests under the 45 s envelope.
+    # The legacy COMMIT/REPAIR/decide subcaps still describe the shipped
+    # [phases.commit] (disabled, but kept on disk).
     from shlepa_agent import budget
     from shlepa_agent.config import load_config
 
@@ -781,88 +725,14 @@ def test_review_subcaps_knob_restores_v5_envelope(monkeypatch):
     assert phase.limits(cfg).time is None  # regime: REVIEW_CAP 45 s
 
 
-def _plan_step_spec():
-    # A plan that names the deliverable spec (relative path).
-    return {
-        "tool_call": {
-            "name": "final_result",
-            "arguments": {
-                "goal": "write out.json with the answer key",
-                "findings": "",
-                "steps": ["write the file"],
-                "artifact_spec": {
-                    "kind": "file",
-                    "path": "out.json",
-                    "format": "json",
-                    "keys": ["answer"],
-                },
-            },
-        }
-    }
+def test_relay_time_knob(monkeypatch):
+    # The relay has its own regime cap (45 s) and a dev knob
+    # SHLEPA_REVIEW_TIME that overrides [phases.review].time.
+    from shlepa_agent.config import load_config
+    from shlepa_agent.phases.review import ReviewPhase
 
-
-def _work_step_spec():
-    return {
-        "tool_call": {
-            "name": "final_result",
-            "arguments": {
-                "summary": "wrote out.json",
-                "findings": "",
-                "deliverable": "out.json",
-                "confidence": 0.9,
-            },
-        }
-    }
-
-
-def test_verify_timeout_valid_deliverable_ends_done(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # VERIFY cut by its subcap with a VALID deliverable on disk: the
-    # harness ends the run "done" — no LLM, no new cycle.
-    (tmp_path / "out.json").write_text('{"answer": 42}', encoding="utf-8")
-    stub_state["script"] = [
-        _plan_step_spec(),
-        _work_step_spec(),
-        {"delay": 1.5, "final": "verdict coming soon..."},  # cut at 1.0 s
-    ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path, commit_time=1.0))
-    assert _status(events) == "done"
-    fb = [e for e in events if e.get("event") == "review_fallback"]
-    assert fb and fb[0]["valid"] is True
-    assert not [e for e in events if e.get("event") == "cycle"]
-
-
-def test_verify_timeout_invalid_deliverable_next_round(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # VERIFY cut by its subcap with an INVALID deliverable: a new
-    # plan/work cycle starts, carrying the recorded failed checks as
-    # hints in the next plan's prompt.
-    (tmp_path / "out.json").write_text('{"x": 1}', encoding="utf-8")  # no 'answer'
-    stub_state["script"] = [
-        _plan_step_spec(),
-        _work_step_spec(),
-        {"delay": 1.5, "final": "verdict coming soon..."},  # cut at 1.0 s
-    ]
-    _run(
-        monkeypatch,
-        stub_openai,
-        tmp_path,
-        agent_cfg=_cfg(tmp_path, commit_time=1.0, max_steps=4),
-    )
-    cycles = [
-        e
-        for e in events
-        if e.get("event") == "cycle" and e.get("reason") == "review_fallback"
-    ]
-    assert cycles, "expected a review_fallback cycle"
-    fb = [e for e in events if e.get("event") == "review_fallback"]
-    assert fb and fb[0]["valid"] is False
-    # a second plan started and its prompt carries the failed check
-    starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
-    assert starts.count("plan") >= 2
-    assert any(
-        "mechanical deliverable check (harness) FAILED" in json.dumps(b["messages"])
-        for b in stub_state["bodies"]
-    )
+    cfg = load_config()
+    phase = ReviewPhase()
+    assert phase.limits(cfg).time is None  # regime: REVIEW_CAP 45 s
+    monkeypatch.setenv("SHLEPA_REVIEW_TIME", "10")
+    assert phase.limits(load_config()).time == 10.0

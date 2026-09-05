@@ -1,10 +1,15 @@
-"""w2-3: the SALVAGE route — write-only rescue when WORK left the
-deliverable missing/empty, harness-persisted final_result.body, and the
-SHLEPA_SALVAGE=0 kill-switch.
+"""v6-rewrite: the SALVAGE route is DISABLED (kept for re-enable).
 
-Pipeline tests drive the real runner against the stub OpenAI server with a
-test config that includes a [phases.salvage] section (so the gate is
-configured), exactly like the production config.
+The w2-3 write-only rescue (write-only phase, harness-persisted
+final_result.body fallback, SHLEPA_SALVAGE=0 kill-switch) is no longer
+routed by the hard-cycle pipeline: there is no salvage gate between WORK
+and the next cycle. The phase file, prompt, config section and the runner
+helpers (``_salvage_needed`` / ``_persist_salvage_body``) stay on disk for
+a later re-enable; they are disabled via ``[tool_policy].disabled``.
+
+This file pins the new behavior (the pipeline never routes to salvage or
+commit) and keeps the harness-persist helper as a direct unit test so the
+re-enable stays cheap.
 """
 
 from __future__ import annotations
@@ -58,7 +63,8 @@ def _run(monkeypatch, stub_openai, tmp_path, agent_cfg, task="create hello.txt",
 
 
 def _cfg(tmp_path):
-    """Test config with a [phases.salvage] section (the production shape)."""
+    """Test config with the [phases.salvage] section (the production
+    shape) — even disabled phases keep their config sections on disk."""
     p = tmp_path / "cfg.toml"
     p.write_text(
         """
@@ -103,16 +109,9 @@ requests = 5
 time = 30.0
 max_retries = 0
 
-[phases.commit]
-tools = ["read", "write", "edit", "bash"]
+[phases.review]
 requests = 20
 time = 45.0
-reasoning_effort = "low"
-max_retries = 0
-
-[phases.emergency]
-tools = ["read", "write", "edit", "bash"]
-requests = 20
 reasoning_effort = "low"
 max_retries = 0
 
@@ -161,30 +160,15 @@ def _work_step(deliverable: str = "hello.txt"):
     }
 
 
-def _salvage_step(body: str = "hello", path: str = ""):
-    return {
-        "tool_call": {
-            "name": "final_result",
-            "arguments": {"body": body, "path": path},
-        }
-    }
-
-
-def _salvage_write_step(path: str = "hello.txt", text: str = "hello\n"):
-    return {"tool_call": {"name": "write", "arguments": {"path": path, "text": text}}}
-
-
-def _review_step():
+def _relay_step(done: bool = False):
     return {
         "tool_call": {
             "name": "final_result",
             "arguments": {
-                "status": "ok",
-                "verdict": "done",
-                "artifact": "hello.txt",
-                "checks": ["re-read -> matches"],
-                "hints": [],
-                "notes": "wrote hello.txt",
+                "summary": "attempted hello.txt",
+                "done": done,
+                "problems": [] if done else ["file not written"],
+                "hints_next": [] if done else ["write the file"],
             },
         }
     }
@@ -198,104 +182,87 @@ def _phase_starts(events):
     ]
 
 
-# -- AC: harness persist ------------------------------------------------------
-def test_salvage_persists_body_when_model_never_wrote(
+# -- AC: the pipeline never routes salvage (or commit) -----------------------
+def test_pipeline_never_routes_salvage_or_commit(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    stub_state["script"] = [_plan_step(), _work_step(), _salvage_step("hello"), _review_step()]
-    output = _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-
-    assert output == "wrote hello.txt"
-    assert _phase_starts(events) == ["plan", "work", "salvage", "commit"]
-    # the harness persisted final_result.body even though the model never
-    # called the write tool
-    f = tmp_path / "hello.txt"
-    assert f.is_file()
-    assert f.read_text(encoding="utf-8") == "hello"
-    # the mechanical check ran before (missing) and after (valid) the rescue
-    checks = [e for e in events if e.get("event") == "deliverable_check"]
-    assert len(checks) >= 2
-    assert checks[0]["exists"] is False and checks[0]["valid"] is False
-    assert checks[-1]["exists"] is True and checks[-1]["valid"] is True
-    # the body fallback was persisted (the file was still missing before it)
-    assert any(e.get("event") == "salvage_persist" for e in events)
-
-
-def test_salvage_write_tool_beats_body_persist(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    """A file the model itself wrote wins: no salvage_persist, content kept."""
-    # _plan_step's artifact_spec expects "hello" verbatim; the tool write
-    # matches it, the (different) body would not — the file must be the
-    # tool's content for the re-check to be valid.
+    """WORK leaves the deliverable missing: no salvage rescue, no commit
+    verifier — the run is exactly plan, work, relay, plan, work and ends
+    with the (empty) work outcome."""
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        _salvage_write_step(path="hello.txt", text="hello"),
-        _salvage_step(body="WRONG-BODY-SHOULD-NOT-PERSIST", path="hello.txt"),
-        _review_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
 
-    f = tmp_path / "hello.txt"
-    assert f.read_text(encoding="utf-8") == "hello"
-    assert not any(e.get("event") == "salvage_persist" for e in events)
-    checks = [e for e in events if e.get("event") == "deliverable_check"]
-    assert checks[-1]["valid"] is True
-
-
-# -- AC: kill-switch ----------------------------------------------------------
-def test_salvage_kill_switch_skips_rescue(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [_plan_step(), _work_step(), _salvage_step("hello"), _review_step()]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), salvage="0")
-
-    # no salvage phase; the run proceeds work -> commit with the check results
-    assert _phase_starts(events) == ["plan", "work", "commit"]
+    assert _phase_starts(events) == ["plan", "work", "review", "plan", "work"]
     assert not (tmp_path / "hello.txt").exists()
+    # the mechanical check still ran after each work (the gate is kept;
+    # only the routing behind it is gone)
     checks = [e for e in events if e.get("event") == "deliverable_check"]
-    assert checks and checks[-1]["exists"] is False
-
-
-# -- no trigger when the deliverable is fine ----------------------------------
-def test_no_salvage_when_deliverable_exists(monkeypatch, stub_openai, tmp_path, events):
-    (tmp_path / "hello.txt").write_text("hello", encoding="utf-8")
-    stub_state["script"] = [_plan_step(), _work_step(), _salvage_step("hello"), _review_step()]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-
-    assert _phase_starts(events) == ["plan", "work", "commit"]
-    checks = [e for e in events if e.get("event") == "deliverable_check"]
-    assert checks and checks[-1]["valid"] is True
+    assert len(checks) == 2
+    assert all(c["exists"] is False for c in checks)
     assert not any(e.get("event") == "salvage_persist" for e in events)
+    done = [e for e in events if e.get("event") == "agent_done"]
+    assert done and done[-1]["status"] == "done"
 
 
-# -- spec resolution ----------------------------------------------------------
-def test_spec_falls_back_to_work_deliverable(
+def test_salvage_kill_switch_has_no_routing_effect(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    """No artifact_spec in the plan: WorkResult.deliverable carries the path."""
-    plan = _plan_step()
-    del plan["tool_call"]["arguments"]["artifact_spec"]
-    stub_state["script"] = [_plan_step(), _work_step("answer.txt"), _salvage_step("42"), _review_step()]
-    stub_state["script"][0] = plan
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-
-    assert _phase_starts(events) == ["plan", "work", "salvage", "commit"]
-    assert (tmp_path / "answer.txt").read_text(encoding="utf-8") == "42"
-
-
-def test_unknown_path_skips_gate(monkeypatch, stub_openai, tmp_path, events):
-    """Neither the plan nor the work names a path: the gate stays silent."""
-    plan = _plan_step()
-    del plan["tool_call"]["arguments"]["artifact_spec"]
-    work = _work_step(deliverable="")
-    stub_state["script"] = [plan, work, _review_step()]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-
-    assert _phase_starts(events) == ["plan", "work", "commit"]
-    assert not any(e.get("event") == "deliverable_check" for e in events)
+    """SHLEPA_SALVAGE=0 no longer changes anything (no route exists):
+    identical phase sequence with and without the kill-switch."""
+    stub_state["script"] = [
+        _plan_step(),
+        _work_step(),
+        _relay_step(),
+        _plan_step(),
+        _work_step(),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path), salvage="0")
+    assert _phase_starts(events) == ["plan", "work", "review", "plan", "work"]
+    assert not (tmp_path / "hello.txt").exists()
 
 
-# -- phase unit tests ----------------------------------------------------------
+# -- unit tests (kept for a later re-enable) ---------------------------------
+def test_persist_salvage_body_persists_when_file_absent(tmp_path, events):
+    """The harness-persist helper still works standalone: it writes the
+    salvage final_result.body only when the model never wrote the file."""
+    from shlepa_agent.config import load_config
+    from shlepa_agent.outputs import SalvageResult
+    from shlepa_agent.phases.base import PhaseResult, RunState
+    from shlepa_agent.runner import _persist_salvage_body
+    from shlepa_agent.tools.base import AgentDeps
+
+    deps = AgentDeps(workdir=tmp_path, cfg=load_config(), clock=lambda: 0.0)
+    st = RunState(task="t", deps=deps, model=None)
+    st.deliverable_spec = {
+        "kind": "file",
+        "path": "hello.txt",
+        "format": "text",
+        "keys": [],
+        "expected_content": "hello",
+    }
+    st.results["salvage"] = PhaseResult(
+        status="done",
+        summary="salvaged",
+        output=SalvageResult(body="hello", path=""),
+    )
+    _persist_salvage_body(st)
+    f = tmp_path / "hello.txt"
+    assert f.is_file()
+    assert f.read_text(encoding="utf-8") == "hello"
+    assert any(e.get("event") == "salvage_persist" for e in events)
+
+    # a file the model itself wrote wins: the body is only the fallback
+    f.write_text("model-wrote-this", encoding="utf-8")
+    _persist_salvage_body(st)
+    assert f.read_text(encoding="utf-8") == "model-wrote-this"
+
+
 def test_salvage_phase_is_write_only_fresh_and_typed():
     from shlepa_agent.config import load_config
     from shlepa_agent.outputs import SalvageResult
@@ -308,3 +275,5 @@ def test_salvage_phase_is_write_only_fresh_and_typed():
     assert phase.terminal is False
     assert phase.tools(cfg) == ["write"]
     assert phase.limits(cfg).time == 30.0
+    # disabled in the shipped tool policy (never routed)
+    assert cfg.tool_policy.is_disabled("salvage")

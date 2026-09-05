@@ -275,10 +275,9 @@ def test_run_prompt_phase_spans_carry_phase_id(monkeypatch, stub_openai, tmp_pat
         for s in exporter.get_finished_spans()
         if s.attributes.get("shlepa.phase_id")
     }
-    # The stub pipeline runs plan -> work -> salvage -> commit: the default
-    # config's post-work gate (w2-3) fires because the stub work phase never
-    # writes hello.txt to disk.
-    assert labeled == {"plan", "work", "salvage", "commit"}, (
+    # The stub pipeline runs the hard-cycle regime (max_cycles = 2 in the
+    # shipped config): plan -> work -> review relay -> plan -> work.
+    assert labeled == {"plan", "work", "review"}, (
         f"unexpected phase labels: {labeled}"
     )
     # Every labeled span sits under the root span (same trace).

@@ -1,8 +1,12 @@
-"""w2-9: artifact snapshot + best-at-exit.
+"""v6-rewrite: best-at-exit snapshots are DISABLED (kept for re-enable).
 
-A later round that leaves a broken deliverable must not regress an
-earlier check-passing one: the harness snapshots every passing
-deliverable after a round and restores the best one on exit.
+The w2-9 harness functions (``_maybe_snapshot_best`` / ``_restore_best_on_exit``)
+stay on disk but are no longer called by the pipeline: the file state after
+the LAST work is what gets scored. The unit tests below still pin the
+functions; the e2e test pins the disabled behavior (no restoration).
+
+This module also hosts the shared stub-pipeline helpers (``_cfg``,
+``_plan_step``, ``_work_step``, ``_relay_step``) used by several test files.
 """
 
 import asyncio
@@ -93,6 +97,12 @@ time = 180.0
 soft_time = 105.0
 max_retries = 1
 
+[phases.review]
+requests = 20
+time = 45.0
+reasoning_effort = "low"
+max_retries = 0
+
 [phases.commit]
 tools = ["read", "search"]
 requests = 20
@@ -162,28 +172,27 @@ def _work_step():
     }
 
 
-def _review_step(verdict="next_round"):
+def _relay_step(done: bool = False):
+    """A typed ReviewResult step for the v6-rewrite review relay."""
     return {
         "tool_call": {
             "name": "final_result",
             "arguments": {
-                "status": "ok",
-                "verdict": verdict,
-                "repair_scope": "needs_next_round" if verdict == "next_round" else "none",
-                "artifact": "out.json",
-                "checks": [],
-                "hints": ["fix the answer key"] if verdict == "next_round" else [],
-                "notes": "",
+                "summary": "wrote out.json",
+                "done": done,
+                "problems": [] if done else ["answer key unverified"],
+                "hints_next": [] if done else ["verify the answer key"],
             },
         }
     }
 
 
-def test_round2_breaks_round1_exit_restores(
+def test_round2_overwrite_is_not_restored(
     monkeypatch, stub_openai, tmp_path, events
 ):
-    """Round 1 leaves a valid out.json, round 2 overwrites it with an
-    invalid one; the run ends 'done' and the file equals round 1's."""
+    """v6-rewrite: best-at-exit is disabled — round 2 overwrites the file
+    with an invalid one and the run ends 'done' with round 2's content on
+    disk (no artifact_restored event, no snapshot taken)."""
     stub_state["script"] = [
         _plan_step(),
         {
@@ -193,7 +202,7 @@ def test_round2_breaks_round1_exit_restores(
             }
         },
         _work_step(),
-        _review_step("next_round"),
+        _relay_step(done=False),
         _plan_step(),
         {
             "tool_call": {
@@ -207,15 +216,14 @@ def test_round2_breaks_round1_exit_restores(
             }
         },
         _work_step(),
-        _review_step("done"),
     ]
     _run(monkeypatch, stub_openai, tmp_path, _cfg(tmp_path))
 
     f = tmp_path / "out.json"
-    assert f.read_text() == '{"answer": 42}', (
-        "round-1 snapshot must be restored on exit"
+    assert f.read_text() == '{"x": 1}', (
+        "v6-rewrite: no best-at-exit restoration — the last work wins"
     )
-    assert any(e.get("event") == "artifact_restored" for e in events)
+    assert not any(e.get("event") == "artifact_restored" for e in events)
     done = [e for e in events if e.get("event") == "agent_done"]
     assert done and done[-1]["status"] == "done"
 

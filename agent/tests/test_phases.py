@@ -446,25 +446,63 @@ def test_plan_prompt_on_replan_carries_previous_work_result():
     assert "tried" in prompt
 
 
-def test_plan_prompt_on_replan_carries_review_hints():
+def test_plan_prompt_on_replan_carries_review_relay():
     state = _state()
     work = WorkResult(summary="tried")
     state.results["work"] = PhaseResult(
         status="done", summary=work.model_dump_json(), output=work,
     )
-    review = ReviewResult(
-        status="partial",
-        verdict="next_round",
-        artifact="/app/out.json",
-        hints=["ip_addresses must be sorted descending", "add the port field"],
+    relay = ReviewResult(
+        summary="wrote /app/out.json with 3 of 5 keys",
+        done=False,
+        problems=["ip_addresses must be sorted descending"],
+        hints_next=["add the port field"],
     )
-    state.results["commit"] = PhaseResult(
-        status="done", summary=review.model_dump_json(), output=review,
+    state.results["review"] = PhaseResult(
+        status="done", summary=relay.model_dump_json(), output=relay,
     )
     prompt = PlanPhase().prompt(state)
-    assert "review phase verdict (previous cycle): next_round" in prompt
+    assert "review relay (previous cycle)" in prompt
     assert "ip_addresses must be sorted descending" in prompt
     assert "add the port field" in prompt
+
+
+def test_work_prompt_carries_review_relay():
+    # v6-rewrite: WORK of cycle i >= 2 receives the previous relay.
+    from shlepa_agent.phases.work import WorkPhase
+
+    state = _state()
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo"])
+    state.results["plan"] = PhaseResult(
+        status="done", summary=plan.model_dump_json(), output=plan,
+    )
+    relay = ReviewResult(
+        summary="wrote /app/out.txt, content unverified",
+        done=False,
+        problems=["content check never ran"],
+        hints_next=["verify the file content"],
+    )
+    state.results["review"] = PhaseResult(
+        status="done", summary=relay.model_dump_json(), output=relay,
+    )
+    prompt = WorkPhase().prompt(state)
+    assert "review relay (previous cycle)" in prompt
+    assert "content check never ran" in prompt
+    assert "verify the file content" in prompt
+
+
+def test_review_relay_resumes_the_work_transcript():
+    # v6-rewrite: the relay rides on the work conversation (trimmed),
+    # never on a fresh packet.
+    from shlepa_agent.phases.review import ReviewPhase
+
+    state = _state()
+    phase = ReviewPhase()
+    assert phase.output_type is ReviewResult
+    state.model.last_messages = []
+    assert phase.history(state) is None
+    state.model.last_messages = [object()]
+    assert phase.history(state) == state.model.last_messages
 
 
 def test_work_prompt_carries_plan_result():

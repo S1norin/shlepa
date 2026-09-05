@@ -1,9 +1,14 @@
-"""w2-5: the REPAIR route — bounded artifact-only repair after a
-repair_scope='local' review verdict.
+"""v6-rewrite: the REPAIR route is DISABLED (kept for re-enable).
 
-Covers: the edit tool's REPAIR scope (artifact-only, one mutation), and
-the harness re-check driving the exit (pass -> done, fail -> new
-plan/work cycle) via stub-model pipeline runs.
+The w2-5 bounded artifact-only repair (repair_scope='local' verdict ->
+REPAIR phase, harness re-check driving the exit) is no longer routed by
+the hard-cycle pipeline: there is no verifier verdict, so there is no
+repair trigger. The phase file, prompt, config section and the edit
+tool's REPAIR scope (artifact-only, one mutation) stay on disk for a
+later re-enable; the phase is disabled via ``[tool_policy].disabled``.
+
+This file pins the new behavior (the pipeline never routes to repair)
+and keeps the edit-tool REPAIR-scope mechanics as direct unit tests.
 """
 
 from __future__ import annotations
@@ -93,8 +98,7 @@ time = 180.0
 soft_time = 105.0
 max_retries = 1
 
-[phases.commit]
-tools = ["read", "search"]
+[phases.review]
 requests = 20
 time = 45.0
 reasoning_effort = "low"
@@ -104,18 +108,6 @@ max_retries = 0
 tools = ["read", "search", "edit"]
 requests = 3
 time = 20.0
-max_retries = 0
-
-[phases.salvage]
-tools = ["write"]
-requests = 5
-time = 30.0
-max_retries = 0
-
-[phases.emergency]
-tools = ["read", "write", "edit", "bash"]
-requests = 20
-reasoning_effort = "low"
 max_retries = 0
 
 [template]
@@ -162,17 +154,18 @@ def _work_step():
     }
 
 
-def _review_step(**extra):
-    args = {
-        "status": "partial",
-        "verdict": "done",
-        "artifact": "out.json",
-        "checks": ["keys: 'answer' missing"],
-        "hints": [],
-        "notes": "out.json is missing the answer key",
+def _relay_step(done: bool = False):
+    return {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": "wrote out.json but the answer key is missing",
+                "done": done,
+                "problems": [] if done else ["keys: 'answer' missing"],
+                "hints_next": [] if done else ["add the answer key"],
+            },
+        }
     }
-    args.update(extra)
-    return {"tool_call": {"name": "final_result", "arguments": args}}
 
 
 def _phase_starts(events):
@@ -181,80 +174,36 @@ def _phase_starts(events):
     ]
 
 
-# -- AC: routing ---------------------------------------------------------------
-def test_repair_routes_on_scope_local_and_passes(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # The work phase left a broken (but present) file: the salvage gate
-    # stays off (the file is not missing/empty), VERIFY flags the failing
-    # keys check with repair_scope=local, REPAIR edits the file once, and
-    # the harness re-check drives the exit.
+# -- AC: the pipeline never routes repair -------------------------------------
+def test_pipeline_never_routes_repair(monkeypatch, stub_openai, tmp_path, events):
+    """A broken-but-present deliverable no longer triggers REPAIR: the
+    relay distills the problem into the next cycle's context, and the
+    run is exactly plan, work, relay, plan, work (no repair_done)."""
     (tmp_path / "out.json").write_text('{"x": 1}', encoding="utf-8")
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        _review_step(repair_scope="local"),
-        {
-            "tool_call": {
-                "name": "edit",
-                "arguments": {
-                    "path": "out.json",
-                    "edits": [
-                        {
-                            "oldText": '{"x": 1}',
-                            "newText": '{"answer": 42, "x": 1}',
-                        }
-                    ],
-                },
-            }
-        },
-        {"final": "Fixed the keys check."},
-    ]
-    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
-    status = next(
-        e["status"] for e in events if e.get("event") == "agent_done" and "status" in e
-    )
-
-    assert _phase_starts(events) == ["plan", "work", "commit", "repair"]
-    assert status == "done"
-    # the harness re-check passed -> done; the file carries the fix
-    assert json.loads((tmp_path / "out.json").read_text(encoding="utf-8")) == {
-        "answer": 42,
-        "x": 1,
-    }
-    done = [e for e in events if e.get("event") == "repair_done"]
-    assert done and done[0]["passed"] is True
-
-
-def test_repair_fail_starts_new_cycle(
-    monkeypatch, stub_openai, tmp_path, events
-):
-    # REPAIR did not fix the check: the harness re-check fails and the run
-    # starts a new plan/work cycle (no time condition — the failed strict
-    # check is the only trigger).
-    (tmp_path / "out.json").write_text('{"x": 1}', encoding="utf-8")
-    stub_state["script"] = [
+        _relay_step(done=False),
         _plan_step(),
         _work_step(),
-        _review_step(repair_scope="local"),
-        {"final": "the fix is not obvious from the packet"},  # no edit
     ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
 
-    done = [e for e in events if e.get("event") == "repair_done"]
-    assert done and done[0]["passed"] is False
-    cycles = [
-        e
-        for e in events
-        if e.get("event") == "cycle" and e.get("reason") == "repair_failed"
-    ]
-    assert cycles, "expected a repair_failed cycle"
-    starts = _phase_starts(events)
-    # repair -> plan: a new cycle started
-    assert starts.index("repair") < starts.index("plan", starts.index("repair"))
+    assert _phase_starts(events) == ["plan", "work", "review", "plan", "work"]
+    assert not any(e.get("event") == "repair_done" for e in events)
+    # the mechanical check still ran after each work and still flagged
+    # the missing key (the gate is kept; only the routing behind it is gone)
+    checks = [e for e in events if e.get("event") == "deliverable_check"]
+    assert len(checks) == 2
+    assert all(not c["valid"] for c in checks)
+    done = [e for e in events if e.get("event") == "agent_done"]
+    assert done and done[-1]["status"] == "done"
+    # the relay's problems are carried into the cycle-2 PLAN request
+    bodies = [json.dumps(b) for b in stub_state["bodies"]]
+    assert any("keys: 'answer' missing" in b for b in bodies)
 
 
-# -- AC: edit scope -------------------------------------------------------------
+# -- AC: edit scope (kept for a later re-enable) -------------------------------
 def _edit_ctx(tmp_path):
     from shlepa_agent.config import load_config
     from shlepa_agent.tools.base import AgentDeps, RepairScope
@@ -309,15 +258,15 @@ def test_repair_scope_rejects_second_mutation(tmp_path):
     ] == 42
 
 
-# -- schema ----------------------------------------------------------------------
-def test_review_result_repair_scope_schema():
-    from shlepa_agent.outputs import ReviewResult
+def test_repair_phase_stays_registered_and_disabled():
+    from shlepa_agent.config import load_config
+    from shlepa_agent.phases import get_phase
 
-    r = ReviewResult(status="ok", verdict="done", artifact="x")
-    assert r.repair_scope == "none"  # backward-compatible default
-    for value in ("none", "local", "needs_next_round"):
-        assert ReviewResult(
-            status="ok", verdict="done", artifact="x", repair_scope=value
-        ).repair_scope == value
-    with pytest.raises(ValueError):
-        ReviewResult(status="ok", verdict="done", artifact="x", repair_scope="all")
+    cfg = load_config()
+    phase = get_phase("repair")
+    assert phase.id == "repair"
+    assert phase.terminal is False
+    assert phase.tools(cfg) == ["read", "search", "edit"]
+    assert phase.limits(cfg).time == 20.0
+    # disabled in the shipped tool policy (never routed)
+    assert cfg.tool_policy.is_disabled("repair")
