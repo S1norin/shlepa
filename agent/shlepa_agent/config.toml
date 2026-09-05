@@ -84,6 +84,34 @@ max_output = 8192
 enabled = true
 max_output = 8192
 
+[tools.code_search]
+# SIFS BM25-offline retrieval over the code tree (bundled tools/bin/sifs,
+# see [code_search]). Per-call wall 30 s (the regime bash cap); result
+# size is capped in tokens inside the engine (default 1500).
+enabled = true
+timeout = 30.0
+
+[tools.file_outline]
+# Symbol outline of one file (same engine as code_search). Per-call wall
+# 30 s.
+enabled = true
+timeout = 30.0
+
+[tools.log_triage]
+# Deterministic read-only triage of log/evidence files (record counts,
+# time ranges, top entities, IOC candidates). Per-call wall 30 s.
+enabled = true
+timeout = 30.0
+max_output = 8192
+
+[code_search]
+# Engine for code_search/file_outline: "sifs" (bundled binary, BM25
+# offline — the baseline; the local search-bench beats the ripgrep
+# fixed-string scan on natural-language queries) or "rg" (preinstalled
+# ripgrep). A missing/broken sifs binary degrades to rg/regex inside the
+# engine (never crash).
+engine = "sifs"
+
 [tool_policy]
 # SINGLE SOURCE of tool availability: the phase x iteration matrix
 # (v6-rewrite decision). Per-iteration overrides use "<phase>_c<N>" keys
@@ -93,12 +121,15 @@ max_output = 8192
 disabled = ["commit", "repair", "salvage", "emergency"]
 
 [tool_policy.phases]
-# PLAN: read-only exploration surface (no bash/write/edit — recon + search
-# replace the raw read-and-probe pass).
-plan = ["read", "recon", "search"]
-# WORK: full toolset; recon + search stay (cheap structured exploration
-# instead of ad-hoc bash probes).
-work = ["read", "write", "edit", "bash", "recon", "search"]
+# PLAN: read-only orientation surface (no bash/write/edit — recon, search
+# and the retrieval/forensics tools replace the raw read-and-probe pass;
+# research/notes/v6-baseline-readonly-tools.md).
+plan = ["read", "recon", "search", "code_search", "file_outline", "log_triage"]
+# WORK: full toolset; recon + search + code_search + file_outline +
+# log_triage stay (cheap structured exploration instead of ad-hoc bash
+# probes).
+work = ["read", "write", "edit", "bash", "recon", "search", "code_search",
+        "file_outline", "log_triage"]
 # REVIEW relay: NO tools — a pure distillation on the resumed work
 # transcript (the relay's job is summarizing, not exploring).
 review = []

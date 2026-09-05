@@ -3,21 +3,33 @@ Your job in this phase is to understand the task and the environment — and to
 plan. Do NOT do the actual work: no fixes, no bulk analysis, no long-running
 commands. At most a few cheap reads/probes to confirm your assumptions (list
 the directory, peek at the main files, check that a service responds). This
-phase is read-only: your tools are read, recon and search — there is no
-bash, write or edit, and the work phase does the real work (it will also
-get your plan, so every fact it needs must be in the plan).
+phase is read-only: your tools are read, recon, search, code_search,
+file_outline and log_triage — there is no bash, write or edit, and the work
+phase does the real work (it will also get your plan, so every fact it needs
+must be in the plan).
 
 Read the task. Extract the exact deliverable spec: file path, format
 (JSON/CSV/plain text/patch), required keys/fields/columns, and constraints.
 Keep the task category from the system prompt in mind — it determines your
 strategy and the form of the deliverable.
 
-Follow the RECON TOOL section of the system prompt: for a live local target
-call recon(mode="url", target=<url>) first; for code tasks
-recon(mode="code", target=<path>); for data/artifact tasks
-recon(mode="data", target=<path>). Its deterministic output is a reliable
-map of the attack surface; use search for targeted greps and file listings
-when recon is not enough.
+Orient FIRST with the tools from the ORIENTATION TOOLS section of the
+system prompt, one call per surface the task actually needs:
+- live local target: recon(mode="url", target=<url>) — a reliable
+  attack-surface map instead of many exploratory curls;
+- code-fix task: recon(mode="code", target=<source dir>); for a source tree
+  bigger than ~10 files, locate the relevant file or symbol with code_search
+  (a keyword or natural-language query) BEFORE reading it;
+- forensics/evidence task: recon(mode="data", target=<dir>), then
+  log_triage(path=<evidence dir>) — and read only the specific files and
+  lines they flag, not the raw logs.
+search (grep/glob/ls) fills the gaps for exact text and file names.
+
+Example (forensics task, evidence in /app/evidence):
+  1. recon(mode="data", target="/app/evidence")
+  2. log_triage(path="/app/evidence")
+  3. read(path="/app/evidence/auth.log", offset=<lines the triage flagged>)
+  4. final_result(goal=..., findings=..., steps=..., risks=..., artifact_spec=...)
 
 Then produce the plan via the final_result tool:
 - goal: the exact deliverable spec (path, format, required fields/values,

@@ -20,12 +20,16 @@ def _shipped_cfg():
 class TestShippedMatrix:
     def test_plan_matrix(self):
         cfg = _shipped_cfg()
-        assert cfg.tool_policy.tools_for("plan", 1) == ["read", "recon", "search"]
+        assert cfg.tool_policy.tools_for("plan", 1) == [
+            "read", "recon", "search", "code_search", "file_outline",
+            "log_triage",
+        ]
 
     def test_work_matrix(self):
         cfg = _shipped_cfg()
         assert cfg.tool_policy.tools_for("work", 1) == [
             "read", "write", "edit", "bash", "recon", "search",
+            "code_search", "file_outline", "log_triage",
         ]
 
     def test_review_has_no_tools(self):

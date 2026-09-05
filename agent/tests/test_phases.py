@@ -197,8 +197,14 @@ def test_phase_toolsets_from_config():
     # v6: the plan phase is read-only (no bash/write/edit); work gains
     # recon + search (structured exploration). VERIFY (w2-4) is read-only:
     # no bash/write/edit — repair is a separate bounded phase.
-    assert PlanPhase().tools(cfg) == ["read", "recon", "search"]
-    assert WorkPhase().tools(cfg) == ["read", "write", "edit", "bash", "recon", "search"]
+    assert PlanPhase().tools(cfg) == [
+        "read", "recon", "search", "code_search", "file_outline",
+        "log_triage",
+    ]
+    assert WorkPhase().tools(cfg) == [
+        "read", "write", "edit", "bash", "recon", "search",
+        "code_search", "file_outline", "log_triage",
+    ]
     assert set(CommitPhase().tools(cfg)) == {"read", "search"}
     assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
 

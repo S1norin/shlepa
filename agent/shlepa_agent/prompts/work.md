@@ -17,6 +17,13 @@ Exploration tools:
   to know what is where before executing a plan step.
 - search: read-only grep/glob/ls over the task dir — use it to locate files
   and values instead of `find`/`grep` one-liners in bash.
+- code_search: ranked BM25 retrieval over the code tree — locate code by
+  keyword or natural-language meaning in one call instead of grep/read round
+  trips; file_outline lists a file's def/class/func symbols before you read
+  it.
+- log_triage: deterministic first-pass summary of log/evidence files (record
+  counts, time range, top entities, rare IOC candidates) — on forensics tasks
+  call it before grep/read round trips over raw lines.
 
 Rules:
 - If a step fails twice, adapt within the plan's scope with the smallest

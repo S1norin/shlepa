@@ -62,7 +62,10 @@ def test_phase_values_pipeline():
     # v6-rewrite: the tool matrix lives in [tool_policy]; the phase section
     # keeps only limits.
     assert plan.tools == []  # no legacy fallback in the shipped config
-    assert cfg.tool_policy.tools_for("plan") == ["read", "recon", "search"]
+    assert cfg.tool_policy.tools_for("plan") == [
+        "read", "recon", "search", "code_search", "file_outline",
+        "log_triage",
+    ]
     assert plan.requests == 25
     assert plan.time is None  # cap = regime constant (budget.py, 30s)
     assert plan.soft_time == 25.0  # advisory, under the 30s cap
@@ -73,6 +76,7 @@ def test_phase_values_pipeline():
     assert work.tools == []  # matrix in [tool_policy]
     assert cfg.tool_policy.tools_for("work") == [
         "read", "write", "edit", "bash", "recon", "search",
+        "code_search", "file_outline", "log_triage",
     ]
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)

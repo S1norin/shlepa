@@ -94,12 +94,34 @@ class ToolsConfig(BaseModel):
     recon: ToolConfig = ToolConfig(enabled=True, max_output=8192)
     #: Stdlib-only read-only grep/glob/ls over the task dir.
     search: ToolConfig = ToolConfig(enabled=True, max_output=8192)
+    #: SIFS BM25-offline retrieval over the code tree (tools/bin/sifs).
+    code_search: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
+    #: Symbol outline of one file (same SIFS/regex engine as code_search).
+    file_outline: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
+    #: Deterministic read-only triage of log/evidence files.
+    log_triage: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_output=8192)
 
     def get(self, name: str) -> ToolConfig:
         try:
             return getattr(self, name)
         except AttributeError:
             raise KeyError(f"unknown tool: {name}") from None
+
+
+class CodeSearchConfig(BaseModel):
+    """Engine selection for the code_search/file_outline tools (baseline).
+
+    v6 baseline is SIFS BM25-offline (the local search-bench:
+    ``research/code_search/analysis/search_bench_20260831-1600.md`` — bm25
+    hit@1 0.5-1.0 on natural-language queries vs 0.00 for the ripgrep
+    fixed-string scan; keyword 0.67-1.0 vs 0.25-1.0). A missing or broken
+    SIFS binary degrades to the rg/regex engine inside the engine module
+    (never crash).
+    """
+
+    #: Engine: "sifs" (default, bundled binary) or "rg" (preinstalled
+    #: ripgrep fixed-string scan).
+    engine: str = "sifs"
 
 
 class BlockWrapper(BaseModel):
@@ -184,6 +206,7 @@ class AgentConfig(BaseModel):
     agent: AgentSection = Field(default_factory=AgentSection)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     phases: dict[str, PhaseConfig] = Field(min_length=1)
     template: TemplateConfig = Field(
@@ -217,6 +240,9 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
     "SHLEPA_PLAN_TIME": ("phases.plan.time", float),
     "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
+    "SHLEPA_CODE_SEARCH": ("tools.code_search.enabled", _env_bool),
+    "SHLEPA_CODE_SEARCH_ENGINE": ("code_search.engine", str),
+    "SHLEPA_LOG_TRIAGE": ("tools.log_triage.enabled", _env_bool),
     "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
     "SHLEPA_REVIEW_TIME": ("phases.review.time", float),
 }
