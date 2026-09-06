@@ -7,13 +7,17 @@ tags the MLflow run with the same string, so runs are filterable by arm.
 
 Arms (the current set; the registry grows as new tool families land):
 
-- ``baseline``: the v5 default tool set (read/write/edit/bash). No
-  config mutation — the agent stays byte-identical to the pre-arm
-  baseline.
-- ``+smart-grep``: baseline + code_search/file_outline over ripgrep
-  (the rg engine; the "smart grep" primitive from the code-search plan).
-- ``+sifs``: baseline + code_search/file_outline over the bundled SIFS
-  binary (BM25 offline).
+- ``baseline``: the current default tool policy — plan gets
+  read + recon + code_search/file_outline (no bash, no writes), work
+  gets the full set (read/write/edit/bash + recon + search), review
+  (commit) is toolless. No config mutation: the packaged config.toml
+  IS the baseline.
+- ``+smart-grep``: baseline with the code_search engine pinned to
+  ripgrep (the rg engine; the "smart grep" primitive from the code-search
+  plan — now also the baseline default, so the arm is mainly a
+  labelling/explicitness knob).
+- ``+sifs``: baseline with code_search over the bundled SIFS binary
+  (BM25 offline).
 - ``+forensics``: baseline + the log_triage tool (deterministic read-only
   triage of log/evidence files; research/notes/readonly-tools.md option A).
 - ``+mitre-kb``: baseline + the mitre_kb tool (pinned MITRE ATT&CK v19.2
@@ -23,14 +27,16 @@ Arms (the current set; the registry grows as new tool families land):
 - ``+recon``: baseline + the recon tool (deterministic read-only
   attack-surface recon; the prompt's recon block switches from the script
   to the tool variant, arm-gated in ``runner._system_prompt``; see
-  research/notes/recon-tool-conversion.md).
+  research/notes/recon-tool-conversion.md). The baseline now ships recon
+  in plan/work, so the arm mutation dedupes to a no-op.
 - ``read-only``: read/write/edit + the recon tool, NO bash — the
   experiment arm proving recon is usable by a read-only agent (no code
   execution channel; deliverable writing stays possible).
 
 The legacy dev switch ``AGENT_CODE_SEARCH`` (rg | sifs) still works when
-``AGENT_TOOLSET`` is unset; when both are set, ``AGENT_TOOLSET`` wins
-(including ``baseline``, which forces the search tools off). An invalid
+``AGENT_TOOLSET`` is unset (it switches the engine of the baseline's
+search tools); when both are set, ``AGENT_TOOLSET`` wins (``baseline`` is
+a no-op — the baseline already ships recon + search). An invalid
 ``AGENT_TOOLSET`` value is ignored (the config stays at the baseline) —
 arm selection must never crash the run.
 """
@@ -84,10 +90,12 @@ def resolve_arm(spec: str) -> str:
 def apply_arm(cfg: AgentConfig, arm: str) -> None:
     """Apply one arm's config mutation to a loaded config.
 
-    ``baseline`` records the arm and mutates nothing. Search arms enable
-    the code_search/file_outline tools and append them to every phase's
-    tool list (the same mutation the legacy AGENT_CODE_SEARCH switch
-    performs; see :func:`shlepa_agent.config._enable_search_tools`).
+    ``baseline`` records the arm and mutates nothing (the packaged
+    config.toml already carries the baseline tool policy: recon + search
+    in plan/work, toolless review). Search arms pin the code_search
+    engine (rg | sifs) — the tools are enabled and phase-wired by the
+    baseline config; the mutation dedupes to the engine switch (see
+    :func:`shlepa_agent.config._enable_search_tools`).
     """
     from shlepa_agent.config import (
         _apply_read_only_arm,

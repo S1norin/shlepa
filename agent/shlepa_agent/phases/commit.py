@@ -1,17 +1,16 @@
-"""Review phase (phase id ``commit``): terminal verify-and-decide phase (v5).
+"""Review phase (phase id ``commit``): terminal judge phase (v5).
 
 Continues the CURRENT conversation (trimmed message history) so the model
-keeps its full context (the work run, or the plan run on the trivial
-plan->commit shortcut). The user message asks to verify the deliverable
-mechanically, repair it if broken, and decide: ``verdict='done'`` stops the
-run, ``verdict='next_round'`` starts a new plan/work cycle (always — no time
-or cycle cap; the hints for the next plan ride along in ``state.results``
-and are rendered by the next plan prompt). Full tools
-(read/write/edit/bash) so the reviewer can fix the deliverable itself.
-Typed output (``ReviewResult``: status/verdict/artifact/checks/hints/notes)
-via the final_result tool; hard-capped by the fixed review cap
-(``budget.py``, the runner enforces it, ``time`` omitted in config). Never
-retried.
+keeps its full context (the plan + work runs of the current cycle). The
+user message asks it to JUDGE from the transcript alone — the phase is
+TOOLLESS: it cannot read files, run checks, or repair anything. It decides:
+``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
+plan/work cycle (always — no time or cycle cap; the hints for the next plan
+ride along in ``state.results`` and are rendered by the next plan prompt). A
+broken or missing deliverable is fixed by the next cycle, not here. Typed
+output (``ReviewResult``: status/verdict/artifact/checks/hints/notes) via
+the final_result tool; hard-capped by the fixed review cap (``budget.py``,
+the runner enforces it, ``time`` omitted in config). Never retried.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ def trim_history(messages: list[Any]) -> list[Any]:
 
 
 class CommitPhase(Phase):
-    """Reviewer: verifies/repairs the deliverable, decides done vs next_round."""
+    """Toolless reviewer: judges done vs next_round from the transcript."""
 
     id = "commit"
     output_type = ReviewResult

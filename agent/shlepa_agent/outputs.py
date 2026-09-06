@@ -47,9 +47,12 @@ class PlanResult(BaseModel):
         ),
     )
     decision: Literal["work", "commit"] = Field(
+        default="work",
         description=(
-            "'work' — execute the plan; 'commit' — the answer is already "
-            "fully known, write the deliverable now."
+            "'work' — execute the plan (ALWAYS the correct choice: only the "
+            "work phase can write the deliverable, and the runner routes "
+            "every plan to work). 'commit' is a legacy value: the runner "
+            "treats it exactly like 'work'."
         )
     )
 
@@ -85,10 +88,11 @@ class WorkResult(BaseModel):
 class ReviewResult(BaseModel):
     """Structured output of the terminal review phase (v5).
 
-    The review phase (phase id ``commit``) verifies — and, when needed,
-    repairs — the deliverable with full tools, then decides the run:
-    ``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
-    plan/work cycle (always — there is no time or cycle cap).
+    The review phase (phase id ``commit``) is TOOLLESS: it judges the
+    run from the transcript alone (it cannot read, run checks, or repair
+    anything), then decides: ``verdict='done'`` stops the run,
+    ``verdict='next_round'`` starts a new plan/work cycle (always — there
+    is no time or cycle cap).
     """
 
     status: Literal["ok", "partial"] = Field(
@@ -114,8 +118,11 @@ class ReviewResult(BaseModel):
     checks: list[str] = Field(
         default_factory=list,
         description=(
-            "Each mechanical check run and its outcome, e.g. "
-            "'jq . /app/out.json -> valid'. Empty if nothing was checked."
+            "Verification evidence OBSERVED IN THE TRANSCRIPT (this phase "
+            "has no tools and runs nothing itself): the mechanical checks "
+            "the work phase reported with their outcomes, e.g. 'work ran: "
+            "jq . /app/out.json -> valid'. Empty if the transcript shows no "
+            "checks."
         ),
     )
     hints: list[str] = Field(
