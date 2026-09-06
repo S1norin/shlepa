@@ -55,6 +55,8 @@ BASE_MATRIX = {
     "commit": BASE_COMMIT,
     "emergency": BASE_EMERGENCY,
 }
+
+
 def _clear(monkeypatch):
     monkeypatch.delenv("AGENT_TOOLSET", raising=False)
     monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
