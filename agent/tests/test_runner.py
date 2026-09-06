@@ -238,6 +238,40 @@ def test_build_phase_agent_named_per_phase(tmp_path):
         assert agent.name == phase_id
 
 
+def test_review_agent_is_toolless_from_packaged_config(tmp_path):
+    """The baseline review (commit) phase builds with NO tools: it judges
+    the transcript, it cannot read/write/run anything. The plan phase
+    builds without bash/writes; the work phase is the only one with bash.
+    """
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.runner import build_phase_agent
+
+    cfg = load_config()  # the packaged baseline (no AGENT_TOOLSET in tests)
+    model = TrackedModel(
+        "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+
+    def names(phase_id: str) -> set[str]:
+        agent = build_phase_agent(model, cfg, get_phase(phase_id), "some task")
+        return set(agent._function_toolset.tools)
+
+    assert names("commit") == set()  # toolless review
+    assert names("plan") == {"read", "recon", "code_search", "file_outline"}
+    assert names("work") == {
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "recon",
+        "code_search",
+        "file_outline",
+    }
+
+
 # -- pipeline graph ---------------------------------------------------------
 def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     stub_state["script"] = [
@@ -257,13 +291,18 @@ def test_pipeline_plan_work_commit(monkeypatch, stub_openai, tmp_path, events):
     assert [e["status"] for e in dones] == ["done", "done", "done"]
 
 
-def test_trivial_plan_routes_directly_to_commit(monkeypatch, stub_openai, tmp_path, events):
-    stub_state["script"] = [_plan_step("commit"), _review_step()]
+def test_plan_commit_decision_is_ignored_always_works(monkeypatch, stub_openai, tmp_path, events):
+    # The old trivial plan->commit shortcut is gone: the plan has no write
+    # tools and can never deliver anything, so a hallucinated
+    # decision="commit" is ignored and work still runs.
+    stub_state["script"] = [_plan_step("commit"), _work_step(), _review_step()]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"
-    assert not _phase_starts(events, "work")  # work was skipped
+    assert _phase_starts(events, "work")  # work was NOT skipped
     assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 2
+    starts = [(e["id"], e["cycle"]) for e in events if e.get("event") == "phase" and e.get("start")]
+    assert [i for i, _ in starts] == ["plan", "work", "commit"]
+    assert len(stub_state["bodies"]) == 3
 
 
 def test_review_next_round_starts_new_cycle(monkeypatch, stub_openai, tmp_path, events):

@@ -1,10 +1,11 @@
 """Tests for the recon tool (``shlepa_agent/tools/recon.py``).
 
 The engine is covered in tests/test_recon.py (CLI parity, goldens, the
-web deadline). Here the tool layer: registration (off by default, on
-when enabled), output parity with the engine in data mode, the 30s
-per-call wall against a hanging engine (issue #107), the max_output
-cap and the SHLEPA_RECON_* env overrides.
+web deadline). Here the tool layer: registration (on by default in the
+baseline plan/work phases, never in the toolless review), output parity
+with the engine in data mode, the 30s per-call wall against a hanging
+engine (issue #107), the max_output cap and the SHLEPA_RECON_* env
+overrides.
 """
 
 import asyncio
@@ -42,14 +43,17 @@ def _untrusted_body(out: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_absent_by_default(monkeypatch):
+def test_present_by_default_in_tooled_phases(monkeypatch):
     monkeypatch.delenv("AGENT_TOOLSET", raising=False)
     monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
     cfg = load_config()
-    assert cfg.tools.recon.enabled is False
+    assert cfg.tools.recon.enabled is True
     for phase_id in PHASES:
         names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
-        assert names == BASE_TOOLS  # recon not in the resolved list
+        if phase_id in ("plan", "work"):
+            assert "recon" in names  # the baseline ships recon
+        else:
+            assert "recon" not in names  # toolless review, legacy emergency
 
 
 def test_included_when_enabled():

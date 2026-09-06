@@ -50,7 +50,8 @@ def test_phase_values_4_phase_pipeline():
     assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
 
     plan = cfg.phases["plan"]
-    assert set(plan.tools) == {"read", "write", "edit", "bash"}
+    # baseline tool policy: plan reads and maps only — no bash, no writes
+    assert set(plan.tools) == {"read", "recon", "code_search", "file_outline"}
     assert plan.requests == 25
     assert plan.time is None  # cap = regime constant (budget.py)
     assert plan.soft_time == 45.0  # advisory
@@ -58,7 +59,16 @@ def test_phase_values_4_phase_pipeline():
     assert plan.max_retries == 1
 
     work = cfg.phases["work"]
-    assert set(work.tools) == {"read", "write", "edit", "bash"}
+    # the full set: the only phase with bash, plus recon + search
+    assert set(work.tools) == {
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "recon",
+        "code_search",
+        "file_outline",
+    }
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
     assert work.soft_time == 105.0  # advisory, under the 120s cap
@@ -66,7 +76,8 @@ def test_phase_values_4_phase_pipeline():
     assert work.max_retries == 1
 
     commit = cfg.phases["commit"]
-    assert set(commit.tools) == {"read", "write", "edit", "bash"}
+    # the review phase is toolless: it judges the transcript, it cannot act
+    assert set(commit.tools) == set()
     assert commit.requests == 20
     assert commit.time is None  # cap = regime constant (budget.py)
     assert commit.soft_time == 35.0  # advisory, under the 45s cap

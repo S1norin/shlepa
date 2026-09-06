@@ -2,13 +2,13 @@
 
 Two behaviors are under test:
 
-- OFF (env unset): the agent is byte-identical to the baseline — the
-  per-phase system prompts and registered tool names diff clean against
-  the committed golden fixture (``fixtures/default_prompt.txt``, captured
-  pre-wiring).
-- ON (env = rg | sifs): both tools are registered in every phase, their
-  usage notes render into the system prompt, and the engine follows the
-  env value.
+- BASELINE (env unset): the packaged config.toml IS the baseline — search
+  and recon on, rg engine, toolless review. The per-phase system prompts
+  and registered tool names diff clean against the committed golden
+  fixture (``fixtures/default_prompt.txt``).
+- ENGINE SWITCH (env = rg | sifs): the engine follows the env value; the
+  tool notes render into the system prompt of every tooled phase; the
+  toolless review phase is never augmented.
 """
 
 import asyncio
@@ -79,14 +79,21 @@ def test_default_env_is_byte_identical_to_golden_baseline(monkeypatch):
         )
 
 
-def test_env_invalid_value_stays_off(monkeypatch):
+def test_env_invalid_value_keeps_baseline(monkeypatch):
+    # An invalid value is ignored: the packaged baseline (search ON, rg
+    # engine) stays as loaded.
     for value in ("banana", "sifs-hybrid", ""):
         monkeypatch.setenv("AGENT_CODE_SEARCH", value)
         cfg = load_config()
-        assert cfg.code_search.engine == "auto", value
-        assert cfg.tools.code_search.enabled is False, value
-        assert cfg.tools.file_outline.enabled is False, value
-        assert set(cfg.phases["plan"].tools) == {"read", "write", "edit", "bash"}, value
+        assert cfg.code_search.engine == "rg", value
+        assert cfg.tools.code_search.enabled is True, value
+        assert cfg.tools.file_outline.enabled is True, value
+        assert set(cfg.phases["plan"].tools) == {
+            "read",
+            "recon",
+            "code_search",
+            "file_outline",
+        }, value
         # full identity with the golden baseline too
         live = _live_render(cfg)
         fixed = _fixture_sections()
@@ -101,14 +108,33 @@ def test_env_value_is_case_insensitive(monkeypatch):
     assert cfg.tools.code_search.enabled is True
 
 
-def test_env_unset_leaves_config_untouched(monkeypatch):
+def test_env_unset_baseline_matrix(monkeypatch):
+    # With no env at all the packaged config.toml IS the baseline: search
+    # on (rg), recon on, the new per-phase tool matrix.
     monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
+    monkeypatch.delenv("AGENT_TOOLSET", raising=False)
     cfg = load_config()
-    assert cfg.code_search.engine == "auto"
-    assert cfg.tools.code_search.enabled is False
-    assert cfg.tools.file_outline.enabled is False
-    for phase_id in PHASES:
-        assert list(cfg.phases[phase_id].tools) == ["read", "write", "edit", "bash"]
+    assert cfg.code_search.engine == "rg"
+    assert cfg.tools.code_search.enabled is True
+    assert cfg.tools.file_outline.enabled is True
+    assert cfg.tools.recon.enabled is True
+    assert list(cfg.phases["plan"].tools) == [
+        "read",
+        "recon",
+        "code_search",
+        "file_outline",
+    ]
+    assert list(cfg.phases["work"].tools) == [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "recon",
+        "code_search",
+        "file_outline",
+    ]
+    assert list(cfg.phases["commit"].tools) == []  # toolless review
+    assert list(cfg.phases["emergency"].tools) == ["read", "write", "edit", "bash"]
 
 
 def test_build_phase_agent_exposes_code_search_tools(monkeypatch):
@@ -141,19 +167,42 @@ def test_build_phase_agent_exposes_code_search_tools(monkeypatch):
 
 
 @pytest.mark.parametrize("engine", ["rg", "sifs"])
-def test_env_registers_tools_and_notes_in_all_phases(monkeypatch, engine):
+def test_env_registers_tools_and_notes_in_tooled_phases(monkeypatch, engine):
+    # The engine switch never augments toolless phases: plan/work carry the
+    # tools (already wired by the baseline), the review stays toolless.
     monkeypatch.setenv("AGENT_CODE_SEARCH", engine)
     cfg = load_config()
     assert cfg.code_search.engine == engine
     assert cfg.tools.code_search.enabled is True
     assert cfg.tools.file_outline.enabled is True
-    for phase_id in PHASES:
+    assert list(cfg.phases["commit"].tools) == []
+    for phase_id in ("plan", "work", "emergency"):
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
-        assert names == ["read", "write", "edit", "bash", "code_search", "file_outline"]
+        if phase_id == "plan":
+            assert names == ["read", "recon", "code_search", "file_outline"]
+        elif phase_id == "work":
+            assert names == [
+                "read",
+                "write",
+                "edit",
+                "bash",
+                "recon",
+                "code_search",
+                "file_outline",
+            ]
+        else:
+            # the legacy emergency is not wired in the baseline: the
+            # engine switch appends the search tools there
+            assert names == ["read", "write", "edit", "bash", "code_search", "file_outline"]
         prompt = _system_prompt(cfg, phase, TASK)
         assert "code_search: search the codebase" in prompt
         assert "file_outline: list def/class/func symbols" in prompt
+    # the toolless review gets no tools block and no tool notes
+    assert list(get_tools(cfg, cfg.phases["commit"].tools)) == []
+    assert "code_search: search the codebase" not in _system_prompt(
+        cfg, get_phase("commit"), TASK
+    )
 
 
 def test_code_search_timeout_env_override(monkeypatch):
