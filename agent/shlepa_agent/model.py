@@ -176,7 +176,7 @@ class TrackedModel(OpenAIChatModel):
         # Reasoning tokens are only present when the endpoint reports them
         # (via completion_tokens_details.reasoning_tokens); absent otherwise.
         reasoning = details.get("reasoning_tokens")
-        if reasoning:
+        if reasoning is not None:
             fields["reasoning_tokens"] = int(reasoning)
         # Phase id (set by the runner before each phase run); absent when no
         # phase is set so legacy consumers see an unchanged event shape.
@@ -192,6 +192,7 @@ class TrackedModel(OpenAIChatModel):
         cm: Any = None
         last_err: Exception | None = None
         for attempt in (1, 2):
+            _log_event("llm_request", attempt=attempt, phase=self.current_phase)
             try:
                 async with asyncio.timeout(self.request_timeout):
                     cm = super(TrackedModel, self).request_stream(
@@ -202,10 +203,13 @@ class TrackedModel(OpenAIChatModel):
             except BudgetExceeded:
                 raise
             except (TimeoutError, asyncio.TimeoutError) as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIConnectionError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIStatusError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 body = f"{e} {getattr(e, 'body', '')}"
                 if _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
@@ -215,6 +219,7 @@ class TrackedModel(OpenAIChatModel):
                     )
                 last_err = e
             except Exception as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
                 last_err = e
@@ -225,6 +230,7 @@ class TrackedModel(OpenAIChatModel):
                     pass
                 cm = None
             if attempt == 1:
+                _log_event("llm_retry", phase=self.current_phase)
                 await asyncio.sleep(1.0)
         raise ModelAPIError(
             self.model_name, f"model request failed after retry: {str(last_err)[:300]}"
@@ -252,6 +258,9 @@ class TrackedModel(OpenAIChatModel):
         wall_deadline = time.monotonic() + wall
         try:
             yield _WallCappedStream(sr, wall_deadline, self.model_name, wall)
+        except Exception as exc:
+            _log_event("llm_error", error_type=type(exc).__name__, phase=self.current_phase)
+            raise
         finally:
             try:
                 await cm.__aexit__(None, None, None)
@@ -269,18 +278,25 @@ class TrackedModel(OpenAIChatModel):
         model_settings = self._capped_settings(model_settings)
         last_err: Exception | None = None
         for attempt in (1, 2):
+            _log_event("llm_request", attempt=attempt, phase=self.current_phase)
             try:
                 async with asyncio.timeout(self.request_timeout):
-                    return await super(TrackedModel, self).request(
+                    response = await super(TrackedModel, self).request(
                         messages, model_settings, model_request_parameters
                     )
+                    self._pending_stream = response
+                    self.log_pending_usage()
+                    return response
             except BudgetExceeded:
                 raise
             except (TimeoutError, asyncio.TimeoutError) as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIConnectionError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIStatusError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 body = f"{e} {getattr(e, 'body', '')}"
                 if _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
@@ -290,10 +306,12 @@ class TrackedModel(OpenAIChatModel):
                     )
                 last_err = e
             except Exception as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
                 last_err = e
             if attempt == 1:
+                _log_event("llm_retry", phase=self.current_phase)
                 await asyncio.sleep(1.0)
         raise ModelAPIError(
             self.model_name, f"model request failed after retry: {str(last_err)[:300]}"

@@ -97,7 +97,10 @@ def format_tool_result(
 
     ``started`` is the ``time.monotonic()`` value captured at tool entry.
     """
+    from shlepa_agent.log import _log_event
+
     spent = time.monotonic() - started
+    _log_event("tool_completed", tool=name, duration_sec=spent, failed=bool(failed))
     ended = ctx.deps.clock()
     argstr = ", ".join(f"{k}={_short(v)}" for k, v in (args or {}).items())
     lines = [
