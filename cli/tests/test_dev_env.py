@@ -173,6 +173,10 @@ def test_parse_agent_metrics() -> None:
         "tokens_cache_write": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
 
 
@@ -197,6 +201,10 @@ def test_parse_agent_metrics_missing_or_broken() -> None:
         "tokens_cache_write": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
     assert dev_env.parse_agent_metrics("no marker") == defaults
     assert dev_env.parse_agent_metrics("") == defaults
@@ -345,6 +353,10 @@ def test_parse_agent_metrics_reports_termination() -> None:
         "tokens_cache_write": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
 
 

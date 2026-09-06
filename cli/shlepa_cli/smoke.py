@@ -107,13 +107,13 @@ def run_smoke(
             experiment_name=experiment,
         )
         run = mlflow_client.get_run(run_id)
-        if run.info.status != "FINISHED":
-            raise RuntimeError(f"run status is {run.info.status}, not FINISHED")
+        if run.info.status not in {"FINISHED", "FAILED"}:
+            raise RuntimeError(f"run status is {run.info.status}, not terminal")
     except Exception as exc:  # noqa: BLE001 - report the stage failure
         out(f"mlflow: FAIL ({type(exc).__name__}: {exc})")
         return False
     out(f"mlflow: ok (experiment={experiment} run={run_id})")
-    return bool(task_result.ok and task_result.solved)
+    return bool(task_result.ok and task_result.solved and run.info.status == "FINISHED")
 
 
 def _run_smoke_task(settings: Settings) -> TaskResult | None:

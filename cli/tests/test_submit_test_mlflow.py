@@ -82,7 +82,10 @@ def test_log_trials_main(tmp_path: Path) -> None:
     timeout = runs["contest-bye-file"]
     assert timeout.data.metrics["solved"] == 0.0
     assert "reward" not in timeout.data.metrics
-    assert timeout.data.params["error"].startswith("TimeoutError")
+    assert "error" not in timeout.data.params
+    assert Path(client.download_artifacts(timeout.info.run_id, "data/error.txt")).read_text().startswith("TimeoutError")
+    assert timeout.data.metrics["evaluation_valid"] == 0
+    assert timeout.info.status == "FAILED"
 
     errored = runs["contest-err"]
     assert errored.data.tags["harbor_status"] == "error"
