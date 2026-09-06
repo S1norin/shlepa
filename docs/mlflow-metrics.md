@@ -3,7 +3,10 @@
 Each trial is a run in its benchmark-family experiment (`run_kind=trial`).
 `shlepa run` creates the run before execution and closes it after logging.
 The execution ID is allocated before the agent starts and is propagated to its
-root trace as `shlepa.execution_id`. Existing trace routing is unchanged.
+root trace as `shlepa.execution_id`. Its numeric family experiment ID is
+sent as OTLP request metadata, preserved by the Collector's metadata-aware
+batching, and forwarded to MLflow as `x-mlflow-experiment-id`. Runs and
+traces therefore share an experiment.
 
 ## Outcomes
 

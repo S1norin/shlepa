@@ -19,7 +19,7 @@ Backends:
 Usage:
     python otel/check_trace.py [--backend jaeger|mlflow]
                                [--jaeger http://localhost:16686]
-                               [--experiment shlepa-traces]
+                               [--experiment <family-name-or-id>]
                                [--service shlepa-agent] [--timeout 10]
 
 Exit codes: 0 when a valid trace is found, 1 otherwise.
@@ -37,7 +37,6 @@ from dataclasses import dataclass
 
 DEFAULT_JAEGER = "http://localhost:16686"
 DEFAULT_SERVICE = "shlepa-agent"
-DEFAULT_TRACE_EXPERIMENT = "shlepa-traces"
 # Wide window: the MLflow search is unordered, so a small limit can
 # exclude the just-finished trace from the candidate set entirely.
 TRACE_LIMIT = 500
@@ -192,8 +191,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jaeger", default=DEFAULT_JAEGER, help="Jaeger base URL")
     parser.add_argument(
         "--experiment",
-        default=os.environ.get("SLEPA_TRACE_EXPERIMENT", DEFAULT_TRACE_EXPERIMENT),
-        help="MLflow experiment name for --backend mlflow",
+        default=os.environ.get("SLEPA_TRACE_EXPERIMENT"),
+        help=(
+            "MLflow family experiment name for --backend mlflow "
+            "(or set SLEPA_TRACE_EXPERIMENT)"
+        ),
     )
     parser.add_argument("--service", default=DEFAULT_SERVICE, help="service name")
     parser.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout (s)")
@@ -212,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
         if not tracking_uri:
             print("FAIL: MLFLOW_TRACKING_URI is not set (see .env.example)")
+            return 1
+        if not args.experiment:
+            print(
+                "FAIL: --experiment is required for the MLflow backend "
+                "(traces live in their run's family experiment)"
+            )
             return 1
         # MLflow ingestion is async: right after a batch the newest trace
         # may not be searchable yet, so the check can validate a stale one

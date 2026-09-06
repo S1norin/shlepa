@@ -149,7 +149,7 @@ def trace_export(
     experiment: str = typer.Option(
         None,
         "--experiment",
-        help="Trace experiment name/id (default from settings)",
+        help="Restrict export to one experiment name/id (default: discover from batch runs)",
     ),
 ) -> None:
     """Export the agent traces of one batch as JSON + digests + manifest."""

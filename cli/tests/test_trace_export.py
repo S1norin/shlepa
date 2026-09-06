@@ -103,12 +103,19 @@ class _PagedList(list):
 
 
 class _FakeClient:
-    def __init__(self, traces):
+    def __init__(self, traces, batch_experiment_ids=()):
         self.traces = traces
+        self.batch_experiment_ids = set(batch_experiment_ids)
         self.search_kwargs: list[dict] = []
 
     def get_experiment_by_name(self, name):
         return type("Exp", (), {"experiment_id": "42"})()
+
+    def search_experiments(self):
+        return [type("Exp", (), {"experiment_id": value})() for value in ("21", "22")]
+
+    def search_runs(self, experiment_ids, filter_string, max_results):
+        return [object()] if experiment_ids[0] in self.batch_experiment_ids else []
 
     def search_traces(self, **kwargs):
         self.search_kwargs.append(kwargs)
@@ -129,15 +136,16 @@ def test_find_batch_traces_filters_by_service_and_batch():
             # Agent service but a different batch (span-level tag).
             _Trace("tr-other", [_agent_span("batch-9")],
                    tags={"service.name": "shlepa-agent"}),
-        ]
+        ],
+        batch_experiment_ids=["21"],
     )
     found = trace_export.find_batch_traces(
         client, _settings(), "batch-1"
     )
     assert [t.info.trace_id for t in found] == ["tr-a"]
     # The search must be by experiment id (the locations= query form
-    # hangs on the current MLflow server). The numeric settings id is
-    # used as-is.
+    # hangs on the current MLflow server). The family experiment found
+    # from the batch's run is searched first.
     kwargs = client.search_kwargs[0]
     assert kwargs["experiment_ids"] == ["21"]
     assert "locations" not in kwargs
@@ -149,7 +157,7 @@ def test_find_batch_traces_empty_when_experiment_unknown():
             return None
 
     client = _NoExp([_Trace("tr-a", [_agent_span("b")])])
-    # No numeric id in settings -> resolve by name -> unknown -> no search.
+    # No matching batch runs and no legacy experiment -> no search.
     found = trace_export.find_batch_traces(
         client, _settings(mlflow_telemetry_experiment_id=None), "batch-1"
     )
@@ -165,6 +173,26 @@ def test_find_batch_traces_never_raises_on_broken_client():
     assert trace_export.find_batch_traces(
         _Broken([]), _settings(), "batch-1"
     ) == []
+
+
+def test_find_batch_traces_searches_multiple_family_experiments():
+    client = _FakeClient(
+        [_Trace("tr-a", [_agent_span("batch-1")], tags={"service.name": "shlepa-agent"})],
+        batch_experiment_ids=["21", "22"],
+    )
+    trace_export.find_batch_traces(client, _settings(), "batch-1")
+    searched = [call["experiment_ids"][0] for call in client.search_kwargs]
+    assert searched[:2] == ["21", "22"]
+
+
+def test_explicit_experiment_skips_batch_discovery():
+    client = _FakeClient(
+        [_Trace("tr-a", [_agent_span("batch-1")], tags={"service.name": "shlepa-agent"})]
+    )
+    found = trace_export.find_batch_traces(
+        client, _settings(), "batch-1", experiment="21"
+    )
+    assert [trace.info.trace_id for trace in found] == ["tr-a"]
 
 
 def test_trace_to_dict_round_trips_a_synthetic_trace():

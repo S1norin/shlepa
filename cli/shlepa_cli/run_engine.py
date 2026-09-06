@@ -225,6 +225,7 @@ def find_batch_trace(
     task_slug: str,
     since_ms: int | None = None,
     max_results: int = 50,
+    experiment_id: str | None = None,
 ) -> str | None:
     """Find the trace of one task in this batch; returns its id or None.
 
@@ -233,7 +234,7 @@ def find_batch_trace(
     Never raises: the caller treats None as 'not found yet'.
     """
     try:
-        exp_id = _resolve_trace_experiment_id(client, settings)
+        exp_id = experiment_id or _resolve_trace_experiment_id(client, settings)
         if exp_id is None:
             return None
         return _find_batch_trace_inner(client, exp_id, batch_id, task_slug, since_ms, max_results)
@@ -281,6 +282,7 @@ def record_trace_tag(
     task_slug: str,
     batch_started_ms: int | None = None,
     timeout_sec: float = 15.0,
+    experiment_id: str | None = None,
 ) -> str | None:
     """Retry the batch trace lookup (the collector exports with a lag)
     and store the trace id in the run tag ``mlflow_trace_id``, then
@@ -292,7 +294,12 @@ def record_trace_tag(
     deadline = time.monotonic() + max(timeout_sec, 0.0)
     while True:
         trace_id = find_batch_trace(
-            client, settings, batch_id, task_slug, since_ms=batch_started_ms
+            client,
+            settings,
+            batch_id,
+            task_slug,
+            since_ms=batch_started_ms,
+            experiment_id=experiment_id,
         )
         if trace_id is not None:
             client.set_tag(run_id, "mlflow_trace_id", trace_id)
@@ -465,6 +472,7 @@ def log_task_to_mlflow(
             result.slug,
             batch_started_ms=batch_started_ms,
             timeout_sec=trace_wait_sec,
+            experiment_id=experiment_id,
         )
     failed = not result.ok or result.termination in {"error", "crash", "oom"}
     failed = failed or (not result.evaluation_valid and result.grader_status != "unknown")
@@ -538,6 +546,12 @@ def run_preset(
         print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
         execution_id = secrets.token_hex(16)
         run_id = None
+        trace_experiment_id = (
+            settings.mlflow_telemetry_experiment_id
+            if settings.shlepa_otel_enabled
+            and (settings.mlflow_telemetry_experiment_id or "").isdigit()
+            else None
+        )
         if mlflow_client is not None:
             from shlepa_cli.mlflow_client import masked_client_stdout
 
@@ -546,6 +560,8 @@ def run_preset(
             experiment_id = (
                 experiment.experiment_id if experiment else mlflow_client.create_experiment(family)
             )
+            if settings.shlepa_otel_enabled:
+                trace_experiment_id = experiment_id
             with masked_client_stdout():
                 run_id = mlflow_client.create_run(
                     experiment_id=experiment_id,
@@ -573,6 +589,7 @@ def run_preset(
                 preset_name=preset.name,
                 arm=arm,
                 execution_id=execution_id,
+                trace_experiment_id=trace_experiment_id,
             )
             results.append(result)
             if mlflow_client is not None:
@@ -632,6 +649,7 @@ def _call_agent(
     preset_name: str | None = None,
     arm: str | None = None,
     execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> AgentRun:
     """Invoke the agent with SLEPA_TASK_SLUG set for the duration of the run.
 
@@ -643,6 +661,10 @@ def _call_agent(
     extra: dict[str, str] = {}
     if execution_id:
         extra["SLEPA_EXECUTION_ID"] = execution_id
+    if settings.shlepa_otel_enabled and trace_experiment_id:
+        extra["OTEL_EXPORTER_OTLP_HEADERS"] = (
+            f"x-mlflow-experiment-id={trace_experiment_id}"
+        )
     if settings.shlepa_otel_enabled:
         if batch_id:
             extra["SLEPA_BATCH_ID"] = batch_id
@@ -780,6 +802,7 @@ def _agent_env(
     preset_name: str | None = None,
     arm: str | None = None,
     execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> dict[str, str]:
     """docker-exec environment for the in-container agent."""
     env: dict[str, str] = {
@@ -789,6 +812,10 @@ def _agent_env(
     }
     if execution_id:
         env["SLEPA_EXECUTION_ID"] = execution_id
+    if settings.shlepa_otel_enabled and trace_experiment_id:
+        env["OTEL_EXPORTER_OTLP_HEADERS"] = (
+            f"x-mlflow-experiment-id={trace_experiment_id}"
+        )
     if settings.openai_api_key:
         env["OPENAI_API_KEY"] = settings.openai_api_key
     if settings.openai_base_url:
@@ -844,6 +871,7 @@ def run_task(
     preset_name: str | None = None,
     arm: str | None = None,
     execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> TaskResult:
     """Run one task and return its TaskResult.
 
@@ -904,6 +932,7 @@ def run_task(
                 preset_name=preset_name,
                 arm=arm,
                 execution_id=execution_id,
+                trace_experiment_id=trace_experiment_id,
             )
             stage = "grader"
             grade = _timed(timings, "grader_duration_sec", _score_no_docker, task, workspace)
@@ -966,6 +995,7 @@ def run_task(
                     preset_name=preset_name,
                     arm=arm,
                     execution_id=execution_id,
+                    trace_experiment_id=trace_experiment_id,
                 ),
                 timeout_sec=task.timeout_sec,
             )

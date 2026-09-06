@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import shlepa_agent
+from mlflow import MlflowClient
 
 from shlepa_cli import run_engine
 from shlepa_cli.config import Settings
@@ -373,6 +374,28 @@ def test_run_preset_batch_env_when_otel_enabled(tmp_path: Path):
     assert env["SLEPA_AGENT_VERSION"] == shlepa_agent.__version__
     # The tmp repo is not a git checkout; the engine reports 'unknown'.
     assert env["SLEPA_GIT_SHA"] == "unknown"
+
+
+def test_run_preset_routes_trace_to_run_experiment(tmp_path: Path, monkeypatch):
+    fake = FakeDocker()
+    task = _repo(tmp_path)
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    client = MlflowClient(tracking_uri=f"file://{tmp_path / 'mlruns'}")
+    monkeypatch.setattr(run_engine, "record_trace_tag", lambda *args, **kwargs: None)
+    run_engine.run_preset(
+        _settings(tmp_path, shlepa_otel_enabled=True),
+        Preset(name="all", tasks="all"),
+        [task],
+        model="m",
+        no_docker=False,
+        docker_client=fake,
+        mlflow_client=client,
+    )
+    experiment = client.get_experiment_by_name("contest")
+    assert experiment is not None
+    assert _agent_exec_env(fake)["OTEL_EXPORTER_OTLP_HEADERS"] == (
+        f"x-mlflow-experiment-id={experiment.experiment_id}"
+    )
 
 
 def test_run_preset_no_batch_env_when_otel_disabled(tmp_path: Path):

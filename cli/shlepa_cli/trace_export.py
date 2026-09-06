@@ -16,7 +16,6 @@ tests need no server.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 from datetime import datetime, timezone
@@ -24,11 +23,7 @@ from pathlib import Path
 
 from shlepa_cli import mlflow_compat as compat
 from shlepa_cli import trace_digest
-from shlepa_cli.run_engine import (
-    AGENT_SERVICE,
-    DEFAULT_TRACE_EXPERIMENT,
-    _resolve_trace_experiment_id,
-)
+from shlepa_cli.run_engine import AGENT_SERVICE, DEFAULT_TRACE_EXPERIMENT
 
 __all__ = [
     "TraceBatchNotFound",
@@ -80,8 +75,43 @@ def _batch_since_ms(batch_id: str, margin_min: int = 5) -> int | None:
     return int(start.timestamp() * 1000) - margin_min * 60_000
 
 
-def find_batch_traces(client, settings, batch_id: str, limit: int = 500):
-    """Return the raw Trace objects of one batch in the trace experiment.
+def _experiment_id(client, value: str) -> str | None:
+    if value.isdigit():
+        return value
+    experiment = client.get_experiment_by_name(value)
+    return experiment.experiment_id if experiment is not None else None
+
+
+def _batch_experiment_ids(client, settings, batch_id: str) -> list[str]:
+    """Find family experiments containing runs from this batch.
+
+    The legacy configured/static trace experiment remains a fallback so old
+    batches keep exporting after new traces move beside their runs.
+    """
+    found: list[str] = []
+    for experiment in client.search_experiments():
+        runs = client.search_runs(
+            [experiment.experiment_id],
+            filter_string=f"tags.batch_id = '{batch_id}'",
+            max_results=1,
+        )
+        if runs:
+            found.append(experiment.experiment_id)
+    legacy = settings.mlflow_telemetry_experiment_id or DEFAULT_TRACE_EXPERIMENT
+    legacy_id = _experiment_id(client, legacy)
+    if legacy_id is not None and legacy_id not in found:
+        found.append(legacy_id)
+    return found
+
+
+def find_batch_traces(
+    client,
+    settings,
+    batch_id: str,
+    limit: int = 500,
+    experiment: str | None = None,
+):
+    """Return raw Trace objects from the batch's family experiments.
 
     Candidate filtering: trace-level service.name tag, an age window
     derived from the batch id's embedded timestamp, then a
@@ -89,12 +119,19 @@ def find_batch_traces(client, settings, batch_id: str, limit: int = 500):
     Never raises: any client/server problem yields an empty list.
     """
     try:
-        exp_id = _resolve_trace_experiment_id(client, settings)
-        if exp_id is None:
-            return []
-        return _find_batch_traces_inner(
-            client, exp_id, batch_id, _batch_since_ms(batch_id), limit
-        )
+        if experiment is not None:
+            exp_id = _experiment_id(client, experiment)
+            experiment_ids = [exp_id] if exp_id is not None else []
+        else:
+            experiment_ids = _batch_experiment_ids(client, settings, batch_id)
+        found: list = []
+        for exp_id in experiment_ids:
+            found.extend(
+                _find_batch_traces_inner(
+                    client, exp_id, batch_id, _batch_since_ms(batch_id), limit
+                )
+            )
+        return found
     except Exception:  # noqa: BLE001 - export must not crash the caller
         return []
 
@@ -195,15 +232,12 @@ def export_batch(client, settings, batch_id: str, out_dir, experiment=None) -> d
     Raises :class:`TraceBatchNotFound` when the batch has no traces.
     Returns a small summary dict (batch_id, traces, tasks, tokens).
     """
-    if experiment:
-        settings = dataclasses.replace(
-            settings, mlflow_telemetry_experiment_id=experiment
-        )
     out_dir = Path(out_dir)
-    traces = find_batch_traces(client, settings, batch_id)
+    traces = find_batch_traces(client, settings, batch_id, experiment=experiment)
     if not traces:
         experiment_label = (
-            settings.mlflow_telemetry_experiment_id or DEFAULT_TRACE_EXPERIMENT
+            experiment
+            or "family experiments discovered from MLflow runs (plus legacy fallback)"
         )
         raise TraceBatchNotFound(batch_id, experiment_label)
 
