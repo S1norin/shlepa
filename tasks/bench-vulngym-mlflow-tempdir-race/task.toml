@@ -1,0 +1,32 @@
+schema_version = "1.2"
+
+[task]
+name = "bench/vulngym-mlflow-tempdir-race"
+description = "Audit an MLflow artifact-download source snapshot and report the unsafe temporary-directory path."
+authors = []
+keywords = []
+
+[metadata]
+difficulty = "medium"
+category = "security"
+tags = ["bench", "vulnerability-detection", "source-audit", "python", "race-condition"]
+source = "Tencent/VulnGym"
+url = "https://github.com/Tencent/VulnGym/tree/v0.1.4"
+reference = "https://github.com/advisories/GHSA-4x5p-f36r-mxxr"
+synced_at = "2026-09-05"
+
+[verifier]
+timeout_sec = 120.0
+[agent]
+timeout_sec = 600.0
+[environment]
+build_timeout_sec = 600.0
+cpus = 1
+memory_mb = 2048
+storage_mb = 10240
+gpus = 0
+allow_internet = false
+mcp_servers = []
+[verifier.env]
+[environment.env]
+[solution.env]

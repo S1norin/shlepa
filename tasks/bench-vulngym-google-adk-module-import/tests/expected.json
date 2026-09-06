@@ -1,0 +1,18 @@
+{
+  "type_aliases": ["code injection", "arbitrary module import", "unsafe module import", "cwe-94"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "src/google/adk/cli/adk_web_server.py", "start": 972, "end": 974},
+  "critical_operation": {"file": "src/google/adk/cli/utils/agent_loader.py", "start": 74, "end": 74},
+  "minimum_flow_nodes": 4,
+  "flow_landmarks": [
+    {"file": "src/google/adk/cli/adk_web_server.py", "start": 972, "end": 974},
+    {"file": "src/google/adk/cli/adk_web_server.py", "start": 687, "end": 687},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "start": 330, "end": 330},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "start": 74, "end": 74}
+  ],
+  "source_sha256": {
+    "src/google/adk/cli/adk_web_server.py": "c4c81393c9240c479868fe1ae8faa06134ac76253f97e386b3bd86f74e333025",
+    "src/google/adk/cli/utils/agent_loader.py": "783bc94f67334e76036df670686bce1ef88c6369fd512aff584d4efba407019e"
+  }
+}
+

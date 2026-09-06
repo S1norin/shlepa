@@ -148,6 +148,9 @@ class TrackedModel(OpenAIChatModel):
         # w3-5: consecutive terminal endpoint failures (429/402/5xx storm)
         # — the only observable proxy for the invisible external token cap.
         self._endpoint_fails = 0
+        #: Id of the phase currently running (set/rotated by the runner);
+        #: usage events are tagged with it for per-phase token attribution.
+        self.current_phase: str | None = None
 
     #: Terminal endpoint failure codes (w3-5): 402 (token/payment cap),
     #: 429 (rate limit) and any 5xx. 400/401/403/404 do not count.
@@ -218,24 +221,34 @@ class TrackedModel(OpenAIChatModel):
         # pydantic-ai Usage carries the counts, older shapes do not.
         cache_read = int(getattr(usage, "cache_read_tokens", 0) or 0)
         cache_write = int(getattr(usage, "cache_write_tokens", 0) or 0)
+        details = getattr(usage, "details", None) or {}
         self._cum_input += inp
         self._cum_output += out
         self._cum_cache_read += cache_read
         self._cum_cache_write += cache_write
-        _log_event(
-            "usage",
+        fields = dict(
             request=self._request_no,
             input_tokens=inp,
             output_tokens=out,
-            cache_read=cache_read,
-            cache_write=cache_write,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
             cumulative_input=self._cum_input,
             cumulative_output=self._cum_output,
+            cumulative_total=self._cum_input + self._cum_output,
             cumulative_cache_read=self._cum_cache_read,
             cumulative_cache_write=self._cum_cache_write,
-            cumulative_total=self._cum_input + self._cum_output,
             elapsed_s=round(self.elapsed(), 1),
         )
+        # Reasoning tokens are only present when the endpoint reports them
+        # (via completion_tokens_details.reasoning_tokens); absent otherwise.
+        reasoning = details.get("reasoning_tokens")
+        if reasoning:
+            fields["reasoning_tokens"] = int(reasoning)
+        # Phase id (set by the runner before each phase run); absent when no
+        # phase is set so legacy consumers see an unchanged event shape.
+        if self.current_phase is not None:
+            fields["phase"] = self.current_phase
+        _log_event("usage", **fields)
 
     async def _open_stream(self, messages, model_settings, model_request_parameters, run_context):
         """Open the upstream stream, retrying transient network errors once.

@@ -1,0 +1,18 @@
+{
+  "type_aliases": ["template injection", "ssti", "cwe-1336"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "libs/core/langchain_core/prompts/string.py", "start": 111, "end": 111},
+  "critical_operation": {"file": "libs/core/langchain_core/utils/mustache.py", "start": 382, "end": 382},
+  "minimum_flow_nodes": 4,
+  "flow_landmarks": [
+    {"file": "libs/core/langchain_core/prompts/string.py", "start": 111, "end": 121},
+    {"file": "libs/core/langchain_core/utils/mustache.py", "start": 482, "end": 482},
+    {"file": "libs/core/langchain_core/utils/mustache.py", "start": 371, "end": 382},
+    {"file": "libs/core/langchain_core/utils/mustache.py", "start": 382, "end": 382}
+  ],
+  "source_sha256": {
+    "libs/core/langchain_core/prompts/string.py": "8539175be4a8378be8fcf6ce94afd1c57cd7868450411b9c08127b1746c5b931",
+    "libs/core/langchain_core/utils/mustache.py": "d8b81ab4120e6b56c653811a2f9c6b4b4efa356a9f42407832d7a77267379ad4"
+  }
+}
+

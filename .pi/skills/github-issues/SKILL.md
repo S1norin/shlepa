@@ -19,6 +19,7 @@ by `shlepa doctor`-level tooling checks or just `gh auth status`).
 | `area:telemetry` | OTel/Jaeger/MLflow-OTel path |
 | `area:ci` | workflows, secrets, CI endpoints |
 | `source:research` | came from `research/notes/` (see the `backlog` skill) |
+| `loop` | plan → work → review loop design (see `research/notes/plan-work-review-loop.md`) |
 | `priority:p1` … `priority:p3` | p1 = blocks competition, p2 = important, p3 = nice-to-have |
 
 Rules:
@@ -27,7 +28,8 @@ Rules:
 - `priority:*` only when the user explicitly set a priority — never
   invent one.
 - New issues start with `backlog` + `area:*` (+ `source:research` if
-  research-derived). Remove `backlog` when work is actively planned.
+  research-derived, + `loop` if about the plan/work/review loop). Remove
+  `backlog` when work is actively planned.
 - Verify labels exist before use; create missing ones with
   `gh label create "<label>" --force --description "<one line>"`.
 

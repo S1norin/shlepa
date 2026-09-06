@@ -1,0 +1,231 @@
+{
+  "scenario_id": "SCN-005",
+  "title": "Ransomware Pre-Deployment: Reconnaissance and Staging",
+  "description": "Ransomware operator in pre-deployment phase enumerating network shares, disabling backup services, and staging the encryption binary. AI must identify and scope before encryption fires.",
+  "soc_tier": "tier2",
+  "difficulty": "hard",
+  "attack_duration_minutes": 55,
+  "dwell_time_minutes": 180,
+  "mitre_techniques": ["T1018", "T1135", "T1083", "T1490", "T1486"],
+  "primary_skills_tested": ["EC-04", "HG-01", "IA-05", "RR-01"],
+  "log_sources_present": ["windows_event_logs", "sysmon", "zeek_conn"],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-ACCT-05.corp.local",
+    "attacker_user": "j.doe"
+  },
+  "telemetry": {
+    "windows_event_logs": [
+      {
+        "timestamp": "2026-04-22T02:14:11.001Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\net.exe",
+          "CommandLine": "net view /all /domain:corp.local",
+          "SubjectUserName": "j.doe",
+          "SubjectLogonId": "0x3E7"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "net view /all /domain at 02:14 UTC — network share discovery during off-hours is a ransomware pre-encryption enumeration pattern."
+      },
+      {
+        "timestamp": "2026-04-22T02:14:33.441Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\net.exe",
+          "CommandLine": "net share",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Local share enumeration following domain-wide discovery."
+      },
+      {
+        "timestamp": "2026-04-22T02:18:04.882Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\vssadmin.exe",
+          "CommandLine": "vssadmin delete shadows /all /quiet",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "VSS shadow copy deletion — HIGH CONFIDENCE ransomware indicator. Eliminates Windows recovery points before encryption."
+      },
+      {
+        "timestamp": "2026-04-22T02:18:44.001Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\wbadmin.exe",
+          "CommandLine": "wbadmin delete catalog -quiet",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Windows Backup catalog deletion — disabling recovery capabilities before encryption."
+      },
+      {
+        "timestamp": "2026-04-22T02:19:02.334Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\net.exe",
+          "CommandLine": "net stop \"Volume Shadow Copy\" /y",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Stopping VSS service to prevent new shadow copy creation."
+      },
+      {
+        "timestamp": "2026-04-22T02:19:44.001Z",
+        "host": "WS-ACCT-05",
+        "event_id": 4688,
+        "description": "Process Created",
+        "fields": {
+          "NewProcessName": "C:\\Windows\\System32\\schtasks.exe",
+          "CommandLine": "schtasks /create /tn \"SystemHealthCheck\" /tr \"C:\\Windows\\Temp\\syscheck.exe\" /sc ONSTART /ru SYSTEM /f",
+          "SubjectUserName": "j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Scheduled task created as SYSTEM from TEMP directory — persistence mechanism for ransomware payload execution at next reboot."
+      },
+      {
+        "timestamp": "2026-04-22T01:55:00.000Z",
+        "host": "WS-HR-07",
+        "event_id": 4624,
+        "description": "Account Logon",
+        "fields": {
+          "TargetUserName": "user22",
+          "LogonType": "2",
+          "AuthenticationPackageName": "Negotiate"
+        },
+        "ground_truth_label": "benign",
+        "analyst_note": "Normal overnight logon from HR workstation — baseline."
+      }
+    ],
+    "sysmon": [
+      {
+        "timestamp": "2026-04-22T02:17:01.221Z",
+        "host": "WS-ACCT-05",
+        "event_id": 11,
+        "description": "File Created",
+        "fields": {
+          "TargetFilename": "C:\\Windows\\Temp\\syscheck.exe",
+          "Image": "C:\\Windows\\System32\\cmd.exe",
+          "CreationUtcTime": "2026-04-22T02:17:01.221Z",
+          "Hashes": "SHA256=B94F4CCBDA0E532B4F4A953D9DC9B9B7A1234ABCDEF1234567890ABCDEF123456"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "Executable dropped to Windows\\Temp by cmd.exe — staging of ransomware payload."
+      },
+      {
+        "timestamp": "2026-04-22T02:14:10.801Z",
+        "host": "WS-ACCT-05",
+        "event_id": 1,
+        "description": "Process Create",
+        "fields": {
+          "Image": "C:\\Windows\\System32\\cmd.exe",
+          "CommandLine": "cmd.exe /c \"for /f %s in ('net view /all /domain') do net use \\\\%s\\C$\"",
+          "ParentImage": "C:\\Windows\\explorer.exe",
+          "User": "CORP\\j.doe"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "cmd.exe automating net view and net use — automated share mapping across all domain hosts, characteristic of ransomware lateral spread preparation."
+      }
+    ],
+    "zeek_conn": [
+      {
+        "timestamp": "2026-04-22T02:15:22.001Z",
+        "src_ip": "10.10.5.15",
+        "dst_ip": "10.10.0.0/24",
+        "dst_port": 445,
+        "proto": "tcp",
+        "duration": 0.12,
+        "bytes_sent": 310,
+        "bytes_recv": 890,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "SMB connections to entire 10.10.0.0/24 subnet from single workstation within 2 minutes — share mapping sweep."
+      },
+      {
+        "timestamp": "2026-04-22T02:15:24.004Z",
+        "src_ip": "10.10.5.15",
+        "dst_ip": "10.10.1.0/24",
+        "dst_port": 445,
+        "proto": "tcp",
+        "duration": 0.09,
+        "bytes_sent": 290,
+        "bytes_recv": 820,
+        "conn_state": "SF",
+        "ground_truth_label": "malicious",
+        "analyst_note": "Second subnet swept — lateral spread preparation."
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1018: Remote system discovery (net view /all /domain) at 02:14",
+      "T1135: Network share enumeration across two subnets via SMB at 02:15",
+      "T1083: File and directory discovery (net share) at 02:14",
+      "T1490: Inhibit system recovery (vssadmin, wbadmin, net stop VSS) at 02:18",
+      "T1486: Ransomware payload staged at C:\\Windows\\Temp\\syscheck.exe at 02:17 — NOT YET EXECUTED"
+    ],
+    "compromised_accounts": ["j.doe@corp.local"],
+    "compromised_hosts": ["WS-ACCT-05"],
+    "root_cause": "j.doe account compromised (assumed via prior phishing); no MFA on VPN; excessive SMB share access across subnets not restricted by firewall",
+    "blast_radius": "Pre-encryption phase — no data encrypted yet. Risk: all SMB-accessible shares across corp.local upon next reboot or manual trigger",
+    "indicators_of_compromise": [
+      "SHA256: B94F4CCBDA0E532B4F4A953D9DC9B9B7A1234ABCDEF1234567890ABCDEF123456 (syscheck.exe)",
+      "File: C:\\Windows\\Temp\\syscheck.exe",
+      "Scheduled task: SystemHealthCheck (SYSTEM, ONSTART)",
+      "vssadmin delete shadows + wbadmin delete catalog in same session"
+    ],
+    "containment_steps": [
+      "IMMEDIATELY isolate WS-ACCT-05 from network to prevent encryption trigger",
+      "Delete scheduled task 'SystemHealthCheck' from WS-ACCT-05 before any reboot",
+      "Quarantine and submit C:\\Windows\\Temp\\syscheck.exe for analysis",
+      "Reset j.doe credentials and audit all authenticated sessions",
+      "Scan all domain hosts for presence of syscheck.exe SHA256",
+      "Restore VSS shadow copies where possible before remediation"
+    ],
+    "detection_improvements": [
+      "Alert on vssadmin delete shadows outside patch window from non-SYSTEM accounts",
+      "Alert on wbadmin delete catalog from non-backup service accounts",
+      "Alert on schtasks creating ONSTART task pointing to %TEMP% or %APPDATA%",
+      "Block SMB port 445 between workstation subnets at firewall"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": ["Identifies ransomware pre-deployment (not yet executed): 15pts", "Identifies backup destruction T1490: 10pts"]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": ["Correlates share discovery → VSS deletion → staging sequence: 20pts", "Identifies syscheck.exe as staged payload: 10pts"]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": ["Correctly identifies pre-encryption phase (no data lost yet): 10pts", "Quantifies network-wide blast radius if triggered: 10pts"]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": ["Isolate before reboot (prevent scheduled task trigger): 8pts", "Delete scheduled task specifically: 4pts", "VSS restoration: 3pts"]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": ["Does not flag normal HR logon: 10pts"]
+      }
+    }
+  }
+}

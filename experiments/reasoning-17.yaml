@@ -1,0 +1,23 @@
+name: reasoning-17
+tasks:
+  # vulnerability search in code
+  - contest-find-ssrf-go
+  - contest-find-xss-python
+  - bench-vulngym-airflow-xcom-shell-injection
+  - bench-vulngym-langchain-template-injection
+  # forensics
+  - contest-incident-log-forensics
+  - bench-soc-s3-insider
+  # SWE-bench-like security defect fixes
+  - contest-fix-sqli-login
+  - bench-seccodebench-cwe94
+  - bench-seccodebench-cwe79-go
+  - bench-seccodebench-cwe22-node
+  - bench-seccodebench-cwe918-java
+  # CTF-class
+  - bench-ctf-target-practice
+  - bench-ctf-smug-dino
+  - bench-ctf-bigboy
+  - bench-ctf-collision-course
+  - bench-ctf-whyos
+  - bench-ctf-tablez

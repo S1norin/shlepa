@@ -1,0 +1,46 @@
+{
+  "commit": "df4cb30b116c8628afc465876e08d58f2bcb897b",
+  "critical_operation": {
+    "code": "    bash_pull = BashOperator(\n        task_id=\"bash_pull\",\n        bash_command='echo \"bash pull demo\" && '\n        f'echo \"The xcom pushed manually is {XComArg(bash_push, key=\"manually_pushed_value\")}\" && '\n        f'echo \"The returned_value xcom is {XComArg(bash_push)}\" && '\n        'echo \"finished\"',\n        do_xcom_push=False,\n    )",
+    "desc": "BashOperator(task_id=\"bash_pull\") 将拼接了两处 XComArg f-string 的 bash_command 字符串传入 BashOperator 并在 Airflow Worker 上执行；BashOperator 运行时以 shell=True 将渲染后的 bash_command 交给子进程，因此内联于其中的未转义 XCom 值会在此触发任意命令执行。这是漏洞链路的最终触发点——f-string 拼接阶段缺失 shlex.quote 保护导致数据与命令上下文混合，命令注入在此得以实现。",
+    "file": "airflow-core/src/airflow/example_dags/example_xcom.py",
+    "line": "80-87"
+  },
+  "entry_id": "entry-00464",
+  "entry_point": {
+    "code": "        f'echo \"The xcom pushed manually is {XComArg(bash_push, key=\"manually_pushed_value\")}\" && '",
+    "desc": "在 bash_pull 任务 bash_command 的拼接表达式中，此 f-string 把 XComArg(bash_push, key=\"manually_pushed_value\") 直接内插进 echo 命令字符串，未经 shlex 转义。这是 manually_pushed_value XCom 键的污点数据进入 Shell 指令流的注入点——具有 XCom 写权限的用户可将任意 Shell 特殊字符写入该 XCom 键，从而将恶意命令嵌入最终传给 BashOperator 的 bash_command。",
+    "file": "airflow-core/src/airflow/example_dags/example_xcom.py",
+    "line": 83
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "Apache Airflow",
+  "repo_url": "https://github.com/apache/airflow",
+  "report_id": "GHSA-Q2HG-643C-GW8H",
+  "source_link": "https://github.com/advisories/GHSA-q2hg-643c-gw8h",
+  "trace": [
+    {
+      "code": "        f'echo \"The xcom pushed manually is {XComArg(bash_push, key=\"manually_pushed_value\")}\" && '",
+      "desc": "在 bash_pull 任务 bash_command 构建序列的起始处，f-string 将 XComArg(bash_push, key=\"manually_pushed_value\") 内插为 Shell echo 命令的一部分，未调用任何转义函数。这是污点 XCom 值首次进入 Shell 命令字符串的源头节点——manually_pushed_value 从这里开始与 Shell 指令上下文混合，随后随 bash_command 字符串一路流向 BashOperator 的执行阶段。",
+      "file": "airflow-core/src/airflow/example_dags/example_xcom.py",
+      "line": 83
+    },
+    {
+      "code": "        f'echo \"The returned_value xcom is {XComArg(bash_push)}\" && '",
+      "desc": "随后在同一拼接序列中，第二个 f-string 将 XComArg(bash_push)（bash_push 任务的返回值 XCom）直接内插进另一条 echo 命令，同样没有 shlex 转义。该行是第二条 XCom 注入路径——bash_push 返回值 XCom 与 trace[0] 处的 manually_pushed_value 共同构成 bash_command 的双重未转义注入向量，两者均在调用栈下游的 BashOperator 处触发 Shell 命令执行。",
+      "file": "airflow-core/src/airflow/example_dags/example_xcom.py",
+      "line": 84
+    },
+    {
+      "code": "    bash_pull = BashOperator(\n        task_id=\"bash_pull\",\n        bash_command='echo \"bash pull demo\" && '\n        f'echo \"The xcom pushed manually is {XComArg(bash_push, key=\"manually_pushed_value\")}\" && '\n        f'echo \"The returned_value xcom is {XComArg(bash_push)}\" && '\n        'echo \"finished\"',\n        do_xcom_push=False,\n    )",
+      "desc": "在调用链终点，BashOperator(task_id=\"bash_pull\") 以含上述两处 XComArg f-string 注入的 bash_command 字符串完成实例化；Worker 节点执行该 BashOperator 时，bash_command 被展开为含 XCom 实际值的 Shell 命令并以 shell=True 交给子进程运行。若 XCom 中存在恶意 Shell 语法，将在此处以 Worker 进程权限执行任意命令，是整条漏洞链路的最终危害点。",
+      "file": "airflow-core/src/airflow/example_dags/example_xcom.py",
+      "line": "80-87"
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "代码注入",
+  "vuln_category_l2": "OS命令注入（Shell注入）",
+  "vuln_ids": [],
+  "vuln_title": "Apache Airflow example_xcom DAG XCom值命令注入漏洞 (CVE-2025-54550)"
+}

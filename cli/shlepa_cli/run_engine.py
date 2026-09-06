@@ -21,7 +21,7 @@ import secrets
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from urllib.parse import urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,10 +48,15 @@ class AgentRun:
     final_output: str
     tokens_in: int
     tokens_out: int
-    tokens_cache_read: int = 0
-    tokens_cache_write: int = 0
     tool_calls: int = 0
     termination: str = "ok"
+    # Cache subset of the input tokens (0 when the endpoint doesn't
+    # report them); appended so positional constructors stay valid.
+    tokens_cache_read: int = 0
+    tokens_cache_write: int = 0
+    # Per-phase token deltas: phase id -> {"in", "out", "cache_read"}
+    # ({} for legacy runs without phase-tagged usage events). Issue #73.
+    phase_tokens: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,8 @@ class TaskResult:
     tokens_cache_read: int = 0
     tokens_cache_write: int = 0
     termination: str = "ok"
+    # Per-phase token deltas ({} for legacy runs). Issue #73.
+    phase_tokens: dict = field(default_factory=dict)
 
 
 def make_workspace(repo_root: Path, slug: str) -> Path:
@@ -107,6 +114,12 @@ class _HostMetricsCapture(logging.Handler):
         self.cache_read = 0
         self.cache_write = 0
         self.tool_calls = 0
+        # Per-phase deltas from phase-tagged cumulative usage events
+        # ({} for legacy events without a phase). Issue #73.
+        self.phase_tokens: dict = {}
+        self._last_in = 0
+        self._last_out = 0
+        self._last_cache_read = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -115,10 +128,24 @@ class _HostMetricsCapture(logging.Handler):
             return
         event = data.get("event")
         if event == "usage":
-            self.tokens_in = int(data.get("cumulative_input") or 0)
-            self.tokens_out = int(data.get("cumulative_output") or 0)
-            self.cache_read = int(data.get("cumulative_cache_read") or 0)
+            ci = int(data.get("cumulative_input") or 0)
+            co = int(data.get("cumulative_output") or 0)
+            cr = int(data.get("cumulative_cache_read") or 0)
+            self.tokens_in = ci
+            self.tokens_out = co
+            self.cache_read = cr
             self.cache_write = int(data.get("cumulative_cache_write") or 0)
+            phase = data.get("phase")
+            if phase:
+                bucket = self.phase_tokens.setdefault(
+                    phase, {"in": 0, "out": 0, "cache_read": 0}
+                )
+                bucket["in"] += max(0, ci - self._last_in)
+                bucket["out"] += max(0, co - self._last_out)
+                bucket["cache_read"] += max(0, cr - self._last_cache_read)
+            self._last_in = ci
+            self._last_out = co
+            self._last_cache_read = cr
         elif event == "llm_tool_call":
             self.tool_calls += 1
 
@@ -179,6 +206,7 @@ def run_agent_on_host(
         tokens_cache_read=capture.cache_read,
         tokens_cache_write=capture.cache_write,
         tool_calls=capture.tool_calls,
+        phase_tokens=capture.phase_tokens,
     )
 
 
@@ -396,6 +424,7 @@ def log_task_to_mlflow(
     batch_started_ms: int | None = None,
     trace_wait_sec: float = 15.0,
     experiment_name: str | None = None,
+    arm: str | None = None,
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
@@ -430,6 +459,8 @@ def log_task_to_mlflow(
     }
     if batch_id:
         tags["batch_id"] = batch_id
+    if arm:
+        tags["toolset"] = arm
     if settings.shlepa_otel_enabled:
         jaeger = (settings.otel_exporter_otlp_endpoint or "http://localhost:4318").replace(
             ":4318", ":16686"
@@ -461,14 +492,17 @@ def log_task_to_mlflow(
         client.log_metric(run_id, "tokens_in", result.tokens_in)
         client.log_metric(run_id, "tokens_out", result.tokens_out)
         client.log_metric(run_id, "tokens_total", result.tokens_total)
-        # Prompt-cache metrics only when the endpoint reported caching.
-        if result.tokens_cache_read:
+        # Always logged (0 when the endpoint doesn't report cache) so the
+        # runs table schema is stable across endpoint classes.
+        client.log_metric(run_id, "tokens_cache_read", result.tokens_cache_read)
+        client.log_metric(run_id, "tokens_cache_write", result.tokens_cache_write)
+        # Per-phase token deltas for every phase that ran (legacy runs have
+        # no phase data and keep their metric shape). Issue #73.
+        for phase, tokens in (result.phase_tokens or {}).items():
+            client.log_metric(run_id, f"tokens_in.{phase}", tokens.get("in", 0))
+            client.log_metric(run_id, f"tokens_out.{phase}", tokens.get("out", 0))
             client.log_metric(
-                run_id, "tokens_cache_read", result.tokens_cache_read
-            )
-        if result.tokens_cache_write:
-            client.log_metric(
-                run_id, "tokens_cache_write", result.tokens_cache_write
+                run_id, f"tokens_cache_read.{phase}", tokens.get("cache_read", 0)
             )
         client.log_metric(run_id, "tool_calls", result.tool_calls)
         client.log_param(run_id, "final_output", result.final_output[:2000])
@@ -552,6 +586,7 @@ def run_preset(
     docker_client=None,
     mlflow_client=None,
     batch_id: str | None = None,
+    arm: str | None = None,
 ) -> list[TaskResult]:
     """Run every task of a preset; a failing task never stops the batch.
 
@@ -586,6 +621,7 @@ def run_preset(
                 docker_client=docker_client,
                 batch_id=batch_id,
                 preset_name=preset.name,
+                arm=arm,
             )
             results.append(result)
             if mlflow_client is not None:
@@ -597,6 +633,7 @@ def run_preset(
                     result,
                     batch_id=batch_id,
                     batch_started_ms=batch_started_ms,
+                    arm=arm,
                 )
             print(
                 f"  -> {result.slug}: solved={result.solved} "
@@ -652,6 +689,7 @@ def _call_agent(
     settings: Settings,
     batch_id: str | None = None,
     preset_name: str | None = None,
+    arm: str | None = None,
 ) -> AgentRun:
     """Invoke the agent with SLEPA_TASK_SLUG set for the duration of the run.
 
@@ -668,6 +706,8 @@ def _call_agent(
             extra["SLEPA_PRESET"] = preset_name
         extra["SLEPA_GIT_SHA"] = _git_sha(settings.repo_root)
         extra["SLEPA_AGENT_VERSION"] = _agent_version()
+    if arm:
+        extra["AGENT_TOOLSET"] = arm
     old_extra = {k: os.environ.get(k) for k in extra}
     os.environ.update(extra)
     try:
@@ -791,6 +831,7 @@ def _agent_env(
     task: Task,
     batch_id: str | None = None,
     preset_name: str | None = None,
+    arm: str | None = None,
 ) -> dict[str, str]:
     """docker-exec environment for the in-container agent."""
     env: dict[str, str] = {
@@ -804,11 +845,16 @@ def _agent_env(
         env["OPENAI_BASE_URL"] = settings.openai_base_url
     if task.timeout_sec:
         env["SLEPA_AGENT_TIMEOUT"] = str(int(task.timeout_sec))
+    if arm:
+        env["AGENT_TOOLSET"] = arm
     if settings.shlepa_otel_enabled:
         env["SLEPA_OTEL_ENABLED"] = "1"
         env["OTEL_EXPORTER_OTLP_ENDPOINT"] = (
             settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
         )
+        # Span attribute value cap (bytes); keeps exported traces small.
+        if settings.shlepa_otel_attr_limit:
+            env["SLEPA_OTEL_ATTR_LIMIT"] = settings.shlepa_otel_attr_limit
         if batch_id:
             env["SLEPA_BATCH_ID"] = batch_id
         if preset_name:
@@ -838,6 +884,7 @@ def run_task(
     docker_client=None,
     batch_id: str | None = None,
     preset_name: str | None = None,
+    arm: str | None = None,
 ) -> TaskResult:
     """Run one task and return its TaskResult.
 
@@ -878,6 +925,7 @@ def run_task(
                 settings,
                 batch_id=batch_id,
                 preset_name=preset_name,
+                arm=arm,
             )
             solved, score_detail = _score_no_docker(task, workspace)
         except Exception as exc:  # noqa: BLE001 - keep the batch going
@@ -920,7 +968,14 @@ def run_task(
                 docker_client,
                 container,
                 instruction,
-                _agent_env(settings, model, task, batch_id=batch_id, preset_name=preset_name),
+                _agent_env(
+                    settings,
+                    model,
+                    task,
+                    batch_id=batch_id,
+                    preset_name=preset_name,
+                    arm=arm,
+                ),
                 timeout_sec=task.timeout_sec,
             )
             if (task.path / "tests" / "test.sh").is_file():
@@ -961,6 +1016,7 @@ def run_task(
         tokens_total=agent_run.tokens_in + agent_run.tokens_out,
         tokens_cache_read=agent_run.tokens_cache_read,
         tokens_cache_write=agent_run.tokens_cache_write,
+        phase_tokens=agent_run.phase_tokens,
         tool_calls=agent_run.tool_calls,
         final_output=agent_run.final_output,
         error=error,

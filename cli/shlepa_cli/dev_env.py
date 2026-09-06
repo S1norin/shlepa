@@ -99,6 +99,15 @@ class _MetricsCapture(logging.Handler):
         self.cache_write = 0
         self.tool_calls = 0
         self.status: str | None = None
+        # Per-phase deltas derived from the phase-tagged CUMULATIVE usage
+        # events: phase -> {"in", "out", "cache_read"}. Usage events carry
+        # run-wide cumulative counters (one shared model), so each event's
+        # delta vs. the previous event is attributed to the phase of that
+        # event. Legacy events (no phase) produce no buckets. Issue #73.
+        self.phase_tokens: dict = {}
+        self._last_in = 0
+        self._last_out = 0
+        self._last_cache_read = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -107,10 +116,24 @@ class _MetricsCapture(logging.Handler):
             return
         event = data.get("event")
         if event == "usage":
-            self.tokens_in = int(data.get("cumulative_input") or 0)
-            self.tokens_out = int(data.get("cumulative_output") or 0)
-            self.cache_read = int(data.get("cumulative_cache_read") or 0)
+            ci = int(data.get("cumulative_input") or 0)
+            co = int(data.get("cumulative_output") or 0)
+            cr = int(data.get("cumulative_cache_read") or 0)
+            self.tokens_in = ci
+            self.tokens_out = co
+            self.cache_read = cr
             self.cache_write = int(data.get("cumulative_cache_write") or 0)
+            phase = data.get("phase")
+            if phase:
+                bucket = self.phase_tokens.setdefault(
+                    phase, {"in": 0, "out": 0, "cache_read": 0}
+                )
+                bucket["in"] += max(0, ci - self._last_in)
+                bucket["out"] += max(0, co - self._last_out)
+                bucket["cache_read"] += max(0, cr - self._last_cache_read)
+            self._last_in = ci
+            self._last_out = co
+            self._last_cache_read = cr
         elif event == "llm_tool_call":
             self.tool_calls += 1
         elif event == "agent_done":
@@ -147,6 +170,7 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
                     "tokens_cache_read": capture.cache_read,
                     "tokens_cache_write": capture.cache_write,
                     "tool_calls": capture.tool_calls,
+                    "phase_tokens": capture.phase_tokens,
                     "termination": "timeout",
                 }
             ),
@@ -172,6 +196,7 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
         "tokens_cache_read": capture.cache_read,
         "tokens_cache_write": capture.cache_write,
         "tool_calls": capture.tool_calls,
+        "phase_tokens": capture.phase_tokens,
         "termination": _TERMINATION.get(capture.status, "ok"),
     }
     if output:
@@ -432,39 +457,46 @@ def run_agent_in_container(
         tokens_cache_read=metrics.get("tokens_cache_read", 0),
         tokens_cache_write=metrics.get("tokens_cache_write", 0),
         tool_calls=metrics["tool_calls"],
+        phase_tokens=metrics["phase_tokens"],
         termination=metrics["termination"],
     )
 
 
-def parse_agent_metrics(stderr: str) -> dict:
-    """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
-
-    Returns a dict with final_output / tokens_in / tokens_out /
-    tokens_cache_read / tokens_cache_write / tool_calls / termination;
-    defaults to empty values and termination='ok' when the marker is
-    missing or broken (the run still counts as an unsolved, not a
-    crash). Cache keys are 0 when the endpoint did not report caching.
-    """
-    defaults = {
+def _default_metrics() -> dict:
+    """Fresh default metrics (a new phase_tokens dict per call)."""
+    return {
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
         "tokens_cache_read": 0,
         "tokens_cache_write": 0,
         "tool_calls": 0,
+        "phase_tokens": {},
         "termination": "ok",
     }
+
+
+def parse_agent_metrics(stderr: str) -> dict:
+    """Parse the SLEPA_AGENT_METRICS_JSON marker from agent stderr.
+
+    Returns a dict with final_output / tokens_in / tokens_out /
+    tokens_cache_read / tokens_cache_write / tool_calls / phase_tokens /
+    termination; defaults to empty values and termination='ok' when the
+    marker is missing or broken (the run still counts as an unsolved, not
+    a crash). Cache fields and phase_tokens default to 0/{} for legacy
+    markers.
+    """
     for line in reversed((stderr or "").splitlines()):
         line = line.strip()
         if not line.startswith(METRICS_MARKER):
             continue
         try:
             data = json.loads(line[len(METRICS_MARKER):])
-            result = dict(defaults)
-            for key in defaults:
+            result = _default_metrics()
+            for key in result:
                 if key in data:
                     result[key] = data[key]
             return result
         except (json.JSONDecodeError, TypeError):
-            return dict(defaults)
-    return dict(defaults)
+            return _default_metrics()
+    return _default_metrics()

@@ -1,0 +1,67 @@
+{
+  "commit": "d1121317ef4e1ac559f4ae13855ac1af28eef8f6",
+  "critical_operation": {
+    "code": "      module_candidate = importlib.import_module(agent_name)",
+    "desc": "标准库importlib.import_module函数以外部可控字符串为参数执行动态模块导入，该调用无任何模块名白名单限制，攻击者可借此触发任意Python模块的顶层代码执行从而达成远程命令执行",
+    "file": "src/google/adk/cli/utils/agent_loader.py",
+    "line": 74
+  },
+  "entry_id": "entry-00430",
+  "entry_point": {
+    "code": "      @app.get(\"/dev/build_graph/{app_name}\")\n      async def get_app_info(app_name: str) -> Any:\n        runner = await self.get_runner_async(app_name)",
+    "desc": "该GET路由处理函数直接从URL路径参数中提取app_name，未配置任何身份认证中间件即接受外部请求，作为整条代码注入链的用户输入入口将不可信数据传递至get_runner_async调用",
+    "file": "src/google/adk/cli/adk_web_server.py",
+    "line": "972-974"
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "google/adk-python",
+  "repo_url": "https://github.com/google/adk-python",
+  "report_id": "GHSA-RG7C-G689-FR3X",
+  "source_link": "https://github.com/advisories/GHSA-rg7c-g689-fr3x",
+  "trace": [
+    {
+      "code": "      @app.get(\"/dev/build_graph/{app_name}\")\n      async def get_app_info(app_name: str) -> Any:\n        runner = await self.get_runner_async(app_name)",
+      "desc": "FastAPI框架注册的GET路由处理函数从URL路径参数提取app_name字符串，该端点未配置认证装饰器或中间件，外部请求可直接触达此处理逻辑并将恶意构造的模块名注入后续调用链",
+      "file": "src/google/adk/cli/adk_web_server.py",
+      "line": "972-974"
+    },
+    {
+      "code": "    agent_or_app = self.agent_loader.load_agent(app_name)",
+      "desc": "随后get_runner_async方法内部调用agent_loader.load_agent，将未经验证的app_name原样传入加载器实例，污染数据在此处跨越了Web请求处理层与业务逻辑层的边界",
+      "file": "src/google/adk/cli/adk_web_server.py",
+      "line": 687
+    },
+    {
+      "code": "    agent_or_app = self._perform_load(agent_name)",
+      "desc": "在调用栈下游load_agent方法将接收到的agent_name直接委托给_perform_load执行实际加载逻辑，未对模块名进行任何白名单校验或路径规范化处理",
+      "file": "src/google/adk/cli/utils/agent_loader.py",
+      "line": 330
+    },
+    {
+      "code": "  def _perform_load(self, agent_name: str) -> Union[BaseAgent, App]:",
+      "desc": "_perform_load方法接收字符串类型的agent_name参数作为待加载的模块标识，该方法负责协调多种加载策略，其中包含对_load_from_module_or_package的直接调用分支",
+      "file": "src/google/adk/cli/utils/agent_loader.py",
+      "line": 190
+    },
+    {
+      "code": "  def _load_from_module_or_package(\n      self, agent_name: str\n  ) -> Optional[Union[BaseAgent, App]]:",
+      "desc": "该返回值流入_load_from_module_or_package方法，此函数尝试将agent_name视为合法Python模块名进行动态导入，是污染数据到达危险API前的最后一层调用封装",
+      "file": "src/google/adk/cli/utils/agent_loader.py",
+      "line": "66-68"
+    },
+    {
+      "code": "      module_candidate = importlib.import_module(agent_name)",
+      "desc": "importlib.import_module以攻击者可控的agent_name为参数执行动态模块导入，Python导入机制将执行目标模块的全部顶层代码，从而实现未认证的远程任意代码执行",
+      "file": "src/google/adk/cli/utils/agent_loader.py",
+      "line": 74
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "代码注入",
+  "vuln_category_l2": "任意模块导入",
+  "vuln_ids": [
+    "CVE-2026-4810",
+    "GHSA-RG7C-G689-FR3X"
+  ],
+  "vuln_title": "Google ADK (google-adk) Code Injection & Missing Authentication allows unauthenticated RCE - agent_loader.py"
+}

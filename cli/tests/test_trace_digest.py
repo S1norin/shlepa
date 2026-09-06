@@ -407,3 +407,40 @@ def test_legacy_tool_parameters_args_still_supported():
     loop = [s for s in signals if s.startswith("loop:bash:5")]
     assert loop, signals
     assert "ping host" in loop[0]
+
+
+# --- Cache-read reporting --------------------------------------------------
+
+
+def _llm_span_with_cache(i, prompt, completion, cache_read):
+    span = _llm_span(i, prompt, completion)
+    span["attributes"]["gen_ai.usage.cache_read.input_tokens"] = str(cache_read)
+    return span
+
+
+def test_span_and_trace_cache_read_helpers():
+    span = _llm_span_with_cache(1, 1000, 50, 750)
+    assert trace_digest.span_cache_read_tokens(span) == 750
+    assert trace_digest.span_cache_read_tokens(_llm_span(2, 10, 2)) == 0
+    trace = _trace([_llm_span_with_cache(1, 1000, 50, 750),
+                    _llm_span_with_cache(2, 500, 20, 400),
+                    _llm_span(3, 10, 2)])
+    assert trace_digest.trace_cache_read_tokens(trace) == 1150
+
+
+def test_digest_shows_cache_summary_when_cache_reported():
+    spans = [
+        _llm_span(1, 1000, 50),        # no cache on the first call
+        _llm_span_with_cache(2, 2000, 60, 1500),
+    ]
+    digest = trace_digest.build_digest(_trace(spans))
+    # 3000 in, 1500 cached -> 1500 new input, 50% cached
+    assert "cache: 1500 read / 1500 new input" in digest
+    assert "50% of input was cached" in digest
+
+
+def test_digest_legacy_no_cache_line():
+    """Traces without cache attributes keep the exact legacy header."""
+    spans = [_llm_span(1, 100, 10), _llm_span(2, 200, 20)]
+    digest = trace_digest.build_digest(_trace(spans))
+    assert "cache" not in digest.lower()

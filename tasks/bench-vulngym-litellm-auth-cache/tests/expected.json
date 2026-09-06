@@ -1,0 +1,18 @@
+{
+  "type_aliases": ["authentication bypass", "auth bypass", "cache key collision", "cwe-287"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "litellm/proxy/auth/user_api_key_auth.py", "start": 1209, "end": 1209},
+  "critical_operation": {"file": "litellm/proxy/auth/handle_jwt.py", "start": 506, "end": 506},
+  "minimum_flow_nodes": 4,
+  "flow_landmarks": [
+    {"file": "litellm/proxy/auth/user_api_key_auth.py", "start": 1236, "end": 1236},
+    {"file": "litellm/proxy/auth/user_api_key_auth.py", "start": 500, "end": 500},
+    {"file": "litellm/proxy/auth/handle_jwt.py", "start": 1146, "end": 1146},
+    {"file": "litellm/proxy/auth/handle_jwt.py", "start": 506, "end": 506}
+  ],
+  "source_sha256": {
+    "litellm/proxy/auth/handle_jwt.py": "2a3d631953ea4084e42247e4aa52122f9f2143dca56a1ccdcb48468799ff68f8",
+    "litellm/proxy/auth/user_api_key_auth.py": "7e026bf1e0209fa22c1e4efb6b8b10689b2e35c82abef2500c627c9cb1bd0516"
+  }
+}
+

@@ -1,0 +1,156 @@
+{
+  "scenario_id": "SCN-002",
+  "title": "Business Email Compromise via OAuth App Consent Grant",
+  "description": "Attacker sends phishing email to CFO, tricks user into granting OAuth permissions to a malicious third-party app that reads all mail and exports to attacker-controlled cloud storage.",
+  "soc_tier": "tier2",
+  "difficulty": "medium",
+  "attack_duration_minutes": 35,
+  "dwell_time_minutes": 4320,
+  "mitre_techniques": ["T1566.002", "T1528", "T1114.002", "T1567.002"],
+  "primary_skills_tested": ["LA-05", "EC-03", "HG-02", "FP-04", "IA-02", "RR-01"],
+  "log_sources_present": ["azure_ad_audit", "m365_audit", "zeek_http"],
+  "environment": {
+    "tenant": "contoso.onmicrosoft.com",
+    "victim_user": "cfo@contoso.com",
+    "malicious_app": "DocuSign Pro Helper",
+    "malicious_app_id": "a3b9c2d1-0000-4e5f-8a7b-111122223333",
+    "exfil_destination": "https://attacker-storage.blob.core.windows.net/stolen/"
+  },
+  "attack_narrative": "Attacker registered a malicious AAD application named 'DocuSign Pro Helper' impersonating a legitimate e-signature service. A targeted phishing email with a fake DocuSign link directed the CFO to an OAuth consent page. The CFO granted Mail.ReadWrite and Mail.Send permissions. The app immediately began exfiltrating the last 90 days of inbox via Microsoft Graph API, then forwarded copies of future emails using a hidden inbox rule. The attack went undetected for 3 days.",
+  "telemetry": {
+    "azure_ad_audit": [
+      {
+        "timestamp": "2026-04-10T14:22:17.003Z",
+        "operation": "Consent to application",
+        "user": "cfo@contoso.com",
+        "target_resource": "DocuSign Pro Helper (a3b9c2d1-...)",
+        "ip_address": "198.51.100.47",
+        "permissions_granted": ["Mail.ReadWrite", "Mail.Send", "offline_access"],
+        "ground_truth_label": "malicious",
+        "analyst_note": "Mail.ReadWrite + Mail.Send granted to unknown third-party app. Legitimate DocuSign does not require mail permissions."
+      },
+      {
+        "timestamp": "2026-04-10T14:22:17.003Z",
+        "operation": "Add OAuth2PermissionGrant",
+        "initiated_by": "cfo@contoso.com",
+        "app_display_name": "DocuSign Pro Helper",
+        "scope": "Mail.ReadWrite Mail.Send offline_access",
+        "consent_type": "AllPrincipals",
+        "ground_truth_label": "malicious",
+        "analyst_note": "AllPrincipals consent type — if admin consented, would apply tenant-wide. User-level here but scope is overly broad."
+      },
+      {
+        "timestamp": "2026-04-08T09:15:00.000Z",
+        "operation": "Consent to application",
+        "user": "user@contoso.com",
+        "target_resource": "Zoom (legitimate)",
+        "permissions_granted": ["User.Read"],
+        "ground_truth_label": "benign",
+        "analyst_note": "Standard User.Read consent for Zoom — expected and low-risk."
+      }
+    ],
+    "m365_audit": [
+      {
+        "timestamp": "2026-04-10T14:23:01.441Z",
+        "operation": "New-InboxRule",
+        "user": "cfo@contoso.com",
+        "client_app": "DocuSign Pro Helper",
+        "rule_name": " ",
+        "forward_to": "exfil@protonmail.com",
+        "delete_message": true,
+        "ground_truth_label": "malicious",
+        "analyst_note": "Inbox rule created by OAuth app (not user directly): blank rule name, forwards to external Proton address and deletes original — classic BEC exfil rule."
+      },
+      {
+        "timestamp": "2026-04-10T14:23:45.001Z",
+        "operation": "MailItemsAccessed",
+        "user": "cfo@contoso.com",
+        "client_app": "DocuSign Pro Helper",
+        "access_type": "Bind",
+        "folder": "Inbox",
+        "item_count": 3847,
+        "ground_truth_label": "malicious",
+        "analyst_note": "3847 items accessed in first 45 seconds by OAuth app — bulk mail read characteristic of automated exfiltration."
+      },
+      {
+        "timestamp": "2026-04-10T14:30:00.000Z",
+        "operation": "MailItemsAccessed",
+        "user": "cfo@contoso.com",
+        "client_app": "DocuSign Pro Helper",
+        "access_type": "Bind",
+        "folder": "SentItems",
+        "item_count": 1203,
+        "ground_truth_label": "malicious",
+        "analyst_note": "Sent items also exfiltrated — attacker building full communication picture."
+      },
+      {
+        "timestamp": "2026-04-10T14:23:00.000Z",
+        "operation": "MailItemsAccessed",
+        "user": "cfo@contoso.com",
+        "client_app": "Outlook",
+        "access_type": "Bind",
+        "folder": "Inbox",
+        "item_count": 12,
+        "ground_truth_label": "benign",
+        "analyst_note": "Simultaneous legitimate Outlook access — CFO reading email normally while app exfiltrates."
+      }
+    ],
+    "zeek_http": [
+      {
+        "timestamp": "2026-04-10T14:22:51.000Z",
+        "src_ip": "10.0.5.88",
+        "dst_ip": "104.215.148.63",
+        "host": "graph.microsoft.com",
+        "uri": "/v1.0/me/messages?$top=999&$select=id,subject,body,from&$skip=0",
+        "method": "GET",
+        "user_agent": "DocuSign-Pro-Helper/1.0",
+        "status_code": 200,
+        "bytes_recv": 987654,
+        "ground_truth_label": "malicious",
+        "analyst_note": "Graph API bulk message fetch with unusual user agent. Non-standard $top=999 indicates automated harvesting."
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1566.002: Spearphishing link to fake DocuSign OAuth consent page",
+      "T1528: Steal application access token via malicious OAuth app consent",
+      "T1114.002: Email collection via Graph API (3847 inbox + 1203 sent items)",
+      "T1567.002: Exfiltration via cloud API channel (Graph + forwarding rule to Proton)"
+    ],
+    "compromised_accounts": ["cfo@contoso.com"],
+    "compromised_data": "3 days of CFO email including financial forecasts, M&A discussions, wire transfer authorizations",
+    "persistence_mechanism": "Hidden inbox forwarding rule survives password reset",
+    "dwell_time": "3 days (72 hours) before detection",
+    "indicators_of_compromise": [
+      "App ID: a3b9c2d1-0000-4e5f-8a7b-111122223333",
+      "Inbox rule forwarding to exfil@protonmail.com",
+      "User-Agent: DocuSign-Pro-Helper/1.0",
+      "Bulk MailItemsAccessed (>1000 items) by non-Outlook client"
+    ],
+    "containment_steps": [
+      "Revoke OAuth token for app a3b9c2d1 immediately",
+      "Remove malicious inbox forwarding rule",
+      "Block exfil@protonmail.com at mail gateway",
+      "Reset CFO credentials and MFA tokens",
+      "Review all emails sent from CFO account during 3-day window",
+      "Notify legal/compliance of potential PII breach"
+    ],
+    "detection_improvements": [
+      "Alert on MailItemsAccessed >500 items by non-standard client within 5 minutes",
+      "Alert on new inbox rules created by OAuth apps (not user agent = Outlook)",
+      "Implement app consent policy requiring admin approval for Mail.ReadWrite",
+      "Deploy Conditional Access policy blocking consent from unmanaged devices"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {"weight": 25, "criteria": ["Identifies OAuth consent abuse: 10pts", "Identifies email exfiltration: 10pts", "Notes 3-day dwell time: 5pts"]},
+      "evidence_correlation": {"weight": 30, "criteria": ["Links consent event to bulk mail access: 15pts", "Identifies inbox rule as persistence: 15pts"]},
+      "impact_assessment": {"weight": 25, "criteria": ["Identifies data types exposed: 10pts", "Notes wire transfer risk: 10pts", "Identifies forwarding rule persistence: 5pts"]},
+      "remediation": {"weight": 20, "criteria": ["Revokes OAuth token: 5pts", "Removes inbox rule: 5pts", "Resets credentials: 5pts", "Notifies compliance: 5pts"]}
+    }
+  }
+}

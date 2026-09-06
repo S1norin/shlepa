@@ -1,0 +1,2 @@
+backup_status=complete
+recovery_token=flag{alias_exposed_the_backup}

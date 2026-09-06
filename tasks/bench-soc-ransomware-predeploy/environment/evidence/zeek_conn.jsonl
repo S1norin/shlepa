@@ -1,0 +1,2 @@
+{"timestamp":"2026-04-22T02:15:22.001Z","src_ip":"10.10.5.15","dst_ip":"10.10.0.0/24","dst_port":445,"proto":"tcp","duration":0.12,"bytes_sent":310,"bytes_recv":890,"conn_state":"SF"}
+{"timestamp":"2026-04-22T02:15:24.004Z","src_ip":"10.10.5.15","dst_ip":"10.10.1.0/24","dst_port":445,"proto":"tcp","duration":0.09,"bytes_sent":290,"bytes_recv":820,"conn_state":"SF"}

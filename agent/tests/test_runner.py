@@ -266,6 +266,65 @@ def test_build_phase_agent_instrument_flag_and_output_type(tmp_path):
     # plan and review are typed-output phases
     assert plan.output_type is PlanResult
     assert get_phase("review").output_type is ReviewResult
+    # The disabled commit verifier reuses the same typed relay shape
+    # (regime change; it is never routed in the shipped config).
+    assert get_phase("commit").output_type is ReviewResult
+    # Agents are named after their phase so the instrumentation's
+    # invoke_agent spans are per-phase (agent_name=<phase-id>).
+    assert instrumented.name == "plan"
+
+
+def test_build_phase_agent_named_per_phase(tmp_path):
+    """Each phase's agent carries the phase id as its name, so agent-run
+    spans are 'invoke_agent <phase-id>' instead of indistinguishable
+    'invoke_agent agent' spans. Issue #72."""
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.runner import build_phase_agent
+
+    cfg = load_config()
+    model = TrackedModel(
+        "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+    for phase_id in ("plan", "work", "commit"):
+        agent = build_phase_agent(model, cfg, get_phase(phase_id), "some task")
+        assert agent.name == phase_id
+
+
+def test_review_agent_is_toolless_from_packaged_config(tmp_path):
+    """The baseline review relay builds with NO tools: it distills the
+    transcript, it cannot read/write/run anything. The plan phase builds
+    without bash/writes; the work phase is the only one with bash.
+    """
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.runner import build_phase_agent
+
+    cfg = load_config()  # the packaged baseline (no AGENT_TOOLSET in tests)
+    model = TrackedModel(
+        "stub-model", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+    )
+
+    def names(phase_id: str) -> set[str]:
+        agent = build_phase_agent(model, cfg, get_phase(phase_id), "some task")
+        return set(agent._function_toolset.tools)
+
+    assert names("review") == set()  # toolless relay
+    assert names("commit") == {"read", "search"}  # disabled verifier: read-only
+    assert names("plan") == {
+        "read", "recon", "search", "code_search", "file_outline",
+        "log_triage",
+    }
+    assert names("work") == {
+        "read", "write", "edit", "bash", "recon", "search",
+        "code_search", "file_outline", "log_triage",
+    }
 
 
 # -- pipeline graph ---------------------------------------------------------
@@ -679,14 +738,17 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
         "request",
         "input_tokens",
         "output_tokens",
-        "cache_read",
-        "cache_write",
+        "cache_read_tokens",
+        "cache_write_tokens",
         "cumulative_input",
         "cumulative_output",
         "cumulative_cache_read",
         "cumulative_cache_write",
+        # #73: every usage event during a run is phase-tagged
+        "phase",
     ):
         assert field in usage
+    assert usage["phase"] in ("plan", "work", "review")
     # hard-cycle pipeline events
     assert {"phase", "phase_done", "cycle"} <= names
     assert "llm_tool_call" in names  # the bash round-trip in the plan phase
@@ -736,3 +798,95 @@ def test_relay_time_knob(monkeypatch):
     assert phase.limits(cfg).time is None  # regime: REVIEW_CAP 45 s
     monkeypatch.setenv("SHLEPA_REVIEW_TIME", "10")
     assert phase.limits(load_config()).time == 10.0
+
+
+# -- per-phase usage tagging (issue #73) -------------------------------------
+
+
+class _StubStreamACM:
+    """Async context manager mimicking ``agent.run_stream_events(...)``."""
+
+    def __init__(self, events, on_enter):
+        self._events = list(events)
+        self._on_enter = on_enter
+
+    async def __aenter__(self):
+        self._on_enter()
+
+        async def _gen():
+            for ev in self._events:
+                yield ev
+
+        return _gen()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _StubAgent:
+    name = "stub"
+
+    def __init__(self, on_enter, events=()):
+        self._on_enter = on_enter
+        self._events = events
+
+    def run_stream_events(self, prompt, **kwargs):
+        return _StubStreamACM(self._events, self._on_enter)
+
+
+class _StubPhase:
+    """Free-text phase with a fixed cap (no output_type, not terminal)."""
+
+    output_type = None
+    terminal = False
+
+    def __init__(self, phase_id):
+        self.id = phase_id
+
+    def limits(self, cfg):
+        from shlepa_agent.phases.base import PhaseLimits
+
+        return PhaseLimits(requests=10, time=30.0)
+
+    def history(self, state):
+        return None
+
+    def prompt(self, state):
+        return "stub prompt"
+
+
+def test_run_phase_sets_and_rotates_current_phase(tmp_path):
+    """_run_phase sets the current phase on the shared model *before* the
+    agent runs (so the phase's usage events carry it) and rotates it
+    between phase runs (plan -> work). Issue #73."""
+    from pathlib import Path
+
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+    from shlepa_agent.phases.base import RunState
+    from shlepa_agent.runner import _run_phase
+    from shlepa_agent.tools.base import AgentDeps
+
+    cfg = load_config()
+    model = TrackedModel(
+        "stub-model",
+        OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"),
+        cfg,
+    )
+    state = RunState(
+        task="stub task",
+        deps=AgentDeps(workdir=Path(tmp_path), cfg=cfg, clock=model.elapsed),
+        model=model,
+    )
+    assert model.current_phase is None
+
+    seen: list = []
+    for phase_id in ("plan", "work"):
+        agent = _StubAgent(lambda: seen.append(model.current_phase))
+        result = asyncio.run(_run_phase(state, _StubPhase(phase_id), agent))
+        assert result.status == "done"
+    # The phase was set BEFORE each agent run, and rotated across phases.
+    assert seen == ["plan", "work"]
+    assert model.current_phase == "work"

@@ -5,6 +5,12 @@ Enable with SLEPA_OTEL_ENABLED=1 and the `telemetry` extra
 via OTLP/HTTP to OTEL_EXPORTER_OTLP_ENDPOINT (default
 http://localhost:4318, i.e. the local otel/ collector).
 
+Span attribute values are truncated at a byte cap (default 8 KB,
+``SLEPA_OTEL_ATTR_LIMIT`` / ``OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT``):
+the OpenInference instrumentation embeds full tool stdout and whole
+conversation message arrays in span attributes, and at the OTel spec
+default (128 KB per value) dev runs export gigabytes of spans a day.
+
 Nothing in this module is imported unless tracing is explicitly
 requested, so the baseline stays clean of the otel SDK.
 """
@@ -45,6 +51,33 @@ _ENV_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("SLEPA_GIT_SHA", "git.commit"),
     ("SLEPA_AGENT_VERSION", "shlepa.agent_version"),
 )
+
+#: Default cap (bytes) for one span attribute value. The OpenInference
+#: instrumentation embeds full tool stdout and whole conversation message
+#: arrays into span attributes; at the OTel spec default (128 KB per value)
+#: a dev run exports gigabytes of span traffic per day. Raise or lower it
+#: with SLEPA_OTEL_ATTR_LIMIT, or override with the standard
+#: OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT.
+_DEFAULT_ATTR_LIMIT = 8192
+
+
+def _span_attr_limit() -> int:
+    """Byte cap for span attribute values.
+
+    Precedence: OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT (standard OpenTelemetry
+    variable) > SLEPA_OTEL_ATTR_LIMIT (shlepa dev knob) > 8192. Non-integer
+    values fall back to the default.
+    """
+    raw = (
+        os.environ.get("OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT")
+        or os.environ.get("SLEPA_OTEL_ATTR_LIMIT")
+        or str(_DEFAULT_ATTR_LIMIT)
+    )
+    try:
+        return int(raw)
+    except ValueError:  # pragma: no cover - defensive
+        return _DEFAULT_ATTR_LIMIT
+
 
 # Weakref to the currently open agent.run root span, so
 # _ShlepaSpanProcessor can stamp late attributes (cumulative tokens) on it
@@ -93,14 +126,17 @@ _COMPLETION_TOKEN_KEYS = (
     "gen_ai.usage.output_tokens",
 )
 # Prompt-cache token keys (0/absent when the endpoint does not report
-# caching). The two families carry the same counts on current traces;
-# first present wins.
+# caching). Instrumentation versions emit different key families (the
+# gen_ai.usage.* first-class attributes and the gen_ai.usage.details.*
+# legacy family carry the same counts on current traces; OpenAI-flavoured
+# builds name the write axis cache_creation). First present key wins.
 _CACHE_READ_KEYS = (
     "gen_ai.usage.cache_read.input_tokens",
     "gen_ai.usage.details.cache_read_tokens",
 )
 _CACHE_WRITE_KEYS = (
     "gen_ai.usage.cache_write.input_tokens",
+    "gen_ai.usage.cache_creation.input_tokens",
     "gen_ai.usage.details.cache_write_tokens",
 )
 
@@ -178,6 +214,8 @@ class _ShlepaSpanProcessor(SpanProcessor):
                 "shlepa.llm.cumulative_completion_tokens",
                 self._completion_tokens,
             )
+            # Cache attrs only when non-zero: endpoints without cache
+            # reporting keep the root span clean.
             if self._cache_read_tokens:
                 root.set_attribute(
                     "shlepa.llm.cumulative_cache_read_tokens",
@@ -467,7 +505,7 @@ def configure(exporter: Any | None = None) -> TracerProvider:
     """
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
     if exporter is None:
@@ -490,7 +528,10 @@ def configure(exporter: Any | None = None) -> TracerProvider:
                 "service.name": "shlepa-agent",
                 "service.version": __version__,
             }
-        )
+        ),
+        # Cap span attribute values (full tool stdout, conversation message
+        # arrays) so exported traces stay small; see _span_attr_limit.
+        span_limits=SpanLimits(max_span_attribute_length=_span_attr_limit()),
     )
     provider.add_span_processor(BatchSpanProcessor(exporter))
 

@@ -5,4 +5,5 @@ extend-exclude =
     dist,
     build,
     tmp,
-    __pycache__
+    __pycache__,
+    agent/tests/fixtures  # test data (recon parity fixtures), not project code

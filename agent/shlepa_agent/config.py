@@ -4,8 +4,9 @@ Single source of tuning values: ``shlepa_agent/config.toml`` (shipped inside
 the package, carried by the submission zip). Environment variables override
 individual keys (``SHLEPA_*`` names; the legacy ``AGENT_*`` names were
 dropped with the v2 architecture — see ``docs/agent-config.md`` for the
-mapping). Invalid env values are ignored, matching the old ``_env_*``
-helpers.
+mapping; ``AGENT_CODE_SEARCH`` / ``AGENT_TOOLSET`` are the deliberate
+exceptions, wired in ``_apply_toolset_env``). Invalid env values are
+ignored, matching the old ``_env_*`` helpers.
 """
 
 from __future__ import annotations
@@ -100,6 +101,11 @@ class ToolsConfig(BaseModel):
     file_outline: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
     #: Deterministic read-only triage of log/evidence files.
     log_triage: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_output=8192)
+    #: Pinned MITRE ATT&CK KB lookup (709 techniques). OFF in the model
+    #: default and in the v6 baseline [tool_policy]; the +mitre-kb dev arm
+    #: enables it (see toolsets.py). ``timeout`` is a per-call wall safety
+    #: net; the result is capped at ``max_output`` chars.
+    mitre_kb: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8000)
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -208,6 +214,9 @@ class AgentConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
+    # Resolved toolset arm (see toolsets.py): "baseline" when AGENT_TOOLSET
+    # is unset or invalid. Data only — never rendered into the prompt.
+    arm: str = "baseline"
     phases: dict[str, PhaseConfig] = Field(min_length=1)
     template: TemplateConfig = Field(
         default_factory=lambda: TemplateConfig(blocks=["system", "tools", "task"])
@@ -242,7 +251,13 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
     "SHLEPA_CODE_SEARCH": ("tools.code_search.enabled", _env_bool),
     "SHLEPA_CODE_SEARCH_ENGINE": ("code_search.engine", str),
+    "SHLEPA_CODE_SEARCH_TIMEOUT": ("tools.code_search.timeout", float),
     "SHLEPA_LOG_TRIAGE": ("tools.log_triage.enabled", _env_bool),
+    "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
+    "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
+    "SHLEPA_MITRE_KB_MAX_OUTPUT": ("tools.mitre_kb.max_output", int),
+    "SHLEPA_RECON_TIMEOUT": ("tools.recon.timeout", float),
+    "SHLEPA_RECON_MAX_OUTPUT": ("tools.recon.max_output", int),
     "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
     "SHLEPA_REVIEW_TIME": ("phases.review.time", float),
 }
@@ -271,10 +286,165 @@ def _apply_env_overrides(cfg: AgentConfig) -> None:
             setattr(node, last, value)
 
 
+#: The two deliberate AGENT_* env vars (the legacy set was dropped in v2):
+#: AGENT_CODE_SEARCH is the legacy dev switch for the code-search tools;
+#: AGENT_TOOLSET is the named-arm selector (see toolsets.py) and wins over
+#: it when set.
+CODE_SEARCH_ENV = "AGENT_CODE_SEARCH"
+CODE_SEARCH_ENGINES = ("rg", "sifs")
+TOOLSET_ENV = "AGENT_TOOLSET"
+
+
+def _append_to_phases(cfg: AgentConfig, names: tuple[str, ...]) -> None:
+    """Append tool names to every ACTIVE phase's tool list (deduped).
+
+    Targets the effective source of the phase list: the ``[tool_policy]``
+    entry when the phase has one, otherwise the legacy
+    ``[phases.<id>].tools`` (dev/test configs without a policy section).
+    Phases listed in ``tool_policy.disabled`` are never routed, so arms
+    never touch their lists. An EMPTY list is a deliberate toolless phase
+    (the v6 review relay) — it is never augmented, so a toolless phase
+    stays toolless on every arm.
+    """
+    for phase_id, phase in cfg.phases.items():
+        if cfg.tool_policy.is_disabled(phase_id):
+            continue
+        entry = cfg.tool_policy.phases.get(phase_id)
+        if entry is not None:
+            if not entry:
+                continue
+            for name in names:
+                if name not in entry:
+                    entry.append(name)
+        else:
+            if not phase.tools:
+                continue
+            for name in names:
+                if name not in phase.tools:
+                    phase.tools.append(name)
+
+
+def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
+    """Enable code_search/file_outline on the given engine.
+
+    Shared mutation for the legacy AGENT_CODE_SEARCH switch and the named
+    toolset arms (``toolsets.apply_arm``): both tools enabled, engine
+    stored, and the tool names appended to every phase's legacy tool list
+    (their notes then render into the system prompt automatically).
+    """
+    cfg.code_search.engine = engine
+    cfg.tools.code_search.enabled = True
+    cfg.tools.file_outline.enabled = True
+    _append_to_phases(cfg, ("code_search", "file_outline"))
+
+
+def _enable_forensics_tools(cfg: AgentConfig) -> None:
+    """Enable the forensics tool family (the +forensics arm mutation).
+
+    Mirrors :func:`_enable_search_tools`: tool enabled and its name
+    appended to every phase's legacy tool list. Deduped, so it is safe if
+    a phase list ever names it explicitly; toolless phases (empty tool
+    list) are never augmented.
+    """
+    cfg.tools.log_triage.enabled = True
+    _append_to_phases(cfg, ("log_triage",))
+
+
+def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
+    """Enable the MITRE KB tool (the +mitre-kb arm mutation).
+
+    Mirrors :func:`_enable_forensics_tools`: tool enabled and its name
+    appended to every phase's legacy tool list (its note then renders into
+    the system prompt automatically; the arm-gated KB prefix is appended in
+    ``runner._system_prompt``). Deduped, so it is safe if a phase list ever
+    names it explicitly; toolless phases (empty tool list) are never
+    augmented.
+    """
+    cfg.tools.mitre_kb.enabled = True
+    _append_to_phases(cfg, ("mitre_kb",))
+
+
+def _enable_recon_tools(cfg: AgentConfig) -> None:
+    """Enable the recon tool (the +recon arm mutation).
+
+    The v6 baseline already routes recon via [tool_policy]; on the packaged
+    config this dedupes to a no-op.
+    """
+    cfg.tools.recon.enabled = True
+    _append_to_phases(cfg, ("recon",))
+
+
+def _apply_read_only_arm(cfg: AgentConfig) -> None:
+    """Read-only arm mutation: read/write/edit + recon, NO bash.
+
+    The experiment arm proving recon is usable by an agent without a
+    code-execution channel (deliverable writing stays possible via
+    write/edit; 'read-only' = no bash, not a read-only filesystem).
+    Replaces the effective tool list of every active TOOLED phase (the
+    ``[tool_policy]`` entry when the phase has one, otherwise the legacy
+    ``[phases.<id>].tools``); disabled phases are never touched and a
+    toolless phase (the review relay) stays toolless under every arm.
+    """
+    cfg.tools.recon.enabled = True
+    for phase_id, phase in cfg.phases.items():
+        if cfg.tool_policy.is_disabled(phase_id):
+            continue
+        entry = cfg.tool_policy.phases.get(phase_id)
+        if entry is not None:
+            if not entry:
+                continue
+            entry[:] = ["read", "write", "edit", "recon"]
+        else:
+            if not phase.tools:
+                continue
+            phase.tools = ["read", "write", "edit", "recon"]
+
+
+def _apply_code_search_env(cfg: AgentConfig) -> None:
+    """Switch the code_search engine from AGENT_CODE_SEARCH (rg | sifs).
+
+    Unset or an invalid value leaves the config untouched (the packaged
+    baseline — SIFS BM25-offline — stays as loaded). Superseded by
+    AGENT_TOOLSET when that is set (see :func:`_apply_toolset_env`).
+    """
+    raw = os.environ.get(CODE_SEARCH_ENV)
+    if raw is None or not raw.strip():
+        return
+    engine = raw.strip().lower()
+    if engine not in CODE_SEARCH_ENGINES:
+        return  # invalid value: ignore, tools stay as configured
+    _enable_search_tools(cfg, engine)
+
+
+def _apply_toolset_env(cfg: AgentConfig) -> None:
+    """Arm selection: the AGENT_TOOLSET env var (named toolset arms).
+
+    When set (and non-empty) it is the SOLE driver of the arm mutation —
+    the legacy AGENT_CODE_SEARCH switch is skipped even if it is also set
+    (arm ``baseline`` is a no-op: the packaged config already carries the
+    baseline tool policy, so nothing to force). A valid arm applies its
+    config mutation and is recorded in ``cfg.arm``; an invalid value is
+    ignored (the config stays at the baseline) so arm selection can never
+    crash the run.
+    """
+    raw = os.environ.get(TOOLSET_ENV)
+    if raw is None or not raw.strip():
+        _apply_code_search_env(cfg)
+        return
+    from shlepa_agent.toolsets import apply_arm, resolve_arm
+
+    try:
+        arm = resolve_arm(raw)
+    except ValueError:
+        return
+    apply_arm(cfg, arm)
+
+
 def load_config(path: Path | str | None = None) -> AgentConfig:
     """Load the agent config: packaged config.toml + env overrides."""
     p = Path(path) if path else DEFAULT_CONFIG_PATH
     data = tomllib.loads(p.read_text(encoding="utf-8"))
     cfg = AgentConfig.model_validate(data)
     _apply_env_overrides(cfg)
+    _apply_toolset_env(cfg)
     return cfg

@@ -193,6 +193,8 @@ def test_plan_and_work_are_fresh_runs():
 
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
+    # the baseline tool policy: plan maps (no bash/writes), work executes
+    # (the only bash phase), review is toolless, emergency stays legacy.
     cfg = load_config()
     # v6: the plan phase is read-only (no bash/write/edit); work gains
     # recon + search (structured exploration). VERIFY (w2-4) is read-only:
@@ -294,13 +296,14 @@ def test_verify_prompt_is_fresh_not_transcript(monkeypatch, tmp_path):
     assert "secret work transcript content" not in prompt
 
 
-def test_plan_prompt_addresses_named_failures():
-    # w2-8: the fresh PLAN is instructed to address the named failures from
-    # the previous review first.
+def test_plan_prompt_addresses_named_problems():
+    # w2-8: the fresh PLAN is instructed to address the problems named by
+    # the previous review relay first.
     from shlepa_agent.template import load_prompt
 
     prompt = load_prompt("plan.md")
-    assert "address each named failure FIRST" in prompt
+    assert "address each named problem" in prompt
+    assert "FIRST — it is the reason the run came back" in prompt
 
 
 def test_commit_prompt_binary_framing():

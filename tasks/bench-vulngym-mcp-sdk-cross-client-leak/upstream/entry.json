@@ -1,0 +1,61 @@
+{
+  "commit": "50d9fa3cd12e807e7963bcb9e1548786d3d5d941",
+  "critical_operation": {
+    "code": "        const streamId = this._requestToStreamMapping.get(requestId);",
+    "desc": "_requestToStreamMapping.get(requestId) 依据 JSON-RPC requestId 在实例级映射表中查找对应的 streamId，决定将响应写入哪条 HTTP 连接。当并发请求发生 ID 碰撞时，此处返回错误客户端的 streamId，响应最终被路由至无关连接，构成跨客户端数据泄露的终点。",
+    "file": "src/server/webStandardStreamableHttp.ts",
+    "line": 938
+  },
+  "entry_id": "entry-00114",
+  "entry_point": {
+    "code": "    async handleRequest(req: Request, options?: HandleRequestOptions): Promise<Response> {",
+    "desc": "handleRequest 是 WebStandardStreamableHTTPServerTransport 对外暴露的请求处理入口，每次 HTTP 请求到来时均直接进入同一实例的处理逻辑。由于缺少实例复用守卫，并发请求将共享 _requestToStreamMapping 等实例级状态，这是跨客户端路由混乱的起点。",
+    "file": "src/server/webStandardStreamableHttp.ts",
+    "line": 321
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "typescript-sdk",
+  "repo_url": "https://github.com/modelcontextprotocol/typescript-sdk",
+  "report_id": "GHSA-345P-7CG4-V4C7",
+  "source_link": "https://github.com/advisories/GHSA-345p-7cg4-v4c7",
+  "trace": [
+    {
+      "code": "    async handleRequest(req: Request, options?: HandleRequestOptions): Promise<Response> {",
+      "desc": "handleRequest 作为 trace 起点，接收来自任意 HTTP 客户端的请求并进入实例内部处理分支。由于同一 WebStandardStreamableHTTPServerTransport 实例可被并发调用，多条执行路径将同步进入后续状态写入流程，为 streamId 分配与映射表竞争埋下隐患。",
+      "file": "src/server/webStandardStreamableHttp.ts",
+      "line": 321
+    },
+    {
+      "code": "            const streamId = crypto.randomUUID();",
+      "desc": "crypto.randomUUID() 为当前请求处理分支生成唯一的 streamId，用于标识该请求对应的 HTTP 响应流。此时 streamId 尚未写入映射表，紧接着将由 _requestToStreamMapping.set 完成注册；在并发场景下，若两个请求持有相同的 message.id，后续写入将互相覆盖，为错误路由创造条件。",
+      "file": "src/server/webStandardStreamableHttp.ts",
+      "line": 678
+    },
+    {
+      "code": "                            this._requestToStreamMapping.set(message.id, streamId);",
+      "desc": "_requestToStreamMapping.set(message.id, streamId) 将当前消息的 JSON-RPC ID 与刚分配的 streamId 写入实例级映射表。由于 _requestToStreamMapping 为实例共享字段，并发请求若携带相同的 message.id，此处的写操作将覆盖前一请求已建立的映射，使被覆盖请求的响应在查找阶段被错误关联至本次 streamId。",
+      "file": "src/server/webStandardStreamableHttp.ts",
+      "line": 700
+    },
+    {
+      "code": "                    this._requestToStreamMapping.set(message.id, streamId);",
+      "desc": "_requestToStreamMapping.set(message.id, streamId) 在另一处处理分支中同样向实例级映射表写入 message.id 到 streamId 的绑定关系。与前一处写入共同覆盖了单消息与批量消息两条路径；当多个客户端请求并发执行时，两处写入均无锁保护，任一路径发生 ID 碰撞都将污染映射表，进而在响应查找时引发错误路由。",
+      "file": "src/server/webStandardStreamableHttp.ts",
+      "line": 751
+    },
+    {
+      "code": "        const streamId = this._requestToStreamMapping.get(requestId);",
+      "desc": "随后，_requestToStreamMapping.get(requestId) 依据响应关联的 requestId 检索 streamId，将响应数据写入对应的 HTTP 流。经过前序步骤的映射表写入后，若存在 ID 碰撞，此处获取到的 streamId 已指向错误客户端的连接，最终使私有响应内容跨客户端泄露，这是整条漏洞路径的最后一步。",
+      "file": "src/server/webStandardStreamableHttp.ts",
+      "line": 938
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "业务逻辑",
+  "vuln_category_l2": "BL-RACE-LOGIC(业务层竞争条件)",
+  "vuln_ids": [
+    "CVE-2026-25536",
+    "GHSA-345P-7CG4-V4C7"
+  ],
+  "vuln_title": "@modelcontextprotocol/sdk 跨客户端数据泄露（共享 Server/Transport 实例复用）（CVE-2026-25536） - webStandardStreamableHttp.ts"
+}

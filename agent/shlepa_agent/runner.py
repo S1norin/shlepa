@@ -159,10 +159,12 @@ def _stamp_final_ask(span: Any, *, ok: bool, text: str = "",
         pass
 
 FINAL_ASK_MESSAGE = (
-    "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. Write the final "
-    "deliverable NOW to the exact path in the exact format using only the "
-    "information you already have. Do not call any tools and do not think "
-    "any further: reply with one short line naming the deliverable path."
+    "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. You have no tools "
+    "now: if the deliverable file is already on disk, reply with one short "
+    "line naming its path and stating what in it is complete or missing. If "
+    "it is not complete, still name the path and state exactly what is "
+    "missing — the review phase reads only this transcript and cannot check "
+    "the disk itself. Do not call any tools and do not think any further."
 )
 
 
@@ -232,14 +234,39 @@ def _is_handoff_error(exc: BaseException) -> bool:
 
 
 def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
-    """Render the common system message for a phase (base + tools + task)."""
+    """Render the common system message for a phase (base + tools + task).
+
+    The ``system`` block carries a ``{recon}`` placeholder that resolves
+    to the recon prompt variant selected by the resolved tools: the tool
+    variant (``recon_tool.md``) when the phase has the recon tool (the
+    baseline plan/work), the script variant (``recon_script.md``) when it
+    has no recon but does have other tools, and NOTHING at all for a
+    toolless phase (the baseline review judges from the transcript and
+    has no recon to talk about).
+
+    The +mitre-kb arm additionally appends the KB prefix (the full
+    technique index + old->new alias map, ~10K tokens of static, stable
+    content) to the tools block (the decision record, Option 3).
+    """
     tools = get_tools(agent_cfg, phase.tools(agent_cfg))
+    tools_block = "\n".join(f"- {tool.note}" for tool in tools)
+    if any(tool.name == "mitre_kb" for tool in tools):
+        from shlepa_agent.mitre_kb import kb_prefix
+
+        tools_block += "\n\n" + kb_prefix()
+    if tools:
+        variant = "recon_tool.md" if any(t.name == "recon" for t in tools) else "recon_script.md"
+        recon_block = load_prompt(variant)
+    else:
+        # A toolless phase (the baseline review) gets no recon block at all.
+        recon_block = ""
+    system_block = load_prompt("base.md").replace("{recon}", recon_block)
     return render_system(
         agent_cfg,
         phase.id,
         {
-            "system": load_prompt("base.md"),
-            "tools": "\n".join(f"- {tool.note}" for tool in tools),
+            "system": system_block,
+            "tools": tools_block,
             "task": task,
         },
     )
@@ -266,6 +293,10 @@ def build_phase_agent(
         model,
         deps_type=AgentDeps,
         system_prompt=_system_prompt(agent_cfg, phase, task),
+        # Named after the phase so the instrumentation's agent-run spans
+        # are 'invoke_agent <phase-id>' (per-phase token attribution) instead
+        # of indistinguishable 'invoke_agent agent' spans. Issue #72.
+        name=phase.id,
         **kwargs,
     )
     if instrument:
@@ -340,6 +371,9 @@ async def _run_phase(
     # reserve can disable exploratory calls (bash/search/recon) in the
     # last R seconds of the cap.
     state.deps = replace(state.deps, phase_window=PhaseWindow(phase.id, cap, t0))
+    # Tag this run's usage events with the phase id (per-phase token
+    # attribution for the CLI); rotated on every phase run, incl. retries.
+    model.current_phase = phase.id
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort
@@ -1116,6 +1150,9 @@ async def run_prompt(
             prompt=prompt,
             # reported only when it is actually sent to the endpoint (#65)
             **({"temp": cfg.agent.temp} if cfg.agent.send_temp else {}),
+            # named toolset arm (agent/shlepa_agent/toolsets.py); the
+            # default baseline keeps the log byte-identical
+            **({"arm": cfg.arm} if cfg.arm != "baseline" else {}),
             entry=entry,
             emergency=cfg.agent.emergency,
             # Fixed regime (additive, CLI ignores unknown fields):

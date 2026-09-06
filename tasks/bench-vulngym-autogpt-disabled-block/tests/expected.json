@@ -1,0 +1,16 @@
+{
+  "type_aliases": ["authorization bypass", "capability bypass", "access control", "cwe-284", "cwe-862"],
+  "severities": ["high", "critical"],
+  "entry_point": {"file": "autogpt_platform/backend/backend/api/features/v1.py", "start": 361, "end": 361},
+  "critical_operation": {"file": "autogpt_platform/backend/backend/api/features/v1.py", "start": 375, "end": 375},
+  "minimum_flow_nodes": 3,
+  "flow_landmarks": [
+    {"file": "autogpt_platform/backend/backend/api/features/v1.py", "start": 361, "end": 361},
+    {"file": "autogpt_platform/backend/backend/api/features/v1.py", "start": 364, "end": 364},
+    {"file": "autogpt_platform/backend/backend/api/features/v1.py", "start": 375, "end": 375}
+  ],
+  "source_sha256": {
+    "autogpt_platform/backend/backend/api/features/v1.py": "096e36c69a0d9255a1b65124b9c5c934f90754ec3346b3db9ff3d28b7561fefd"
+  }
+}
+

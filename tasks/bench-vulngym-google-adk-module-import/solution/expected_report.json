@@ -1,0 +1,19 @@
+{
+  "vulnerability_found": true,
+  "vulnerability_type": "CWE-94 code injection through arbitrary module import",
+  "severity": "critical",
+  "entry_point": {"file": "src/google/adk/cli/adk_web_server.py", "line": "972-974"},
+  "critical_operation": {"file": "src/google/adk/cli/utils/agent_loader.py", "line": 74},
+  "data_flow": [
+    {"file": "src/google/adk/cli/adk_web_server.py", "line": "972-974"},
+    {"file": "src/google/adk/cli/adk_web_server.py", "line": 687},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "line": 330},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "line": 190},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "line": "66-68"},
+    {"file": "src/google/adk/cli/utils/agent_loader.py", "line": 74}
+  ],
+  "root_cause": "An unauthenticated path parameter is propagated as an agent name into importlib.import_module without an allowlist or trusted-root restriction.",
+  "impact": "A remote unauthenticated caller can select an importable module whose top-level behavior executes code in the ADK web server process.",
+  "recommendation": "Authenticate development endpoints and resolve agents only from a pre-enumerated trusted registry instead of importing caller-controlled names."
+}
+

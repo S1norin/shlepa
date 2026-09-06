@@ -1,7 +1,7 @@
 # Shlepa dev-agent instructions
 
 Repository for **Shlepa** — a security agent for the Universal Agent
-Competition. Conversation with the user is in Russian; **all repo
+Competition. Conversation with the user in their language; **all repo
 files, code, comments, docs and commit messages are in English**.
 
 ## Repo map
@@ -25,8 +25,9 @@ files, code, comments, docs and commit messages are in English**.
 | command | what it does |
 |---------|--------------|
 | `shlepa doctor [--probe]` | hard env checks (LLM endpoint + model match, MLflow, docker); `--probe` sends one real LLM request. Exit 0/1/2. |
-| `shlepa run [preset] [--dry-run]` | dev experiment loop: per task build env+dev images, run the agent **inside** the container (`/app`, `--network host`), score via `tests/test.sh` → `reward.txt`, log to MLflow (runs tagged `batch_id`/`mlflow_trace_id` when telemetry is on). `SLEPA_NO_DOCKER=1` switches to the legacy host-agent mode. |
+| `shlepa run [preset] [--dry-run] [--arm <arm>]` | dev experiment loop: per task build env+dev images, run the agent **inside** the container (`/app`, `--network host`), score via `tests/test.sh` → `reward.txt`, log to MLflow (runs tagged `batch_id`/`mlflow_trace_id` when telemetry is on). `SLEPA_NO_DOCKER=1` switches to the legacy host-agent mode. `--arm <arm>` selects a named toolset arm on top of the baseline (the packaged config, which ships `recon` + code search (rg engine) in plan/work and a toolless review): `baseline` (no-op); `+smart-grep` (pin code_search to ripgrep); `+sifs` (code_search over SIFS); `+forensics` (log_triage); `+mitre-kb` (mitre_kb tool + KB index prefix); `+recon` (no-op — recon is baseline; the recon prompt block is the tool variant in the tooled phases); `read-only` (read/write/edit + recon, no bash) — the registry in `agent/shlepa_agent/toolsets.py` is the single source); flag > `AGENT_TOOLSET` env > `baseline`, passed into the container as `AGENT_TOOLSET`, and every MLflow run is tagged `toolset=<arm>`. |
 | `shlepa trace-export --batch <id>` | export a batch's agent traces from the MLflow trace experiment: `manifest.jsonl`, per-task trace JSON + Markdown digests, `summary.md` (LLM-readable failure analysis). |
+| `shlepa search-bench [--families …] [--engines …]` | research harness: measure search engines (read-all baseline, rg, sifs bm25) on the annotated query set (`research/code_search/analysis/queries.json`) plus a generated 10k-file corpus; emits a CSV + markdown report to `research/code_search/analysis/`. |
 | `shlepa smoke` | fail-fast end-to-end check: doctor → `contest-hello-file` → MLflow run exists. Exit 0/1. |
 | `shlepa submit-test [--ci]` | strict contest-faithful test via Harbor inside the acp container (planned in CI). |
 | `shlepa zip [--register]` | build the flat submission zip (telemetry/tests/pyproject stripped, ≤10MB); `--register` logs it + full source tarball to MLflow and creates a `shlepa` model version. |
@@ -77,7 +78,11 @@ See `.env.example` for the full list; `.env` itself is gitignored.
 - Experiment name = task **family** derived from the slug
   (`bench-<x>-*` → `bench-<x>`, `contest-*` → `contest`, otherwise the
   first dash component, fallback `misc`); run name = task display name;
-  metrics: `duration_sec`, `tokens_in/out/total`, `tool_calls`, `solved`;
+  metrics: `duration_sec`, `tokens_in/out/total`,
+  `tokens_cache_read`/`tokens_cache_write` (0 when the endpoint does not
+  report cache), per-phase `tokens_in.<phase>`/`tokens_out.<phase>`/
+  `tokens_cache_read.<phase>` (only for phases that ran; the sum of
+  `tokens_in.<phase>` equals `tokens_in`), `tool_calls`, `solved`;
   tags: `preset`, `model`, `agent_version`, `git_sha`, `endpoint_class`
   (the preset stays a tag, so preset-scoped filtering still works).
   Legacy preset-named experiments (`all`, `ctf`, `socbench`, …) are kept
@@ -100,11 +105,25 @@ See `.env.example` for the full list; `.env` itself is gitignored.
   MLflow runs with `batch_id` + `mlflow_trace_id`; the agent's root span
   carries `shlepa.batch_id`/`shlepa.preset`/`git.commit`/`task` and, when
   the run doesn't finish cleanly, `shlepa.termination_reason`
-  (`timeout`/`crash`).
+  (`timeout`/`crash`). The root span also accumulates the run's token
+  totals: `shlepa.llm.cumulative_prompt_tokens`/
+  `shlepa.llm.cumulative_completion_tokens`/
+  `shlepa.llm.cumulative_cache_read_tokens`/
+  `shlepa.llm.cumulative_cache_write_tokens` (cache attributes only when
+  non-zero). Each phase runs under a phase-labeled
+  `invoke_agent <phase-id>` span carrying the phase's cumulative
+  `gen_ai.aggregated_usage.*` token attributes.
+- Per-phase metrics in a run come from usage events tagged with the
+  phase id by the runner (`runner.py` sets it on the shared model before
+  each phase); the same phase names appear in the trace spans, so the
+  MLflow per-phase metrics and the trace-export per-phase table can be
+  cross-checked.
 - Second-LLM analysis workflow: `shlepa trace-export --batch <id>` writes
-  `manifest.jsonl` (one line per task: state, tokens, signal tags),
+  `manifest.jsonl` (one line per task: state, tokens, `tokens_cache_read`
+  and `phase_tokens` when available, signal tags),
   per-task `traces/<task>.json` (full dump) and `digests/<task>.md`
-  (compact timeline + failure signals), plus `summary.md`. Feed the
+  (compact timeline, cache-read + per-phase token summary, failure
+  signals), plus `summary.md`. Feed the
   analysis LLM the **manifest + digests first** (cheap, one context each);
   pull the full `traces/<task>.json` only for tasks flagged in the
   manifest (loop / tool_errors / repeated_results signals, or state !=

@@ -1,0 +1,4 @@
+name: ctf-fc
+tasks:
+  - bench-ctf-smug-dino
+  - bench-ctf-whyos

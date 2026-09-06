@@ -126,3 +126,19 @@ def test_recon_data_mode_read_only_on_fixture_tree(tmp_path):
         for p in fixture.rglob("*") if p.is_file()
     }
     assert before == after  # read-only by construction
+
+
+def test_recon_routed_to_plan_work_only_in_baseline():
+    # Merged baseline: the packaged config routes recon to plan/work; the
+    # toolless review relay, the disabled commit verifier and legacy
+    # emergency never get it.
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.tools import get_tools
+
+    cfg = load_config()
+    for phase_id in ("plan", "work"):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "recon" in names
+    for phase_id in ("review", "commit", "emergency"):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "recon" not in names

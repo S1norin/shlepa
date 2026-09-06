@@ -51,6 +51,10 @@ plan ──> work ──> review (relay) ──> plan ──> work ──> exit
                                toolless, typed)           the run ends here)
 ```
 
+The plan has no shortcut around work: the `PlanResult` schema carries no
+routing field, and the runner **always routes plan → work** (the plan phase
+has no write tools and can never deliver anything).
+
 | Phase      | Fresh/continued | Output         | Hard time cap | Retries | Reasoning |
 |------------|-----------------|----------------|---------------|---------|-----------|
 | `plan`     | fresh run (cycle ≥ 2: + previous work result + relay) | `PlanResult` (typed) | 30s (`SHLEPA_PLAN_TIME`) | 1 | — |
@@ -133,6 +137,29 @@ Routing rules (runner, v6-rewrite):
   (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
   the task workdir; the structured bridge between phases and cycles.
 
+## Baseline tool policy (v5.1)
+
+The packaged `config.toml` **is** the baseline (the `baseline` arm is a
+no-op on top of it):
+
+| Phase      | Tools                                                        | Notes |
+|------------|--------------------------------------------------------------|-------|
+| `plan`     | `read`, `recon`, `code_search`, `file_outline`               | maps and plans only — **no bash, no writes** |
+| `work`     | `read`, `write`, `edit`, `bash`, `recon`, `code_search`, `file_outline` | the only phase with **bash** and the only phase that writes the deliverable |
+| `commit`   | — (toolless)                                                 | the review judge; empty tool list, never augmented by arms/env |
+| `emergency`| `read`, `write`, `edit`, `bash` (legacy, unused)             | arm additions still land here (deduped, harmless) |
+
+- `recon` ships in the baseline, so the recon prompt block renders the
+  **tool variant** (`recon_tool.md`) in the tooled phases; the toolless
+  review renders no recon block at all. The script variant
+  (`recon_script.md`) remains for phases without the recon tool (e.g. the
+  read-only arm's phases).
+- The arms are now **engine/variant switches on top of the baseline**:
+  `+smart-grep` pins the search engine to `rg` (the baseline default),
+  `+sifs` to SIFS, `+forensics`/`+mitre-kb` add their tool to every tooled
+  phase, `+recon` is a no-op (recon is baseline), `read-only` replaces the
+  tooled phases with read/write/edit + recon (no bash).
+
 ## Env-var overrides
 
 | Env var | Config key | Type |
@@ -150,6 +177,7 @@ Routing rules (runner, v6-rewrite):
 | `SHLEPA_READ_MAX_OUTPUT` | `tools.read.max_output` | int |
 | `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 45s) | float |
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
+| `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
 | `SHLEPA_PLAN_TIME` | `phases.plan.time` (default: plan cap 30s) | float |
 | `SHLEPA_SEARCH` | `tools.search.enabled` | 1/0 (bool; 0 disables the search tool) |
 | `SHLEPA_MAX_CYCLES` | `agent.max_cycles` | int ≥ 1: the hard plan/work cycle count (default 2) |
@@ -160,6 +188,26 @@ Routing rules (runner, v6-rewrite):
 
 Model/endpoint variables are unchanged (set by the harness, not the
 config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
+
+### AGENT_CODE_SEARCH (deliberate `AGENT_*` exception)
+
+Dev switch for the code-search engine (the legacy `AGENT_*` set was
+dropped in v2; this one is wired on purpose). Values: `rg` (ripgrep
+fixed-string scan) or `sifs` (bundled SIFS binary, BM25-offline;
+`agent/tools/bin/sifs`). The baseline ships search **on** with the `rg`
+engine; the switch only pins the engine. Unset or an invalid value: the
+packaged baseline stays as-is (search on, `rg`), byte-identical to the
+golden fixture (`agent/tests/fixtures/default_prompt.txt`). When set, the
+config layer stores the engine (`code_search.engine`) and appends
+`code_search` + `file_outline` to every tooled phase (deduped; the
+toolless review is never augmented).
+Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
+BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
+model, dev only); a missing/broken SIFS binary degrades to rg/regex with a
+NOTE line (never crash). Each call runs under a per-call wall
+(`tools.code_search.timeout`, default 30s — the v5 regime bash cap).
+Shaped for the named toolset arms (#51): an arm is exactly this config
+mutation.
 
 ## Bounds: hard vs advisory
 
@@ -172,6 +220,27 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
   cycle count (`SHLEPA_MAX_CYCLES`) and the optional step guard.
 - **Hard, enforced by the environment**: the container kill at the
   task's own time limit — the only external bound on the cycles.
+- **External budget — developer-owned, never agent-visible**: each task
+  has an official **time limit** (the container kill) and **token limit**
+  (contest README: *"Each task has its own token and time limits"*). The
+  budget value is unknown to the agent runtime — T is not exposed
+  (issue #63) and the token limit is not surfaced at all — and may be
+  configured per task by the developer. A global deadline or a global
+  token budget inside the agent would therefore be pure guessing — there
+  is no point in them. The system accounts for the budget without the
+  agent ever knowing about it:
+  - *system side*: every operation that can run a long time or forever is
+    capped locally (the caps above — phase caps, bash 30s, LLM wall 180s,
+    file tools 5s, code_search 30s per call); per-phase token metrics are
+    logged to MLflow so the developer can watch consumption against the
+    budget; and the work phase keeps the deliverable file fresh on disk,
+    so whichever external cut happens first, a partial deliverable —
+    never an empty one — is what scores;
+  - *agent side*: the agent's prompt mentions only local per-operation
+    caps — never external limits, remaining budget, or budget pressure.
+    No prompt, tool output, or phase message may tell the agent it is
+    tight on budget. (The legacy `emergency` phase, unused in v5, was
+    reworded to carry no deadline language for the same reason.)
 - **Advisory (rendered into prompts/status, never enforced)**:
   per-phase `soft_time`/`soft_tokens` (`plan`: 25s/15k, `work`: 105s — no
   token note for work, `commit`: 35s/20k; every soft time stays under its

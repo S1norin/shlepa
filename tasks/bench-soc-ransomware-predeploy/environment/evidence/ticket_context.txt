@@ -1,0 +1,1 @@
+EDR grouped off-hours discovery, backup administration, and persistence alerts from WS-ACCT-05. No maintenance or penetration test is registered for this host or account.

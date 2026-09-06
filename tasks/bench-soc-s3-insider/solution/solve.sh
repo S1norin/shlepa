@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cat > /app/report.json <<'JSON'
+{
+  "verdict": "TRUE_POSITIVE_INCIDENT",
+  "primary_mitre_technique": "T1537",
+  "compromised_hosts": ["WS-HR-14"],
+  "compromised_accounts": ["m.jones"],
+  "key_indicators": ["PutBucketPolicy", "corp-sensitive-data-prod", "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}" ]
+}
+JSON

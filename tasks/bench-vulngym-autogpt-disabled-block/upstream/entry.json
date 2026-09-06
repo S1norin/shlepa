@@ -1,0 +1,49 @@
+{
+  "commit": "f0c25036082a5e53650ae7230bcfcf9309bbb5d5",
+  "critical_operation": {
+    "code": "        async for name, data in obj.execute(",
+    "desc": "该语句以异步迭代方式调用 block 实例的 execute 方法，将用户控制的输入数据直接传入 block 内部执行逻辑，是整条漏洞链路的最终 sink。此处 obj 的 disabled 属性从未被校验，使得危险 block 的 run 方法可以服务进程权限执行调用方提供的任意代码，RCE 在此处实现。",
+    "file": "autogpt_platform/backend/backend/api/features/v1.py",
+    "line": 375
+  },
+  "entry_id": "entry-00097",
+  "entry_point": {
+    "code": "async def execute_graph_block(",
+    "desc": "该函数是 Web API 中 POST /blocks/{block_id}/execute 路由的异步处理函数，接收 block_id 与用户输入数据。函数只校验请求用户的存在性，未对 block 的 disabled 状态进行任何检查；漏洞利用链路由此起始，任何通过认证的用户均可将执行请求导入后续调用流程。",
+    "file": "autogpt_platform/backend/backend/api/features/v1.py",
+    "line": 361
+  },
+  "origin": "GitHub Advisory Database (reviewed)",
+  "project": "AutoGPT",
+  "repo_url": "https://github.com/Significant-Gravitas/AutoGPT",
+  "report_id": "GHSA-R277-3XC5-C79V",
+  "source_link": "https://github.com/advisories/GHSA-r277-3xc5-c79v",
+  "trace": [
+    {
+      "code": "async def execute_graph_block(",
+      "desc": "漏洞调用链起始于此：execute_graph_block 作为 HTTP 处理函数接收外部请求，是调用栈最顶层的 caller。随后控制流向下传递至 block 实例化与执行阶段，整条链路中不存在任何对 disabled 标志的检查与拦截。",
+      "file": "autogpt_platform/backend/backend/api/features/v1.py",
+      "line": 361
+    },
+    {
+      "code": "    obj = get_block(block_id)",
+      "desc": "随后，execute_graph_block 调用 get_block(block_id)，以 block_id 从全局注册表中实例化对应的 block 对象；该函数仅执行 ID 查找，不过滤 disabled=True 的条目。返回的 obj 已携带 disabled 属性却未经拦截，控制流继续向下流向最终的 execute 调用。",
+      "file": "autogpt_platform/backend/backend/api/features/v1.py",
+      "line": 364
+    },
+    {
+      "code": "        async for name, data in obj.execute(",
+      "desc": "在调用栈下游，obj.execute 被异步迭代调用，用户提交的输入数据作为参数传入 block 实例的执行逻辑，是调用链中用户数据与危险操作的汇合点。由 execute_graph_block 发起、经 get_block 取得的 block 对象在此处完成实际执行，disabled 标志校验的缺失在此处最终导致代码注入。",
+      "file": "autogpt_platform/backend/backend/api/features/v1.py",
+      "line": 375
+    }
+  ],
+  "verify": 1,
+  "vuln_category_l1": "业务逻辑",
+  "vuln_category_l2": "BL-AGENT-CAPABILITY(AI/Agent能力边界绕过)",
+  "vuln_ids": [
+    "CVE-2026-24780",
+    "GHSA-R277-3XC5-C79V"
+  ],
+  "vuln_title": "AutoGPT BlockInstallationBlock 禁用绕过导致远程代码执行 - v1.py"
+}

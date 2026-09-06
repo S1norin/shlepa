@@ -1,0 +1,473 @@
+{
+  "scenario_id": "SCN-025",
+  "title": "S3 bucket policy weakened to public access by insider",
+  "description": "Scenario 25: S3 bucket policy weakened to public access by insider. Generated from template TMPL-CLOUD-003.",
+  "soc_tier": "tier2",
+  "difficulty": "medium",
+  "attack_duration_minutes": 54,
+  "dwell_time_minutes": 2639,
+  "mitre_techniques": [
+    "T1537",
+    "T1098"
+  ],
+  "primary_skills_tested": [
+    "LA-04",
+    "IA-04",
+    "FP-04"
+  ],
+  "log_sources_present": [
+    "aws_cloudtrail"
+  ],
+  "environment": {
+    "domain": "corp.local",
+    "dc": "DC01.corp.local",
+    "attacker_host": "WS-HR-14",
+    "victim_user": "m.jones",
+    "seed": 67
+  },
+  "telemetry": {
+    "aws_cloudtrail": [
+      {
+        "timestamp": "2026-04-16T09:02:13.000Z",
+        "eventSource": "s3.amazonaws.com",
+        "eventName": "PutBucketPolicy",
+        "sourceIPAddress": "10.10.5.162",
+        "userIdentity": {
+          "type": "IAMUser",
+          "userName": "m.jones"
+        },
+        "requestParameters": {
+          "bucketName": "corp-sensitive-data-prod",
+          "bucketPolicy": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\"}]}"
+        },
+        "ground_truth_label": "malicious",
+        "analyst_note": "S3 bucket policy set to allow public Principal * \u2014 insider data exposure."
+      }
+    ],
+    "background_noise": [
+      {
+        "timestamp": "2026-04-16T09:55:44.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-06",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:43:45.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:06:02.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:29:35.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T12:27:00.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:07:17.000Z",
+        "type": "dns_query",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:53:11.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-14",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:22:23.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:05:50.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T12:14:21.000Z",
+        "type": "windows_update",
+        "host": "WS-MKT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:22:34.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:48:15.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:09:46.000Z",
+        "type": "dns_query",
+        "host": "WS-FIN-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:43:28.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:17:29.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:44:03.000Z",
+        "type": "windows_update",
+        "host": "WS-FIN-04",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:53:33.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:17:55.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:54:03.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-17",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:02:52.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:45:10.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:19:41.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:15:13.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-ENG-10",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:21:18.000Z",
+        "type": "windows_update",
+        "host": "WS-IT-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:41:11.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:54:01.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T12:43:04.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:41:04.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:53:11.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:54:11.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T12:38:03.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:10:21.000Z",
+        "type": "app_logon",
+        "host": "WS-FIN-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:51:48.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:10:49.000Z",
+        "type": "app_logon",
+        "host": "WS-HR-01",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:21:53.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-HR-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:53:15.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:24:58.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-IT-02",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:23:55.000Z",
+        "type": "av_scan",
+        "host": "WS-MKT-03",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:44:48.000Z",
+        "type": "dns_query",
+        "host": "WS-MKT-07",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:14:17.000Z",
+        "type": "app_logon",
+        "host": "WS-IT-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:45:53.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:02:14.000Z",
+        "type": "av_scan",
+        "host": "WS-FIN-20",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T11:48:15.000Z",
+        "type": "av_scan",
+        "host": "WS-IT-08",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T09:03:50.000Z",
+        "type": "windows_update",
+        "host": "WS-ENG-18",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T07:51:56.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-MKT-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:14:39.000Z",
+        "type": "app_logon",
+        "host": "WS-ENG-12",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:25:16.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-05",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:49:54.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-16",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:43:16.000Z",
+        "type": "windows_update",
+        "host": "WS-HR-15",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:40:28.000Z",
+        "type": "scheduled_task_run",
+        "host": "WS-FIN-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T08:45:14.000Z",
+        "type": "av_scan",
+        "host": "WS-ENG-13",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      },
+      {
+        "timestamp": "2026-04-16T10:30:01.000Z",
+        "type": "dns_query",
+        "host": "WS-ENG-09",
+        "description": "Routine background activity",
+        "ground_truth_label": "benign"
+      }
+    ]
+  },
+  "ground_truth": {
+    "verdict": "TRUE_POSITIVE_INCIDENT",
+    "attack_chain": [
+      "T1537: S3 bucket policy weakened to public access by insider",
+      "T1098: S3 bucket policy weakened to public access by insider"
+    ],
+    "compromised_accounts": [
+      "m.jones"
+    ],
+    "compromised_hosts": [
+      "WS-HR-14"
+    ],
+    "root_cause": "Insufficient security controls",
+    "blast_radius": "Multi-host potential",
+    "containment_steps": [
+      "Isolate compromised host from network",
+      "Reset compromised credentials",
+      "Review peer hosts for lateral spread",
+      "Implement detection rule for observed TTP"
+    ],
+    "detection_improvements": [
+      "Create Sigma rule detecting T1537"
+    ]
+  },
+  "scoring_rubric": {
+    "max_score": 100,
+    "sections": {
+      "threat_identification": {
+        "weight": 25,
+        "criteria": [
+          "Correctly identify attack TTP: 25pts"
+        ]
+      },
+      "evidence_correlation": {
+        "weight": 30,
+        "criteria": [
+          "Link malicious events into coherent attack chain: 30pts"
+        ]
+      },
+      "impact_assessment": {
+        "weight": 20,
+        "criteria": [
+          "Identify compromised accounts and hosts: 20pts"
+        ]
+      },
+      "remediation": {
+        "weight": 15,
+        "criteria": [
+          "Provide actionable containment steps: 15pts"
+        ]
+      },
+      "false_positive_handling": {
+        "weight": 10,
+        "criteria": [
+          "Correctly classify scenario type without flagging benign events: 10pts"
+        ]
+      }
+    }
+  }
+}
