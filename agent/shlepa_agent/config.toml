@@ -62,12 +62,42 @@ enabled = true
 enabled = true
 max_file_mb = 100.0
 
+[tools.recon]
+# Attack-surface recon (deterministic JSON, no LLM): ON in the baseline —
+# plan/work get it (see [phases.*].tools). The per-call timeout is the
+# v5-regime bash cap; the web engine has its own 25s internal deadline.
+# The engine render is hard-capped at 8192 bytes.
+enabled = true
+timeout = 30.0
+max_output = 8192
+
+[tools.code_search]
+# Code search (rg | sifs engines, see [code_search]): ON in the baseline.
+# The per-call timeout bounds an oversized scan.
+enabled = true
+timeout = 30.0
+max_output = 16000
+
+[tools.file_outline]
+# Symbol outline of one file (def/class/func + line ranges): ON in the
+# baseline, paired with code_search.
+enabled = true
+max_output = 8000
+
+[code_search]
+# Default search engine for the baseline: ripgrep (preinstalled in the
+# submission image). AGENT_CODE_SEARCH / the +smart-grep / +sifs arms can
+# switch the engine at load time.
+engine = "rg"
+
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
 # structured plan. Hard cap is the fixed regime constant (plan = 60s,
 # budget.py). An explicit `time` value would override the cap (dev knob;
 # omitted here). Soft values are advisory (rendered into the prompt).
-tools = ["read", "write", "edit", "bash"]
+# Tool policy (baseline): read + recon + search only — NO bash, NO writes;
+# planning never mutates the environment.
+tools = ["read", "recon", "code_search", "file_outline"]
 requests = 25
 soft_time = 45.0
 soft_tokens = 15000
@@ -79,16 +109,20 @@ max_retries = 1
 # (work = 120s, budget.py; an explicit `time` would override it). The soft
 # time is advisory and stays under the hard cap; there is NO soft_tokens for
 # work (the "keep the output lean" note applies to plan/review only).
-tools = ["read", "write", "edit", "bash"]
+# Tool policy (baseline): the FULL set — file tools + bash (the only phase
+# with bash) + recon + search.
+tools = ["read", "write", "edit", "bash", "recon", "code_search", "file_outline"]
 requests = 100
 soft_time = 105.0
 max_retries = 1
 
 [phases.commit]
-# Terminal REVIEW phase: verify the deliverable mechanically, repair it if
-# broken, decide done|next_round. Hard cap is the fixed regime constant
-# (review = 45s, budget.py). The soft time stays UNDER the hard cap.
-tools = ["read", "write", "edit", "bash"]
+# Terminal REVIEW phase: toolless judge. It resumes the work transcript and
+# decides done|next_round WITHOUT any tools — it cannot repair anything; a
+# broken deliverable is fixed by the next plan/work cycle it routes to.
+# Hard cap is the fixed regime constant (review = 45s, budget.py). The soft
+# time stays UNDER the hard cap.
+tools = []
 requests = 20
 soft_time = 35.0
 soft_tokens = 20000

@@ -159,9 +159,21 @@ def test_plan_and_work_are_fresh_runs():
 
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
+    # the baseline tool policy: plan maps (no bash/writes), work executes
+    # (the only bash phase), review is toolless, emergency stays legacy.
     cfg = load_config()
-    for phase in (PlanPhase(), WorkPhase(), CommitPhase(), EmergencyPhase()):
-        assert phase.tools(cfg) == ["read", "write", "edit", "bash"]
+    assert PlanPhase().tools(cfg) == ["read", "recon", "code_search", "file_outline"]
+    assert WorkPhase().tools(cfg) == [
+        "read",
+        "write",
+        "edit",
+        "bash",
+        "recon",
+        "code_search",
+        "file_outline",
+    ]
+    assert CommitPhase().tools(cfg) == []  # toolless review
+    assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
 
 
 def test_phase_limits_from_config():

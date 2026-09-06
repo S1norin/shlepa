@@ -236,7 +236,29 @@ def test_off_by_default(monkeypatch):
     cfg = load_config()
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
-        assert list(cfg.phases[phase_id].tools) == BASE_TOOLS
+        # the baseline matrix (config.toml): plan read+search, work full+
+        # search, review toolless, legacy emergency four
+        if phase_id == "plan":
+            assert list(cfg.phases[phase_id].tools) == [
+                "read",
+                "recon",
+                "code_search",
+                "file_outline",
+            ]
+        elif phase_id == "work":
+            assert list(cfg.phases[phase_id].tools) == [
+                "read",
+                "write",
+                "edit",
+                "bash",
+                "recon",
+                "code_search",
+                "file_outline",
+            ]
+        elif phase_id == "commit":
+            assert list(cfg.phases[phase_id].tools) == []
+        else:
+            assert list(cfg.phases[phase_id].tools) == BASE_TOOLS
         prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
         assert "MITRE ATT&CK knowledge base" not in prompt
         assert "mitre_kb" not in prompt
@@ -250,7 +272,15 @@ def test_arm_env_enables_tool_and_prompt(monkeypatch):
     for phase_id in PHASES:
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
-        assert names == BASE_TOOLS + ["mitre_kb"]
+        if phase_id == "commit":
+            # the toolless review is never augmented
+            assert names == []
+            assert "mitre_kb" not in _system_prompt(cfg, phase, TASK)
+            continue
+        base = (BASE_TOOLS if phase_id == "emergency"
+                else ["read", "recon", "code_search", "file_outline"] if phase_id == "plan"
+                else ["read", "write", "edit", "bash", "recon", "code_search", "file_outline"])
+        assert names == base + ["mitre_kb"]
         prompt = _system_prompt(cfg, phase, TASK)
         assert "mitre_kb: search the pinned MITRE ATT&CK" in prompt
         assert "MITRE ATT&CK knowledge base" in prompt

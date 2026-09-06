@@ -44,9 +44,12 @@ is a dev knob to force `work`).
    ┌────────────────── next_round (always) ──────────────────┐
    ▼                                                        │
 plan ──> work ──> review (commit)   (terminal, typed ReviewResult)
-   │
-   └── decision=commit ──> review     (trivial-task shortcut)
 ```
+
+The plan has no shortcut around work: it returns `decision = work | commit`
+in the schema, but the runner **always routes plan → work** (the plan phase
+has no write tools and can never deliver anything; a hallucinated
+`decision = commit` is ignored).
 
 | Phase      | Fresh/continued | Output         | Hard time cap | Retries | Reasoning |
 |------------|-----------------|----------------|---------------|---------|-----------|
@@ -60,17 +63,20 @@ An explicit `[phases.*].time` overrides the regime cap for that phase
 
 Routing rules (runner):
 
-- `plan` returns a typed `PlanResult` with `decision = work | commit`.
-  `commit` is the trivial-task shortcut (the answer is already known); the
-  review phase then verifies it.
+- `plan` returns a typed `PlanResult` with `decision = work | commit`,
+  but the runner **always routes to work** — the plan phase has no write
+  tools and can never deliver the file itself, so the (legacy) trivial-task
+  shortcut is gone; a hallucinated `decision = commit` is ignored.
 - `work` returns a typed `WorkResult` (`summary`, `findings`,
   `deliverable`, `confidence`) — it has **no decision**: the run always
   continues to the review phase.
 - `review` (the commit phase) returns a typed `ReviewResult`
   (`status` ok/partial, `verdict` done/next_round, `artifact`, `checks`,
   `hints`, `notes`); the reported run output is `notes` (falling back to
-  `artifact`). The reviewer has full tools and verifies the deliverable
-  mechanically, repairing it if broken.
+  `artifact`). The reviewer is **toolless**: it judges the plan/work
+  transcript from the conversation alone — it cannot read files, run
+  checks, or repair anything. A broken deliverable is fixed by the next
+  plan/work round, not by the review.
 - **Cycle continuation**: a `verdict = next_round` **always** starts a new
   plan/work cycle (logged as a `cycle` event). There is no cycle cap and
   no time check — the container kill at the task's own limit is the only
@@ -94,6 +100,29 @@ Routing rules (runner):
   (elapsed, cycles, regime, per-phase results) to the run-state file
   (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
   the task workdir; the structured bridge between phases and cycles.
+
+## Baseline tool policy (v5.1)
+
+The packaged `config.toml` **is** the baseline (the `baseline` arm is a
+no-op on top of it):
+
+| Phase      | Tools                                                        | Notes |
+|------------|--------------------------------------------------------------|-------|
+| `plan`     | `read`, `recon`, `code_search`, `file_outline`               | maps and plans only — **no bash, no writes** |
+| `work`     | `read`, `write`, `edit`, `bash`, `recon`, `code_search`, `file_outline` | the only phase with **bash** and the only phase that writes the deliverable |
+| `commit`   | — (toolless)                                                 | the review judge; empty tool list, never augmented by arms/env |
+| `emergency`| `read`, `write`, `edit`, `bash` (legacy, unused)             | arm additions still land here (deduped, harmless) |
+
+- `recon` ships in the baseline, so the recon prompt block renders the
+  **tool variant** (`recon_tool.md`) in the tooled phases; the toolless
+  review renders no recon block at all. The script variant
+  (`recon_script.md`) remains for phases without the recon tool (e.g. the
+  read-only arm's phases).
+- The arms are now **engine/variant switches on top of the baseline**:
+  `+smart-grep` pins the search engine to `rg` (the baseline default),
+  `+sifs` to SIFS, `+forensics`/`+mitre-kb` add their tool to every tooled
+  phase, `+recon` is a no-op (recon is baseline), `read-only` replaces the
+  tooled phases with read/write/edit + recon (no bash).
 
 ## Env-var overrides
 
@@ -119,14 +148,16 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 
 ### AGENT_CODE_SEARCH (deliberate `AGENT_*` exception)
 
-Dev switch for the code-search toolset (the legacy `AGENT_*` set was
+Dev switch for the code-search engine (the legacy `AGENT_*` set was
 dropped in v2; this one is wired on purpose). Values: `rg` (ripgrep
 fixed-string scan) or `sifs` (bundled SIFS binary, BM25-offline;
-`agent/tools/bin/sifs`). Unset or an invalid value: the tools stay OFF
-and the agent is byte-identical to the baseline (golden fixture:
-`agent/tests/fixtures/default_prompt.txt`). When set, the config layer
-enables `code_search` + `file_outline` in every phase, stores the engine
-(`code_search.engine`), and the tool notes render into the system prompt.
+`agent/tools/bin/sifs`). The baseline ships search **on** with the `rg`
+engine; the switch only pins the engine. Unset or an invalid value: the
+packaged baseline stays as-is (search on, `rg`), byte-identical to the
+golden fixture (`agent/tests/fixtures/default_prompt.txt`). When set, the
+config layer stores the engine (`code_search.engine`) and appends
+`code_search` + `file_outline` to every tooled phase (deduped; the
+toolless review is never augmented).
 Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
 BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
 model, dev only); a missing/broken SIFS binary degrades to rg/regex with a

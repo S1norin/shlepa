@@ -82,10 +82,12 @@ class ToolsConfig(BaseModel):
     read: ToolConfig = ToolConfig(enabled=True, max_limit=100, max_output=4000)
     write: ToolConfig = ToolConfig()
     edit: ToolConfig = ToolConfig()
-    # Code-search tools: OFF by default. ``AGENT_CODE_SEARCH`` (rg | sifs)
-    # enables them and picks the engine (see _apply_code_search_env). The
-    # ``timeout`` is the per-call wall clock (the v5 regime bash cap; the
-    # engine's own 60s rg wall is too high for a tool call).
+    # Code-search tools: OFF in the model default, ON in the packaged
+    # baseline (config.toml) — the baseline ships recon + search in
+    # plan/work. ``AGENT_CODE_SEARCH`` / the search arms switch the engine
+    # (see _apply_code_search_env). The ``timeout`` is the per-call wall
+    # clock (the v5 regime bash cap; the engine's own 60s rg wall is too
+    # high for a tool call).
     code_search: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
     file_outline: ToolConfig = ToolConfig(enabled=False, timeout=30.0)
     # Forensics tools: OFF by default. The AGENT_TOOLSET=+forensics arm
@@ -98,12 +100,14 @@ class ToolsConfig(BaseModel):
     # per-call wall safety net (the in-memory search is sub-millisecond);
     # the result is capped at ``max_output`` chars.
     mitre_kb: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8000)
-    # Recon tool: OFF by default. The AGENT_TOOLSET=+recon arm enables it
-    # (see _enable_recon_tools and toolsets.py). The ``timeout`` is the
-    # per-call wall (the v5 regime bash cap); the web engine has its own
-    # 25s internal deadline, so the wall mainly binds on code/data scans.
-    # The result is capped at ``max_output`` chars (the engine render is
-    # itself hard-capped at 8192 bytes, so the default never fires).
+    # Recon tool: OFF in the model default, ON in the packaged baseline
+    # (config.toml) — the baseline ships recon in plan/work. The
+    # AGENT_TOOLSET=+recon arm mutation is now a no-op (deduped). The
+    # ``timeout`` is the per-call wall (the v5 regime bash cap); the web
+    # engine has its own 25s internal deadline, so the wall mainly binds
+    # on code/data scans. The result is capped at ``max_output`` chars
+    # (the engine render is itself hard-capped at 8192 bytes, so the
+    # default never fires).
     recon: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8192)
 
     def get(self, name: str) -> ToolConfig:
@@ -116,13 +120,13 @@ class ToolsConfig(BaseModel):
 class CodeSearchConfig(BaseModel):
     """Engine selection for the code_search/file_outline tools.
 
-    Off by default: no section for this lives in config.toml, and the tools
-    are absent unless ``AGENT_CODE_SEARCH`` is set (see
-    ``_apply_code_search_env``). Keeping the switch in the env (not the
-    toml) is what makes the default agent byte-identical to the baseline.
+    The packaged baseline (config.toml) sets ``engine = "rg"`` and enables
+    both tools; ``AGENT_CODE_SEARCH`` (or the search arms) can switch the
+    engine at load time (see ``_apply_code_search_env`` / ``_apply_toolset_env``).
+    The model default "auto" = tools off, for bare/custom configs.
     """
 
-    #: Engine: "auto" (default = tools off), "rg" (ripgrep fixed-string
+    #: Engine: "auto" (model default = tools off), "rg" (ripgrep fixed-string
     #: scan), or "sifs" (bundled SIFS, BM25-offline).
     engine: str = "auto"
 
@@ -142,9 +146,11 @@ class PhaseConfig(BaseModel):
       (omitted) = the fixed regime constant for the phase (``budget.py``).
     - ``soft_time`` / ``soft_tokens``: advisory only. Rendered into the phase
       prompt and status lines; they never cut the phase.
+    - ``tools``: the phase toolset; an EMPTY list is a legal toolless phase
+      (the baseline review/commit phase judges from the transcript alone).
     """
 
-    tools: list[str] = Field(min_length=1)
+    tools: list[str] = Field(default_factory=list)
     requests: int = Field(ge=1)
     time: float | None = Field(default=None, gt=0)
     soft_time: float | None = Field(default=None, gt=0)
@@ -247,6 +253,21 @@ CODE_SEARCH_ENGINES = ("rg", "sifs")
 TOOLSET_ENV = "AGENT_TOOLSET"
 
 
+def _append_to_phases(cfg: AgentConfig, names: tuple[str, ...]) -> None:
+    """Append tool names to every phase's tool list (deduped).
+
+    An EMPTY phase tool list is a deliberate toolless phase (the baseline
+    review/commit) — it is never augmented by an arm mutation, so a
+    toolless phase stays toolless on every arm.
+    """
+    for phase in cfg.phases.values():
+        if not phase.tools:
+            continue
+        for name in names:
+            if name not in phase.tools:
+                phase.tools.append(name)
+
+
 def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
     """Enable code_search/file_outline on the given engine.
 
@@ -254,29 +275,26 @@ def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
     toolset arms (``toolsets.apply_arm``): both tools enabled, engine
     stored, and the tool names appended to every phase's tool list (their
     notes then render into the system prompt automatically). Deduped, so
-    it is safe if a phase list ever names them explicitly.
+    it is safe if a phase list ever names them explicitly; toolless
+    phases (empty tool list) are never augmented.
     """
     cfg.code_search.engine = engine
     cfg.tools.code_search.enabled = True
     cfg.tools.file_outline.enabled = True
-    for phase in cfg.phases.values():
-        for name in ("code_search", "file_outline"):
-            if name not in phase.tools:
-                phase.tools.append(name)
+    _append_to_phases(cfg, ("code_search", "file_outline"))
 
 
 def _enable_forensics_tools(cfg: AgentConfig) -> None:
     """Enable the forensics tool family (the +forensics arm mutation).
 
-    Mirrors :func:`_enable_search_tools`: tools enabled and their names
-    appended to every phase's tool list (their notes then render into the
+    Mirrors :func:`_enable_search_tools`: tool enabled and its name
+    appended to every phase's tool list (its note then renders into the
     system prompt automatically). Deduped, so it is safe if a phase list
-    ever names them explicitly.
+    ever names it explicitly; toolless phases (empty tool list) are never
+    augmented.
     """
     cfg.tools.log_triage.enabled = True
-    for phase in cfg.phases.values():
-        if "log_triage" not in phase.tools:
-            phase.tools.append("log_triage")
+    _append_to_phases(cfg, ("log_triage",))
 
 
 def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
@@ -286,12 +304,11 @@ def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
     appended to every phase's tool list (its note then renders into the
     system prompt automatically; the arm-gated KB prefix is appended in
     ``runner._system_prompt``). Deduped, so it is safe if a phase list
-    ever names it explicitly.
+    ever names it explicitly; toolless phases (empty tool list) are never
+    augmented.
     """
     cfg.tools.mitre_kb.enabled = True
-    for phase in cfg.phases.values():
-        if "mitre_kb" not in phase.tools:
-            phase.tools.append("mitre_kb")
+    _append_to_phases(cfg, ("mitre_kb",))
 
 
 def _enable_recon_tools(cfg: AgentConfig) -> None:
@@ -300,12 +317,11 @@ def _enable_recon_tools(cfg: AgentConfig) -> None:
     Mirrors :func:`_enable_forensics_tools`: tool enabled and its name
     appended to every phase's tool list (its note then renders into the
     system prompt automatically). Deduped, so it is safe if a phase list
-    ever names it explicitly.
+    ever names it explicitly; toolless phases (empty tool list) are never
+    augmented.
     """
     cfg.tools.recon.enabled = True
-    for phase in cfg.phases.values():
-        if "recon" not in phase.tools:
-            phase.tools.append("recon")
+    _append_to_phases(cfg, ("recon",))
 
 
 def _apply_read_only_arm(cfg: AgentConfig) -> None:
@@ -314,18 +330,21 @@ def _apply_read_only_arm(cfg: AgentConfig) -> None:
     The experiment arm proving recon is usable by an agent without a
     code-execution channel (deliverable writing stays possible via
     write/edit; 'read-only' = no bash, not a read-only filesystem).
+    A toolless phase (the review) stays toolless under every arm.
     """
     cfg.tools.recon.enabled = True
     for phase in cfg.phases.values():
+        if not phase.tools:
+            continue
         phase.tools = ["read", "write", "edit", "recon"]
 
 
 def _apply_code_search_env(cfg: AgentConfig) -> None:
-    """Enable code_search/file_outline from AGENT_CODE_SEARCH (rg | sifs).
+    """Switch the code_search engine from AGENT_CODE_SEARCH (rg | sifs).
 
-    Unset or an invalid value leaves the config untouched (tools off,
-    baseline byte-identical). Superseded by AGENT_TOOLSET when that is
-    set (see :func:`_apply_toolset_env`).
+    Unset or an invalid value leaves the config untouched (the packaged
+    baseline — recon + search on, rg engine — stays as loaded). Superseded
+    by AGENT_TOOLSET when that is set (see :func:`_apply_toolset_env`).
     """
     raw = os.environ.get(CODE_SEARCH_ENV)
     if raw is None or not raw.strip():
@@ -339,12 +358,13 @@ def _apply_code_search_env(cfg: AgentConfig) -> None:
 def _apply_toolset_env(cfg: AgentConfig) -> None:
     """Arm selection: the AGENT_TOOLSET env var (named toolset arms).
 
-    When set (and non-empty) it is the SOLE driver of the code-search
-    toolset — the legacy AGENT_CODE_SEARCH switch is skipped even if it
-    is also set (so arm=baseline forces the tools off). A valid arm
-    applies its config mutation and is recorded in ``cfg.arm``; an
-    invalid value is ignored (the config stays at the baseline) so arm
-    selection can never crash the run.
+    When set (and non-empty) it is the SOLE driver of the arm mutation —
+    the legacy AGENT_CODE_SEARCH switch is skipped even if it is also set
+    (arm ``baseline`` is a no-op: the baseline already ships recon +
+    search, so nothing to force off). A valid arm applies its config
+    mutation and is recorded in ``cfg.arm``; an invalid value is ignored
+    (the config stays at the baseline) so arm selection can never crash
+    the run.
     """
     raw = os.environ.get(TOOLSET_ENV)
     if raw is None or not raw.strip():
