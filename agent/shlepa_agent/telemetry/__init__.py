@@ -47,6 +47,7 @@ def is_enabled() -> bool:
 # omitted (no empty attributes).
 _ENV_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("SLEPA_BATCH_ID", "shlepa.batch_id"),
+    ("SLEPA_EXECUTION_ID", "shlepa.execution_id"),
     ("SLEPA_PRESET", "shlepa.preset"),
     ("SLEPA_GIT_SHA", "git.commit"),
     ("SLEPA_AGENT_VERSION", "shlepa.agent_version"),

@@ -404,3 +404,34 @@ def test_usage_event_without_phase_has_no_phase_field(tmp_path):
     _pending(model, RequestUsage(input_tokens=42, output_tokens=7))
     event = _capture_events(model)
     assert "phase" not in event
+
+
+def test_nonstream_retry_usage_is_counted_once(tmp_path, monkeypatch):
+    """Failed attempts stay visible without duplicating the successful response usage."""
+    from types import SimpleNamespace
+    from pydantic_ai.usage import RequestUsage
+    import shlepa_agent.model as model_mod
+
+    model = _make_model(tmp_path)
+    calls = 0
+    events = []
+
+    async def fake_super(self, messages, ms, params):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("request timed out")
+        return SimpleNamespace(usage=RequestUsage(input_tokens=10, output_tokens=7,
+                                                  details={"reasoning_tokens": 0}))
+
+    monkeypatch.setattr(model_mod.OpenAIChatModel, "request", fake_super)
+    monkeypatch.setattr(model_mod, "_log_event", lambda event, **data: events.append((event, data)))
+    asyncio.run(model.request([], {}, None))
+    model.log_pending_usage()
+    names = [name for name, _ in events]
+    assert names.count("llm_request") == 2
+    assert names.count("llm_error") == names.count("llm_retry") == 1
+    assert names.count("usage") == 1
+    usage = next(data for name, data in events if name == "usage")
+    assert usage["cumulative_input"] == 10 and usage["cumulative_output"] == 7
+    assert usage["reasoning_tokens"] == 0

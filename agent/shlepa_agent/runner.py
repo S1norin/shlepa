@@ -1115,6 +1115,9 @@ async def run_prompt(
     _configure_logging()
     _telemetry_call("mark_input", prompt)  # F4: root-span input.value
     cfg = agent_cfg or load_config()
+    _log_event("agent_configuration", configuration={
+        "config": cfg.model_dump(mode="json"), "regime": regime(),
+    })
     model: TrackedModel | None = None
     try:
         # v6-rewrite regime values: no time horizon, HARD cycle count

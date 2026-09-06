@@ -19,6 +19,7 @@ RUNBOOK = Path(__file__).resolve().parents[2] / "docs" / "runbook.md"
 
 KNOWN_COMMANDS = {
     "run",
+    "metrics-summary",
     "smoke",
     "doctor",
     "zip",

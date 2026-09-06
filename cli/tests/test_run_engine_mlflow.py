@@ -80,6 +80,9 @@ class _PrintingClient:
     def log_metric(self, run_id, key, value, **kwargs):
         self.metrics[key] = value
 
+    def log_artifact(self, *args, **kwargs):
+        pass
+
     def log_param(self, *args, **kwargs):
         pass
 
@@ -168,7 +171,9 @@ def test_log_task_to_mlflow_file_store(tmp_path):
     assert run.data.tags["preset"] == "all"
     assert run.data.tags["model"] == "stub-model"
     assert run.data.tags["endpoint_class"] == "main"
-    assert run.data.params["final_output"] == "Created hello.txt"
+    assert "final_output" not in run.data.params
+    artifact = client.download_artifacts(run_id, "data/final-output.txt")
+    assert Path(artifact).read_text() == "Created hello.txt"
     # Experiment name == task family, run name == task slug.
     assert client.get_experiment(run.info.experiment_id).name == "contest"
     assert run.info.run_name == "contest-hello-file"
@@ -244,7 +249,9 @@ def test_log_task_logs_error_param(tmp_path):
     )
 
     run = client.get_run(run_id)
-    assert run.data.params["error"] == "boom"
+    assert "error" not in run.data.params
+    assert Path(client.download_artifacts(run_id, "data/error.txt")).read_text() == "boom"
+    assert run.info.status == "FAILED"
     assert run.data.metrics["solved"] == 0.0
 
 

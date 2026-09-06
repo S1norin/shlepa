@@ -16,7 +16,6 @@ tests need no server.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 from datetime import datetime, timezone
@@ -24,11 +23,7 @@ from pathlib import Path
 
 from shlepa_cli import mlflow_compat as compat
 from shlepa_cli import trace_digest
-from shlepa_cli.run_engine import (
-    AGENT_SERVICE,
-    DEFAULT_TRACE_EXPERIMENT,
-    _resolve_trace_experiment_id,
-)
+from shlepa_cli.run_engine import AGENT_SERVICE, DEFAULT_TRACE_EXPERIMENT
 
 __all__ = [
     "TraceBatchNotFound",
@@ -121,32 +116,72 @@ def _trace_window_ms(
     return since_ms, until_ms
 
 
+def _experiment_id(client, value: str) -> str | None:
+    if value.isdigit():
+        return value
+    experiment = client.get_experiment_by_name(value)
+    return experiment.experiment_id if experiment is not None else None
+
+
+def _batch_experiment_ids(client, settings, batch_id: str) -> list[str]:
+    """Find family experiments containing runs from this batch.
+
+    The legacy configured/static trace experiment remains a fallback so old
+    batches keep exporting after new traces move beside their runs.
+    """
+    found: list[str] = []
+    for experiment in client.search_experiments():
+        runs = client.search_runs(
+            [experiment.experiment_id],
+            filter_string=f"tags.batch_id = '{batch_id}'",
+            max_results=1,
+        )
+        if runs:
+            found.append(experiment.experiment_id)
+    legacy = settings.mlflow_telemetry_experiment_id or DEFAULT_TRACE_EXPERIMENT
+    legacy_id = _experiment_id(client, legacy)
+    if legacy_id is not None and legacy_id not in found:
+        found.append(legacy_id)
+    return found
+
+
 def find_batch_traces(
     client,
     settings,
     batch_id: str,
+    experiment: str | None = None,
     since: str | None = None,
     until: str | None = None,
 ):
-    """Return the raw Trace objects of one batch in the trace experiment.
+    """Return raw Trace objects from the batch's family experiments.
 
-    Candidate filtering: trace-level service.name tag, an age window
-    derived from the batch id's embedded timestamp (narrowed by the
-    optional ISO 8601 ``since``/``until`` start-time bounds), then a
-    shlepa.batch_id match at trace-tag level (fast path) or span level.
-    The search walks every page of the experiment (page size
-    ``TRACE_PAGE_SIZE``), so a batch is found regardless of how many
-    traces the experiment holds. Never raises: any client/server
-    problem yields an empty list.
+    Traces live beside their runs (one family experiment per task slug
+    family); when no ``experiment`` override is given, the experiments
+    holding runs tagged with the batch id are discovered, with the legacy
+    configured trace experiment kept as a fallback. Candidate filtering:
+    trace-level service.name tag, an age window derived from the batch
+    id's embedded timestamp (narrowed by the optional ISO 8601
+    ``since``/``until`` start-time bounds), then a shlepa.batch_id match
+    at trace-tag level (fast path) or span level. The search walks every
+    page of each experiment (page size ``TRACE_PAGE_SIZE``), so a batch is
+    found regardless of how many traces an experiment holds. Never
+    raises: any client/server problem yields an empty list.
     """
     try:
-        exp_id = _resolve_trace_experiment_id(client, settings)
-        if exp_id is None:
+        if experiment is not None:
+            exp_id = _experiment_id(client, experiment)
+            experiment_ids = [exp_id] if exp_id is not None else []
+        else:
+            experiment_ids = _batch_experiment_ids(client, settings, batch_id)
+        if not experiment_ids:
             return []
         since_ms, until_ms = _trace_window_ms(batch_id, since, until)
-        return _find_batch_traces_inner(
-            client, exp_id, batch_id, since_ms, until_ms
-        )
+        found: list = []
+        for exp_id in experiment_ids:
+            found.extend(
+                _find_batch_traces_inner(client, exp_id, batch_id, since_ms, until_ms)
+            )
+        return found
     except Exception:  # noqa: BLE001 - export must not crash the caller
         return []
 
@@ -276,17 +311,14 @@ def export_batch(
     # surfacing as an empty (never-raising) search.
     _parse_iso_ms(since)
     _parse_iso_ms(until)
-    if experiment:
-        settings = dataclasses.replace(
-            settings, mlflow_telemetry_experiment_id=experiment
-        )
     out_dir = Path(out_dir)
     traces = find_batch_traces(
-        client, settings, batch_id, since=since, until=until
+        client, settings, batch_id, experiment=experiment, since=since, until=until
     )
     if not traces:
         experiment_label = (
-            settings.mlflow_telemetry_experiment_id or DEFAULT_TRACE_EXPERIMENT
+            experiment
+            or "family experiments discovered from MLflow runs (plus legacy fallback)"
         )
         raise TraceBatchNotFound(batch_id, experiment_label)
 

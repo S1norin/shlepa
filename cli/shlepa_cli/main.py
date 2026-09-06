@@ -140,9 +140,7 @@ def run(
 
 @app.command("trace-export")
 def trace_export(
-    batch: str = typer.Option(
-        ..., "--batch", help="SLEPA batch id (printed by 'shlepa run')"
-    ),
+    batch: str = typer.Option(..., "--batch", help="SLEPA batch id (printed by 'shlepa run')"),
     out: Path = typer.Option(
         None,
         "--out",
@@ -151,7 +149,7 @@ def trace_export(
     experiment: str = typer.Option(
         None,
         "--experiment",
-        help="Trace experiment name/id (default from settings)",
+        help="Restrict export to one experiment name/id (default: discover from batch runs)",
     ),
     since: str | None = typer.Option(
         None,
@@ -198,9 +196,7 @@ def trace_export(
     except trace_export_module.TraceBatchNotFound as exc:
         typer.echo(f"trace-export: {exc}", err=True)
         raise typer.Exit(code=1)
-    typer.echo(
-        f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}"
-    )
+    typer.echo(f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}")
 
 
 @app.command("search-bench")
@@ -296,8 +292,7 @@ def doctor(
     passed = sum(1 for r in results if r.ok)
     typer.echo(f"doctor: {passed}/{len(results)} checks passed")
     model_mismatch = any(
-        r.name == "llm_model" and not r.ok and r.model_actual is not None
-        for r in results
+        r.name == "llm_model" and not r.ok and r.model_actual is not None for r in results
     )
     if model_mismatch:
         raise typer.Exit(code=2)
@@ -307,12 +302,8 @@ def doctor(
 
 @app.command("submit-test")
 def submit_test(
-    tasks: list[str] = typer.Argument(
-        None, help="Task slugs (default: all discoverable tasks)."
-    ),
-    ci: bool = typer.Option(
-        False, "--ci", help="CI mode (CI endpoint, endpoint_class=ci)."
-    ),
+    tasks: list[str] = typer.Argument(None, help="Task slugs (default: all discoverable tasks)."),
+    ci: bool = typer.Option(False, "--ci", help="CI mode (CI endpoint, endpoint_class=ci)."),
 ) -> None:
     """Strict contest-faithful test via Harbor inside the acp container."""
     from shlepa_cli import submit_test as submit_test_module
@@ -374,9 +365,7 @@ def clean(
     from shlepa_cli.config import get_settings
 
     settings = get_settings()
-    removed = clean_module.clean(
-        settings.repo_root / "tmp", max_age_days=days
-    )
+    removed = clean_module.clean(settings.repo_root / "tmp", max_age_days=days)
     if not removed:
         typer.echo("clean: nothing to remove")
     for path in removed:
@@ -436,3 +425,21 @@ app.add_typer(task_app, name="task")
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("metrics-summary")
+def metrics_summary(
+    batch_ids: list[str] = typer.Argument(..., help="Batch IDs to compare as repeated trials"),
+) -> None:
+    """Save per-family/configuration summary runs from existing MLflow trials."""
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.evaluation import summarize_batches
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    try:
+        run_ids = summarize_batches(get_mlflow_client(get_settings()), batch_ids)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    for run_id in run_ids:
+        typer.echo(f"summary run: {run_id}")

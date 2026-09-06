@@ -9,9 +9,9 @@ agent (OTLP) --> otelcol (localhost:4318 http / 4317 grpc)
                    +----> remote MLflow server (durable backend, OTLP/HTTP)
 ```
 
-The MLflow exporter is stateless transport only — credentials and the
-destination experiment live in `otel/.env` (gitignored; see
-`otel/.env.example`), never in the agent.
+The MLflow exporter is stateless transport only. Credentials live in
+`otel/.env` (gitignored; see `otel/.env.example`), while the CLI routes each
+trace to the same family experiment as its MLflow run.
 
 ## Usage
 
@@ -44,9 +44,10 @@ cp otel/.env.example otel/.env   # then fill in real values
 - `MLFLOW_BASIC_B64` — base64 of `<user>:<password>`
   (`printf '%s:%s' "$USER" "$PASS" | base64 -w0`); sent as
   `Authorization: Basic ...` on every export.
-- `MLFLOW_TELEMETRY_EXPERIMENT_ID` — numeric id of the trace experiment
-  (the collector can only reference it by id; the agent's traces land in
-  the `shlepa-traces` experiment on the remote server).
+- The agent supplies `x-mlflow-experiment-id` for every task, using the
+  numeric ID of the family experiment where its MLflow run was created.
+  The Collector preserves that request metadata while batching and forwards
+  it to MLflow. Credentials remain collector-only.
 
 The exporter targets `https://mlflow.sinorin.ru` and appends the OTLP
 signal path `/v1/traces` itself (MLflow 3.6+ OTLP ingestion; the server
@@ -60,6 +61,7 @@ exercises the exact same exporter path as a real run):
 
 ```bash
 SLEPA_OTEL_ENABLED=1 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+  OTEL_EXPORTER_OTLP_HEADERS=x-mlflow-experiment-id=EXPERIMENT_ID \
   uv run --project agent --extra telemetry python -c 'import os; from shlepa_agent.telemetry import configure; from opentelemetry import trace; configure(); tp = trace.get_tracer_provider(); span = tp.get_tracer("shlepa-smoke").start_span("shlepa.smoke.test"); span.set_attribute("smoke", "1"); span.end(); from opentelemetry.sdk.trace import TracerProvider; tp.shutdown()'
 ```
 
@@ -96,14 +98,15 @@ MLflow backend (durable export via the collector):
 
 ```bash
 source .env  # MLFLOW_TRACKING_URI / USERNAME / PASSWORD
-uv run --project cli --no-sync python otel/check_trace.py --backend mlflow
+uv run --project cli --no-sync python otel/check_trace.py \
+  --backend mlflow --experiment contest
 # OK: trace tr-... (N spans, LLM span with token usage, task attribute present)
 ```
 
-Reads the experiment from `SLEPA_TRACE_EXPERIMENT` (default `shlepa-traces`) —
-only traces tagged `service.name=shlepa-agent` are considered. Note: the
-collector exports to the remote server asynchronously, so give it a few
-seconds after the run finishes.
+Pass the run's family experiment with `--experiment`, or set
+`SLEPA_TRACE_EXPERIMENT`. Only traces tagged `service.name=shlepa-agent` are
+considered. The collector exports to the remote server asynchronously, so
+give it a few seconds after the run finishes.
 
 The `task` attribute comes from the agent's `agent.run` root span, which
 reads `SLEPA_TASK_SLUG` (set by the dev run engine); ad-hoc runs without a
@@ -124,9 +127,10 @@ uv run --project cli --no-sync shlepa trace-export --batch <batch-id>
 #    summary.md           batch totals + aggregated signals
 ```
 
-`--out <dir>` and `--experiment <name|id>` override the defaults
-(`SLEPA_TRACE_EXPERIMENT` or `shlepa-traces`). Non-zero exit with a clear
-message when the batch has no traces (async export lag or telemetry was
+By default, the exporter discovers family experiments from MLflow runs tagged
+with the batch ID and also checks the legacy trace experiment. Use
+`--experiment <name|id>` to restrict the search. It exits non-zero with a
+clear message when the batch has no traces (async export lag or telemetry was
 off).
 
 Recommended workflow for a second (analysis) LLM:
@@ -204,8 +208,8 @@ Output enrichment) · #41 (digest signals) · #42 (this documentation).
 The remote MLflow server (3.15.x) accepts OTLP/HTTP ingestion at
 `POST /v1/traces` (basic auth + `x-mlflow-experiment-id` header). The local
 collector forwards every trace there, so the remote server is the durable
-backend: MLflow runs (from `shlepa run`) live next to the agent traces in
-the same server, correlated by the `batch_id` run tag and the
+backend: each MLflow run and its agent trace live in the same family
+experiment, correlated by the `batch_id` run tag and the
 `shlepa.batch_id` trace tag (see the run engine).
 
 Verified facts (2026-08):

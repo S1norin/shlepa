@@ -56,6 +56,13 @@ def _result_args(body: dict) -> dict | None:
     return None
 
 
+def _is_work_request(body: dict) -> bool:
+    for m in body.get("messages", []):
+        if m.get("role") == "user" and "WORK PHASE" in (m.get("content") or ""):
+            return True
+    return False
+
+
 class StreamStubHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence
         pass

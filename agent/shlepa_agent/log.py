@@ -20,6 +20,7 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
     PartEndEvent,
     ThinkingPart,
+    RetryPromptPart,
 )
 from pydantic_ai.run import AgentRunResultEvent
 
@@ -93,6 +94,7 @@ def _log_stream_event(event: Any) -> Any:
         _log_event(
             "llm_tool_result",
             tool=getattr(result, "tool_name", None),
+            validation_retry=isinstance(result, RetryPromptPart),
             result=getattr(result, "content", getattr(event, "content", None)),
         )
         return None
