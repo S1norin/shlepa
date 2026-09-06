@@ -83,7 +83,8 @@ def test_log_trials_main(tmp_path: Path) -> None:
     assert timeout.data.metrics["solved"] == 0.0
     assert "reward" not in timeout.data.metrics
     assert "error" not in timeout.data.params
-    assert Path(client.download_artifacts(timeout.info.run_id, "data/error.txt")).read_text().startswith("TimeoutError")
+    error_path = client.download_artifacts(timeout.info.run_id, "data/error.txt")
+    assert Path(error_path).read_text().startswith("TimeoutError")
     assert timeout.data.metrics["evaluation_valid"] == 0
     assert timeout.info.status == "FAILED"
 
