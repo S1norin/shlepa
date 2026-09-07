@@ -329,6 +329,41 @@ def submit_test(
 
 
 @app.command()
+def compliance(
+    harbor: bool = typer.Option(
+        False,
+        "--harbor",
+        help="Also run the unzipped archive through Harbor on contest-hello-file.",
+    ),
+    ci: bool = typer.Option(False, "--ci", help="Use CI endpoint settings for --harbor."),
+) -> None:
+    """Check the built artifact against the public contest contract."""
+    from shlepa_cli import compliance as compliance_module
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.zip_build import ZipBuildError, build_submission_zip
+
+    settings = get_settings()
+    try:
+        zip_path = build_submission_zip(settings.repo_root)
+    except ZipBuildError as exc:
+        typer.echo(f"compliance: {exc}", err=True)
+        raise typer.Exit(code=1)
+    checks = compliance_module.check_submission(zip_path)
+    for check in checks:
+        typer.echo(f"{'PASS' if check.ok else 'FAIL'}  {check.name}: {check.detail}")
+    ok = compliance_module.passed(checks)
+    if harbor and ok:
+        from shlepa_cli import submit_test as submit_test_module
+
+        typer.echo("Harbor validation: contest-hello-file")
+        ok = submit_test_module.run_submit_test(
+            settings, ["contest-hello-file"], ci=ci, out=typer.echo
+        )
+    typer.echo(f"compliance: {'PASS' if ok else 'FAIL'}")
+    raise typer.Exit(code=0 if ok else 1)
+
+
+@app.command()
 def zip(register: bool = typer.Option(False, help="Register in the MLflow model registry")) -> None:
     """Build the submission zip (telemetry stripped)."""
     from shlepa_cli.config import get_settings

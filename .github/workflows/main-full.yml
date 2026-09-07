@@ -7,6 +7,13 @@ on:
       - "tasks/**"
       - "agent/**"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   submit-test:
     runs-on: ubuntu-latest

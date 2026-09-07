@@ -8,6 +8,7 @@ runner = CliRunner()
 
 EXPECTED_COMMANDS = [
     "clean",
+    "compliance",
     "doctor",
     "run",
     "smoke",
