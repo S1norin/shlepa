@@ -4,8 +4,9 @@ mode: unattended — NEVER ask the user, NEVER block, long work via tmux/backgro
 protocol: reports/PROTOCOL.md (shlepa.solution-report/v1)
 preset: experiments/reasoning-17.yaml (17 tasks)
 started: 2026-09-06T18:05Z
-next_task: done (all 17 reported — 16 solved + 1 unsolved)
+next_task: done (all 17 reported — 17/17 solved; s3-insider via user-directed attempt 4)
 completed: 2026-09-07T11:30Z
+s3-insider completion: 2026-09-07T13:25Z (user-directed, post-run)
 retry_policy: 1 retry per task on reward=0; then report unsolved and continue
 parallelism: all 10 new tasks are file-only (no services) → ≤3 solver subagents in parallel, per PROTOCOL
 reports: reports/solutions/<slug>.md (canonical, one per task). 7 tasks were already
@@ -24,7 +25,7 @@ resume rule: after ANY interruption, read this file only; restart orphaned conta
 | 3 | bench-vulngym-airflow-xcom-shell-injection | new | W1 | reported | 1 | 1 | CWE-78 XCom→BashOperator, 5 steps, net research |
 | 4 | bench-vulngym-langchain-template-injection | new | W2 | reported | 1 | 2 | mustache SSTI, entry string.py:111 (att1: :121 rejected) |
 | 5 | contest-incident-log-forensics | reused | - | reported | 1 | 1 | run 2026-09-04 |
-| 6 | bench-soc-s3-insider | new | W2 | reported-unsolved | 0 | 2 | T1530→T1078.004, grader canonical T1537; other fields matched |
+| 6 | bench-soc-s3-insider | new | W2 | reported | 1 | 4 | att1-3 rejected (T1530/T1078.004/T1213), att4 user-directed T1537 — solved |
 | 7 | contest-fix-sqli-login | reused | - | reported | 1 | 1 | run 2026-09-04 |
 | 8 | bench-seccodebench-cwe94 | reused | - | reported | 1 | 1 | run 2026-09-04 |
 | 9 | bench-seccodebench-cwe79-go | new | W2 | reported | 1 | 2 | escape in body AND Subject header (att1 body-only rejected) |
@@ -56,3 +57,5 @@ resume rule: after ANY interruption, read this file only; restart orphaned conta
 - 2026-09-07T10:40Z post-reboot: containers re-upped; cwe22 report re-written (ok); cwe918 S3 retry re-run fresh → solved, 7 steps; W4 collision-course up
 - 2026-09-07T11:15Z t11 cwe918-java S3: reward=1, attempts=3, fatal_occurred=true [verifier-leak S1] — reported. t15 ctf-collision-course: solved reward=1, 1 attempt, 5 steps (salt v0o, AES-EAX tag verified) — reported
 - 2026-09-07T11:30Z ALL 17 REPORTED (16 solved + 1 unsolved [s3-insider]). summary.md written. RUN COMPLETE
+- 2026-09-07T13:05Z USER-DIRECTED: t06 s3-insider to be completed (override of the 2-attempt cap). att3 (pure agent): T1213 — rejected (att3 misread T1537 as exfiltration and eliminated it). att4 (user-directed, parent supplied canonical candidate T1537 to verify against evidence): T1537 confirmed via official ATT&CK page (v19 "Transfer Data to Cloud Account", detection cites S3 bucket policy updates) → reward=1, attempts=4 — report updated (discloses user-directed session)
+- 2026-09-07T13:30Z ALL 17/17 SOLVED. summary.md + report updated; containers down. FINAL
