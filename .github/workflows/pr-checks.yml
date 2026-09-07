@@ -3,6 +3,13 @@ name: pr-checks
 on:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -38,6 +45,18 @@ jobs:
           assert any(n.endswith("run.sh") for n in names), "run.sh missing from zip"
           print("run.sh present")
           EOF
+
+      - name: Verify public submission contract
+        run: uv run --project cli shlepa compliance
+
+      - name: Unit tests
+        run: |
+          # test_code_search_tool_rg_real_engine drives the real ripgrep
+          # engine; ubuntu-latest runners do not preinstall it.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          uv run --project cli --group dev pytest cli/tests
+          uv run --project cli --group dev pytest agent/tests
 
       - name: flake8 (agent/ + cli/, root .flake8)
         run: uv run --project cli --group dev flake8 agent/ cli/

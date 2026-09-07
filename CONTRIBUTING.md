@@ -18,11 +18,13 @@ Run locally before opening a PR:
 ```bash
 shlepa smoke     # doctor + hello-file end-to-end + MLflow run
 shlepa zip       # build passes, archive <= 10 MB, run.sh present
+shlepa compliance # deterministic public submission-contract checks
 flake8 agent cli # uses the root .flake8 config
 ```
 
-CI runs the same checks on every PR, plus a `shlepa smoke` against the
-secondary endpoint (results go to the MLflow experiment `shlepa-ci`).
+CI runs the same checks and both unit-test suites on every PR, plus a
+`shlepa smoke` against the secondary endpoint (results go to the MLflow
+experiment `shlepa-ci`).
 
 ## Tasks
 
@@ -54,3 +56,8 @@ secondary endpoint (results go to the MLflow experiment `shlepa-ci`).
 - Never modify `agent/agent.py` beyond upstream sync (organizers overwrite it).
 - Never break the submission contract: `run.sh` at the zip root, archive
   <= 10 MB.
+
+`shlepa compliance` validates the locally testable part of the public contest
+contract from the built archive. `shlepa compliance --harbor` additionally
+runs that archive through Harbor on `contest-hello-file`. It cannot prove
+performance on the organizers' closed tasks or their unpublished limits.

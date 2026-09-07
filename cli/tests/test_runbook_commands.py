@@ -27,6 +27,7 @@ KNOWN_COMMANDS = {
     "search-bench",
     "submit-test",
     "clean",
+    "compliance",
     "help",
     "task",
 }

@@ -11,7 +11,7 @@ def test_help_root():
     assert result.exit_code == 0
     assert "Usage" in result.output
     assert "Commands" in result.output
-    for command in ("doctor", "run", "smoke", "submit-test", "zip", "clean", "task"):
+    for command in ("compliance", "doctor", "run", "smoke", "submit-test", "zip", "clean", "task"):
         assert command in result.output, f"missing {command}"
 
 
