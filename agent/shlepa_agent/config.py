@@ -115,9 +115,11 @@ class ToolsConfig(BaseModel):
 
 
 class CodeSearchConfig(BaseModel):
-    """Engine selection for the code_search/file_outline tools (baseline).
+    """Engine selection for the code_search/file_outline tools.
 
-    v6 baseline is SIFS BM25-offline (the local search-bench:
+    The slim baseline does not ship the pair; this configures the
+    +smart-grep/+sifs dev arms and the legacy AGENT_CODE_SEARCH switch.
+    SIFS BM25-offline is the default engine (the local search-bench:
     ``research/code_search/analysis/search_bench_20260831-1600.md`` — bm25
     hit@1 0.5-1.0 on natural-language queries vs 0.00 for the ripgrep
     fixed-string scan; keyword 0.67-1.0 vs 0.25-1.0). A missing or broken
@@ -401,11 +403,15 @@ def _apply_read_only_arm(cfg: AgentConfig) -> None:
 
 
 def _apply_code_search_env(cfg: AgentConfig) -> None:
-    """Switch the code_search engine from AGENT_CODE_SEARCH (rg | sifs).
+    """Re-add the code_search tools from AGENT_CODE_SEARCH (rg | sifs).
 
-    Unset or an invalid value leaves the config untouched (the packaged
-    baseline — SIFS BM25-offline — stays as loaded). Superseded by
-    AGENT_TOOLSET when that is set (see :func:`_apply_toolset_env`).
+    The slim baseline (2026-09-07) no longer ships the
+    code_search/file_outline pair, so a valid value enables both tools
+    with the given engine and appends them to the active phases (the
+    legacy switch keeps the pre-slim-dev behavior of "just set the
+    engine"). Unset or an invalid value leaves the config untouched.
+    Superseded by AGENT_TOOLSET when that is set (see
+    :func:`_apply_toolset_env`).
     """
     raw = os.environ.get(CODE_SEARCH_ENV)
     if raw is None or not raw.strip():

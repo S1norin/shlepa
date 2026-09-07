@@ -23,18 +23,8 @@ from shlepa_agent.toolsets import ARM_MITRE_KB
 # prompt still renders, but arms never touch its list).
 PHASES = ("plan", "work", "review", "emergency")
 TASK = "TASK"
-BASE_PLAN = ["read", "recon", "search", "code_search", "file_outline", "log_triage"]
-BASE_WORK = [
-    "read",
-    "write",
-    "edit",
-    "bash",
-    "recon",
-    "search",
-    "code_search",
-    "file_outline",
-    "log_triage",
-]
+BASE_PLAN = ["read", "recon"]
+BASE_WORK = ["read", "write", "edit", "bash", "recon"]
 BASE_TOOLS = ["read", "write", "edit", "bash"]
 
 
@@ -251,8 +241,8 @@ def test_off_by_default(monkeypatch):
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         # the effective baseline matrix (config.toml [tool_policy]): plan
-        # read+recon+search+retrieval+forensics, work full set + the same,
-        # review toolless, legacy emergency four
+        # read+recon, work standard set + recon (the 2026-09-07 slim
+        # baseline), review toolless, legacy emergency four
         names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
         if phase_id == "plan":
             assert names == BASE_PLAN

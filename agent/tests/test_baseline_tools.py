@@ -1,15 +1,19 @@
-"""Baseline read-only orientation tools (v6-rewrite).
+"""Research read-only tools (v6-rewrite; dev arms since the 2026-09-07
+slim-down).
 
-code_search / file_outline (SIFS BM25-offline, the baseline engine) and
-log_triage are baseline tools — routed by the [tool_policy] matrix into the
-read-only PLAN phase and the WORK phase alike (no arm, no env switch to
-enable them). Research: research/notes/v6-baseline-readonly-tools.md.
+code_search / file_outline (SIFS BM25-offline) and log_triage were baseline
+orientation tools (batch 388fde: never adopted — context bloat), so the
+2026-09-07 slim-down left them OFF in the shipped baseline; they live on as
+dev arms (+sifs / +smart-grep / +forensics, see toolsets.py) and the legacy
+env switches (AGENT_CODE_SEARCH, SHLEPA_LOG_TRIAGE=1). Research:
+research/notes/v6-baseline-readonly-tools.md.
 
 Covers:
-1. registry + shipped config: all three tools registered and enabled,
-   engine = sifs
-2. plan phase stays read-only (no bash/write/edit), work has the full set
-3. finalization reserve (w3-2) blocks the new exploratory tools
+1. registry + shipped config: all three tools registered but DISABLED in
+   the slim baseline, engine = sifs
+2. plan phase stays read-only (no bash/write/edit), work has the standard
+   set + recon
+3. finalization reserve (w3-2) blocks the exploratory tools
 4. env overrides (SHLEPA_CODE_SEARCH / SHLEPA_CODE_SEARCH_ENGINE /
    SHLEPA_LOG_TRIAGE)
 5. one real end-to-end call per tool on a tiny fixture (hermetic; the sifs
@@ -57,11 +61,13 @@ def test_new_tools_registered():
         assert ALL_TOOLS[name].name == name
 
 
-def test_new_tools_enabled_in_shipped_config():
+def test_research_tools_disabled_in_slim_baseline():
+    # 2026-09-07: the orientation bundle is off by default (batch 388fde);
+    # the dev arms and env switches re-enable it
     cfg = _shipped_cfg()
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
-    assert cfg.tools.log_triage.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
 
 
 def test_shipped_engine_is_sifs():
@@ -82,15 +88,16 @@ def test_plan_matrix_is_read_only():
 def test_work_matrix_has_full_set():
     cfg = _shipped_cfg()
     work_tools = set(cfg.tool_policy.tools_for("work", 1))
-    assert work_tools >= {"read", "write", "edit", "bash", "recon", "search",
-                          "code_search", "file_outline", "log_triage"}
+    assert work_tools == {"read", "write", "edit", "bash", "recon"}
 
 
-def test_get_tools_resolves_baseline_names():
+def test_get_tools_resolves_disabled_names_to_empty():
+    # the research tools are named in no active phase; even if a dev config
+    # named them, the disabled flags keep them out of the registry
     cfg = _shipped_cfg()
     names = [t.name for t in get_tools(cfg, ["code_search", "file_outline",
                                              "log_triage"])]
-    assert names == ["code_search", "file_outline", "log_triage"]
+    assert names == []
 
 
 # -- finalization reserve (w3-2) ----------------------------------------------

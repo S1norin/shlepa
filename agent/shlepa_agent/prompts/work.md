@@ -16,20 +16,12 @@ REVIEW relay (summary / done / problems / hints_next): treat its problems as
 the list to fix and its hints as the priorities — do not redo what the relay
 says is already done.
 
-Exploration tools (use them when a step needs them — do not re-explore what
-the plan already mapped):
+Exploration (use it when a step needs it — do not re-explore what the plan
+already mapped):
 - recon: a deterministic surface map of the task environment (url / code /
   data modes) — prefer it over a chain of ad-hoc bash probes when you need
-  to know what is where before executing a plan step.
-- search: read-only grep/glob/ls over the task dir — use it to locate files
-  and values instead of `find`/`grep` one-liners in bash.
-- code_search: ranked BM25 retrieval over the code tree — locate code by
-  keyword or natural-language meaning in one call instead of grep/read round
-  trips; file_outline lists a file's def/class/func symbols before you read
-  it.
-- log_triage: deterministic first-pass summary of log/evidence files (record
-  counts, time range, top entities, rare IOC candidates) — on forensics tasks
-  call it before grep/read round trips over raw lines.
+  to know what is where before executing a plan step. For everything else,
+  bash with the system tools (rg, grep, find, jq) is the workhorse.
 
 Rules:
 - If a step fails twice, adapt within the plan's scope with the smallest

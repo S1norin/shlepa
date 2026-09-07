@@ -368,7 +368,8 @@ async def _run_phase(
     cap = _phase_cap(phase.id, limits, cfg)
     t0 = time.monotonic()
     # w3-2: expose the phase window to the tools so the finalization
-    # reserve can disable exploratory calls (bash/search/recon) in the
+    # reserve can disable exploratory calls (bash/recon in the slim
+    # baseline; the dev-arm search/forensics tools check it too) in the
     # last R seconds of the cap.
     state.deps = replace(state.deps, phase_window=PhaseWindow(phase.id, cap, t0))
     # Tag this run's usage events with the phase id (per-phase token

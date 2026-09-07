@@ -81,35 +81,44 @@ max_output = 8192
 [tools.search]
 # Stdlib-only read-only search (grep/glob/ls) over the task dir. No
 # ripgrep dependency; large dirs are scanned for at most 10 s.
-enabled = true
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: the model
+# worked with read + bash, the extra tool list bloated every request);
+# a dev config can re-enable it.
+enabled = false
 max_output = 8192
 
 [tools.code_search]
 # SIFS BM25-offline retrieval over the code tree (bundled tools/bin/sifs,
 # see [code_search]). Per-call wall 30 s (the regime bash cap); result
 # size is capped in tokens inside the engine (default 1500).
-enabled = true
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: 0/649 calls
+# in 17 tasks); the +smart-grep/+sifs dev arms re-enable it (toolsets.py).
+enabled = false
 timeout = 30.0
 
 [tools.file_outline]
 # Symbol outline of one file (same engine as code_search). Per-call wall
-# 30 s.
-enabled = true
+# 30 s. OFF in the baseline (2026-09-07 slim-down); re-enabled together
+# with code_search by the search dev arms.
+enabled = false
 timeout = 30.0
 
 [tools.log_triage]
 # Deterministic read-only triage of log/evidence files (record counts,
 # time ranges, top entities, IOC candidates). Per-call wall 30 s.
-enabled = true
-timeout = 30.0
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: 4 calls, the
+# two forensics tasks it ran on still failed); the +forensics dev arm
+# re-enables it.
+enabled = false
 max_output = 8192
+timeout = 30.0
 
 [code_search]
-# Engine for code_search/file_outline: "sifs" (bundled binary, BM25
-# offline — the baseline; the local search-bench beats the ripgrep
-# fixed-string scan on natural-language queries) or "rg" (preinstalled
-# ripgrep). A missing/broken sifs binary degrades to rg/regex inside the
-# engine (never crash).
+# Engine for code_search/file_outline (the dev arms that re-add the pair):
+# "sifs" (bundled binary, BM25 offline) or "rg" (preinstalled ripgrep).
+# A missing/broken sifs binary degrades to rg/regex inside the engine
+# (never crash). The slim baseline does not ship the pair, so this only
+# matters for the +smart-grep/+sifs arms and the AGENT_CODE_SEARCH switch.
 engine = "sifs"
 
 [tool_policy]
@@ -121,15 +130,14 @@ engine = "sifs"
 disabled = ["commit", "repair", "salvage", "emergency"]
 
 [tool_policy.phases]
-# PLAN: read-only orientation surface (no bash/write/edit — recon, search
-# and the retrieval/forensics tools replace the raw read-and-probe pass;
-# research/notes/v6-baseline-readonly-tools.md).
-plan = ["read", "recon", "search", "code_search", "file_outline", "log_triage"]
-# WORK: full toolset; recon + search + code_search + file_outline +
-# log_triage stay (cheap structured exploration instead of ad-hoc bash
-# probes).
-work = ["read", "write", "edit", "bash", "recon", "search", "code_search",
-        "file_outline", "log_triage"]
+# PLAN: read-only orientation (no bash/write/edit). recon is the ONLY
+# custom tool in the baseline (2026-09-07 slim-down: batch 388fde — the
+# other orientation tools were never adopted, code_search 0/649 calls;
+# research/notes/batch-388fde-v6-baseline-analysis.md). The dev arms
+# (toolsets.py) re-add search/code_search/file_outline/log_triage on top.
+plan = ["read", "recon"]
+# WORK: the standard set + recon.
+work = ["read", "write", "edit", "bash", "recon"]
 # REVIEW relay: NO tools — a pure distillation on the resumed work
 # transcript (the relay's job is summarizing, not exploring).
 review = []

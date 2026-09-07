@@ -316,15 +316,9 @@ def test_review_agent_is_toolless_from_packaged_config(tmp_path):
         return set(agent._function_toolset.tools)
 
     assert names("review") == set()  # toolless relay
-    assert names("commit") == {"read", "search"}  # disabled verifier: read-only
-    assert names("plan") == {
-        "read", "recon", "search", "code_search", "file_outline",
-        "log_triage",
-    }
-    assert names("work") == {
-        "read", "write", "edit", "bash", "recon", "search",
-        "code_search", "file_outline", "log_triage",
-    }
+    assert names("commit") == {"read"}  # disabled verifier: read-only
+    assert names("plan") == {"read", "recon"}
+    assert names("work") == {"read", "write", "edit", "bash", "recon"}
 
 
 # -- pipeline graph ---------------------------------------------------------
@@ -387,8 +381,8 @@ def test_relay_error_does_not_block_next_cycle(monkeypatch, stub_openai, tmp_pat
 
 
 def test_plan_phase_cannot_call_bash(monkeypatch, stub_openai, tmp_path, events):
-    # The shipped plan tool surface is read-only (read, recon, search) via
-    # the tool policy: a model that still asks for bash is refused by the
+    # The shipped plan tool surface is read-only (read, recon) via the
+    # tool policy: a model that still asks for bash is refused by the
     # tool surface (unknown tool), nothing is executed, run continues.
     from shlepa_agent.config import load_config
 

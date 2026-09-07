@@ -63,8 +63,8 @@ has no write tools and can never deliver anything).
 
 Tool policy (`[tool_policy]` in `config.toml` — the single source of
 truth; `[phases.*].tools` is only a legacy fallback for dev/test
-configs): `plan` is read-only (`read`, `recon`, `search`); `work` gets
-`read`, `write`, `edit`, `bash`, `recon`, `search`; `review` (relay) is
+configs): `plan` is read-only (`read`, `recon`); `work` gets
+`read`, `write`, `edit`, `bash`, `recon`; `review` (relay) is
 **toolless** (`[]`). Per-iteration overrides use `<phase>_c<N>` keys
 (e.g. `work_c2`) — they only apply to that specific cycle.
 `[tool_policy].disabled` lists the unrouted phases (`commit`, `repair`,
@@ -137,28 +137,33 @@ Routing rules (runner, v6-rewrite):
   (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
   the task workdir; the structured bridge between phases and cycles.
 
-## Baseline tool policy (v5.1)
+## Baseline tool policy (v6 slim, 2026-09-07)
 
 The packaged `config.toml` **is** the baseline (the `baseline` arm is a
-no-op on top of it):
+no-op on top of it). The slim-down (batch `388fde`: the orientation bundle
+was never adopted — `code_search` 0/649 calls, the extra tool list bloated
+every request) left `recon` as the ONLY custom tool:
 
-| Phase      | Tools                                                        | Notes |
-|------------|--------------------------------------------------------------|-------|
-| `plan`     | `read`, `recon`, `code_search`, `file_outline`               | maps and plans only — **no bash, no writes** |
-| `work`     | `read`, `write`, `edit`, `bash`, `recon`, `code_search`, `file_outline` | the only phase with **bash** and the only phase that writes the deliverable |
-| `commit`   | — (toolless)                                                 | the review judge; empty tool list, never augmented by arms/env |
-| `emergency`| `read`, `write`, `edit`, `bash` (legacy, unused)             | arm additions still land here (deduped, harmless) |
+| Phase      | Tools                                    | Notes |
+|------------|------------------------------------------|-------|
+| `plan`     | `read`, `recon`                          | maps and plans only — **no bash, no writes** |
+| `work`     | `read`, `write`, `edit`, `bash`, `recon` | the only phase with **bash** and the only phase that writes the deliverable |
+| `review`   | — (toolless)                             | the relay; empty tool list, never augmented by arms/env |
+| `commit` / `repair` / `salvage` / `emergency` | — (disabled, unused) | unrouted; arm additions dedupe to a no-op |
 
+- `search`, `code_search`, `file_outline` and `log_triage` are **off** in
+  the baseline. A dev config can re-enable them (`[tools.*].enabled` / the
+  `SHLEPA_SEARCH` env var) or use one of the arms below.
 - `recon` ships in the baseline, so the recon prompt block renders the
   **tool variant** (`recon_tool.md`) in the tooled phases; the toolless
   review renders no recon block at all. The script variant
-  (`recon_script.md`) remains for phases without the recon tool (e.g. the
-  read-only arm's phases).
-- The arms are now **engine/variant switches on top of the baseline**:
-  `+smart-grep` pins the search engine to `rg` (the baseline default),
-  `+sifs` to SIFS, `+forensics`/`+mitre-kb` add their tool to every tooled
-  phase, `+recon` is a no-op (recon is baseline), `read-only` replaces the
-  tooled phases with read/write/edit + recon (no bash).
+  (`recon_script.md`) remains for phases without the recon tool.
+- The arms are **tool re-adds on top of the slim baseline**:
+  `+smart-grep` / `+sifs` re-add the `code_search`/`file_outline` pair on
+  the pinned engine (`rg` / SIFS), `+forensics` re-adds `log_triage`,
+  `+mitre-kb` adds `mitre_kb` (+ the KB index prompt prefix), `+recon` is
+  a no-op (recon is baseline), `read-only` replaces the tooled phases
+  with read/write/edit + recon (no bash).
 
 ## Env-var overrides
 
@@ -179,7 +184,7 @@ no-op on top of it):
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
 | `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
 | `SHLEPA_PLAN_TIME` | `phases.plan.time` (default: plan cap 30s) | float |
-| `SHLEPA_SEARCH` | `tools.search.enabled` | 1/0 (bool; 0 disables the search tool) |
+| `SHLEPA_SEARCH` | `tools.search.enabled` | 1/0 (bool; search is **off** in the slim baseline — 1 re-enables the tool) |
 | `SHLEPA_MAX_CYCLES` | `agent.max_cycles` | int ≥ 1: the hard plan/work cycle count (default 2) |
 | `SHLEPA_REVIEW_TIME` | `phases.review.time` | float: relay cap override (default: regime 45s) |
 | `SHLEPA_FINALIZE_RESERVE` | — (read directly by `budget.py`) | float: seconds reserved for finalization at run end (default 15) |
@@ -191,16 +196,17 @@ config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 
 ### AGENT_CODE_SEARCH (deliberate `AGENT_*` exception)
 
-Dev switch for the code-search engine (the legacy `AGENT_*` set was
+Dev switch for the code-search tools (the legacy `AGENT_*` set was
 dropped in v2; this one is wired on purpose). Values: `rg` (ripgrep
 fixed-string scan) or `sifs` (bundled SIFS binary, BM25-offline;
-`agent/tools/bin/sifs`). The baseline ships search **on** with the `rg`
-engine; the switch only pins the engine. Unset or an invalid value: the
-packaged baseline stays as-is (search on, `rg`), byte-identical to the
-golden fixture (`agent/tests/fixtures/default_prompt.txt`). When set, the
-config layer stores the engine (`code_search.engine`) and appends
-`code_search` + `file_outline` to every tooled phase (deduped; the
-toolless review is never augmented).
+`agent/tools/bin/sifs`). The slim baseline does **not** ship the
+`code_search`/`file_outline` pair, so the switch is what re-adds them:
+when set, the config layer stores the engine (`code_search.engine`) and
+enables + appends both tools to every active tooled phase (deduped; the
+toolless review is never augmented). Unset or an invalid value: the
+packaged baseline stays as-is (pair off), byte-identical to the golden
+fixture (`agent/tests/fixtures/default_prompt.txt`). `AGENT_TOOLSET`
+supersedes this switch when both are set.
 Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
 BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
 model, dev only); a missing/broken SIFS binary degrades to rg/regex with a

@@ -152,18 +152,21 @@ def test_hour_spike_reported(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_build_phase_agent_exposes_log_triage_name():
+def test_build_phase_agent_exposes_log_triage_name(monkeypatch):
     """Regression: pydantic-ai registers under the function name, so the
     tool function must be named exactly ``log_triage`` (the Tool record
     name) — the model calls it by that name, and the prompt steering
-    references it by that name too."""
+    references it by that name too. log_triage is off in the slim
+    baseline, so the arm that re-adds it (+forensics) is used."""
     from pydantic_ai.providers.openai import OpenAIProvider
 
     from shlepa_agent.config import load_config
     from shlepa_agent.model import TrackedModel
     from shlepa_agent.phases import get_phase
     from shlepa_agent.runner import build_phase_agent
+    from shlepa_agent.toolsets import ARM_FORENSICS
 
+    monkeypatch.setenv("AGENT_TOOLSET", ARM_FORENSICS)
     cfg = load_config()
     model = TrackedModel(
         "m", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg

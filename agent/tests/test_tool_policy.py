@@ -19,17 +19,15 @@ def _shipped_cfg():
 
 class TestShippedMatrix:
     def test_plan_matrix(self):
+        # 2026-09-07 slim-down: recon is the only custom tool in the
+        # baseline (the research families live on as dev arms, toolsets.py)
         cfg = _shipped_cfg()
-        assert cfg.tool_policy.tools_for("plan", 1) == [
-            "read", "recon", "search", "code_search", "file_outline",
-            "log_triage",
-        ]
+        assert cfg.tool_policy.tools_for("plan", 1) == ["read", "recon"]
 
     def test_work_matrix(self):
         cfg = _shipped_cfg()
         assert cfg.tool_policy.tools_for("work", 1) == [
-            "read", "write", "edit", "bash", "recon", "search",
-            "code_search", "file_outline", "log_triage",
+            "read", "write", "edit", "bash", "recon",
         ]
 
     def test_review_has_no_tools(self):

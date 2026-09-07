@@ -193,19 +193,17 @@ def test_plan_and_work_are_fresh_runs():
 
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
-    # the baseline tool policy: plan maps (no bash/writes), work executes
-    # (the only bash phase), review is toolless, emergency stays legacy.
+    # the baseline tool policy (2026-09-07 slim-down): recon is the only
+    # custom tool — plan maps (no bash/writes), work executes (the only
+    # bash phase), review is toolless, emergency stays legacy. The research
+    # tool families live on as dev arms (toolsets.py).
     cfg = load_config()
-    # v6: the plan phase is read-only (no bash/write/edit); work gains
-    # recon + search (structured exploration). VERIFY (w2-4) is read-only:
-    # no bash/write/edit — repair is a separate bounded phase.
-    assert PlanPhase().tools(cfg) == [
-        "read", "recon", "search", "code_search", "file_outline",
-        "log_triage",
-    ]
+    # the plan phase is read-only (no bash/write/edit); work is the
+    # standard set + recon. VERIFY (w2-4) is read-only: no bash/write/edit —
+    # repair is a separate bounded phase.
+    assert PlanPhase().tools(cfg) == ["read", "recon"]
     assert WorkPhase().tools(cfg) == [
-        "read", "write", "edit", "bash", "recon", "search",
-        "code_search", "file_outline", "log_triage",
+        "read", "write", "edit", "bash", "recon",
     ]
     assert set(CommitPhase().tools(cfg)) == {"read", "search"}
     assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]

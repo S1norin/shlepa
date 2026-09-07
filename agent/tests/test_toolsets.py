@@ -1,14 +1,14 @@
 """Tests for named toolset arms (AGENT_TOOLSET, agent/shlepa_agent/toolsets.py).
 
-The packaged config.toml IS the baseline (v6 tool policy): recon + search +
-code_search + file_outline (sifs engine) + log_triage in plan/work, toolless
-review relay, disabled phases (commit/repair/salvage/emergency) never routed.
-The arms are switches on top of it: +smart-grep (pin rg), +sifs (pin sifs),
-+forensics (no-op, log_triage is baseline), +mitre-kb (mitre_kb), +recon
-(no-op, recon is baseline), read-only (read/write/edit + recon, no bash).
-AGENT_TOOLSET is the sole driver of the code-search toolset when set (it
-wins over the legacy AGENT_CODE_SEARCH switch); an invalid value is
-ignored, never a crash.
+The packaged config.toml IS the baseline (2026-09-07 slim-down): recon is
+the ONLY custom tool (plan read+recon, work standard set + recon), toolless
+review relay, disabled phases (commit/repair/salvage/emergency) never
+routed. The research tool families live on as dev arms: +smart-grep /
++sifs re-add code_search+file_outline (rg | sifs engine), +forensics adds
+log_triage, +mitre-kb adds mitre_kb, +recon is a no-op (recon is
+baseline), read-only (read/write/edit + recon, no bash). AGENT_TOOLSET is
+the sole driver of the arm mutation when set (it wins over the legacy
+AGENT_CODE_SEARCH switch); an invalid value is ignored, never a crash.
 
 All matrix assertions use the EFFECTIVE tool list
 (``get_phase(id).tools(cfg)`` — [tool_policy] over the legacy lists), the
@@ -41,22 +41,14 @@ from shlepa_agent.toolsets import (
 PHASES = ("plan", "work", "review", "emergency")
 TASK = "TASK"
 
-#: The effective baseline matrix (config.toml [tool_policy]). Arm mutations
-#: are diffs against this: the search arms only pin the engine (tools are
-#: already wired), mitre-kb appends its tool to every active TOOLED phase,
+#: The effective baseline matrix (config.toml [tool_policy], 2026-09-07
+#: slim-down: recon is the only custom tool). Arm mutations are diffs
+#: against this: the search arms re-add code_search+file_outline (appended),
+#: +forensics/+mitre-kb append their tool to every active TOOLED phase,
 #: and the toolless review stays toolless under every arm.
-BASE_PLAN = ["read", "recon", "search", "code_search", "file_outline", "log_triage"]
-BASE_WORK = [
-    "read",
-    "write",
-    "edit",
-    "bash",
-    "recon",
-    "search",
-    "code_search",
-    "file_outline",
-    "log_triage",
-]
+BASE_PLAN = ["read", "recon"]
+BASE_WORK = ["read", "write", "edit", "bash", "recon"]
+BASE_SEARCH = ["code_search", "file_outline"]
 BASE_REVIEW = []
 BASE_EMERGENCY = ["read", "write", "edit", "bash"]
 BASE_MATRIX = {
@@ -122,13 +114,13 @@ def test_apply_arm_baseline_is_a_noop():
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, ARM_BASELINE)
     assert cfg.arm == ARM_BASELINE
-    # the packaged config.toml IS the baseline: recon + search + forensics
-    # on, sifs engine
+    # the packaged config.toml IS the slim baseline: recon on, the research
+    # tool families off, sifs engine (for the arms that re-add the pair)
     assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.recon.enabled is True
-    assert cfg.tools.log_triage.enabled is True
+    assert cfg.tools.log_triage.enabled is False
     assert cfg.code_search.engine == snapshot_engine
     for phase_id in PHASES:
         assert _eff(cfg, phase_id) == snapshot[phase_id]
@@ -139,20 +131,24 @@ def test_apply_arm_baseline_is_a_noop():
     ("arm", "engine"),
     [(ARM_SMART_GREP, "rg"), (ARM_SIFS, "sifs")],
 )
-def test_apply_arm_search_arms_pin_engine(monkeypatch, arm, engine):
+def test_apply_arm_search_arms_readd_pair_with_pinned_engine(
+    monkeypatch, arm, engine
+):
     _clear(monkeypatch)
     cfg = load_config()
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, arm)
     assert cfg.arm == arm
-    # the baseline already wires the tools: the arm only pins the engine;
-    # the effective matrix is unchanged (plan/work already ship the search
-    # tools, disabled phases are never augmented)
+    # the slim baseline does not ship the pair: the arm enables both tools
+    # on the pinned engine and appends them to the active TOOLED phases
+    # (disabled phases are never augmented)
     assert cfg.code_search.engine == engine
     assert cfg.tools.code_search.enabled is True
     assert cfg.tools.file_outline.enabled is True
-    for phase_id in PHASES:
-        assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id], phase_id
+    assert _eff(cfg, "plan") == BASE_PLAN + BASE_SEARCH
+    assert _eff(cfg, "work") == BASE_WORK + BASE_SEARCH
+    assert _eff(cfg, "review") == BASE_REVIEW
+    assert _eff(cfg, "emergency") == BASE_EMERGENCY
     assert _disabled_snapshot(cfg) == disabled_before
 
 
@@ -161,14 +157,16 @@ def test_apply_arm_forensics_enables_tool():
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, ARM_FORENSICS)
     assert cfg.arm == ARM_FORENSICS
-    # the search family stays on (different family)
+    # the search family stays off (different family)
     assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.log_triage.enabled is True
-    # log_triage is baseline already: the effective matrix is unchanged
-    for phase_id in PHASES:
-        assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id], phase_id
+    # log_triage is appended to the active TOOLED phases
+    assert _eff(cfg, "plan") == BASE_PLAN + ["log_triage"]
+    assert _eff(cfg, "work") == BASE_WORK + ["log_triage"]
+    assert _eff(cfg, "review") == BASE_REVIEW
+    assert _eff(cfg, "emergency") == BASE_EMERGENCY
     assert _disabled_snapshot(cfg) == disabled_before
 
 
@@ -180,10 +178,15 @@ def test_env_arm_forensics_enables_tool_and_prompt(monkeypatch):
     for phase_id in PHASES:
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, _eff(cfg, phase_id))]
-        assert names == BASE_MATRIX[phase_id]
+        if phase_id == "plan":
+            assert names == BASE_PLAN + ["log_triage"]
+        elif phase_id == "work":
+            assert names == BASE_WORK + ["log_triage"]
+        else:
+            assert names == BASE_MATRIX[phase_id]
         prompt = _system_prompt(cfg, phase, TASK)
         if phase_id in ("plan", "work"):
-            # the baseline already ships the note in the active phases
+            # the arm re-adds the tool: its note renders in the active phases
             assert "log_triage: deterministic read-only triage" in prompt
         else:
             # the toolless relay and the disabled emergency never carry it
@@ -200,10 +203,10 @@ def test_apply_arm_mitre_kb_enables_tool():
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, ARM_MITRE_KB)
     assert cfg.arm == ARM_MITRE_KB
-    # the search family stays on (different family)
+    # the search family stays off (different family)
     assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.mitre_kb.enabled is True
     # mitre_kb lands in every active TOOLED phase; the toolless review and
     # the disabled phases are never augmented
@@ -259,12 +262,12 @@ def test_env_arm_baseline_is_the_packaged_config(monkeypatch):
     monkeypatch.setenv("AGENT_CODE_SEARCH", "rg")
     cfg = load_config()
     # AGENT_TOOLSET wins over the legacy switch; baseline is a no-op, so
-    # the packaged config (sifs engine, full baseline matrix) stays
+    # the packaged slim config (sifs engine, slim matrix) stays
     assert cfg.arm == ARM_BASELINE
     assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
-    assert cfg.tools.log_triage.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id]
@@ -275,12 +278,12 @@ def test_env_arm_invalid_is_ignored_never_crashes(monkeypatch):
     for value in ("banana", "+sifs-hybrid", "smart-grep"):
         monkeypatch.setenv("AGENT_TOOLSET", value)
         cfg = load_config()
-        # an unknown arm is ignored: the packaged baseline stays
+        # an unknown arm is ignored: the packaged slim baseline stays
         assert cfg.arm == ARM_BASELINE, value
         assert cfg.code_search.engine == "sifs", value
-        assert cfg.tools.code_search.enabled is True, value
-        assert cfg.tools.file_outline.enabled is True, value
-        assert cfg.tools.log_triage.enabled is True, value
+        assert cfg.tools.code_search.enabled is False, value
+        assert cfg.tools.file_outline.enabled is False, value
+        assert cfg.tools.log_triage.enabled is False, value
         assert cfg.tools.mitre_kb.enabled is False, value
         assert cfg.tools.recon.enabled is True, value
         for phase_id in PHASES:
@@ -292,29 +295,32 @@ def test_env_unset_defaults_to_baseline(monkeypatch):
     cfg = load_config()
     assert cfg.arm == ARM_BASELINE
     assert cfg.code_search.engine == "sifs"
-    # baseline ships recon + search + forensics; the KB stays off
+    # the slim baseline ships recon only; the research families stay off
     assert cfg.tools.recon.enabled is True
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
-    assert cfg.tools.log_triage.enabled is True
+    assert cfg.tools.search.enabled is False
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id]
 
 
-def test_legacy_code_search_switch_still_works_without_toolset(monkeypatch):
+def test_legacy_code_search_switch_readds_pair_without_toolset(monkeypatch):
     _clear(monkeypatch)
     for value, engine in (("rg", "rg"), ("sifs", "sifs")):
         monkeypatch.setenv("AGENT_CODE_SEARCH", value)
         cfg = load_config()
         # the legacy switch is not an arm: cfg.arm stays baseline, the
-        # engine follows; the tools are already wired so the effective
-        # matrix is unchanged
+        # engine follows, and the slim baseline's missing pair is re-added
+        # (the pre-slim-dev behavior of "just set the engine")
         assert cfg.arm == ARM_BASELINE, value
         assert cfg.code_search.engine == engine, value
         assert cfg.tools.code_search.enabled is True, value
-        for phase_id in PHASES:
-            assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id], value
+        assert _eff(cfg, "plan") == BASE_PLAN + BASE_SEARCH, value
+        assert _eff(cfg, "work") == BASE_WORK + BASE_SEARCH, value
+        assert _eff(cfg, "review") == BASE_REVIEW, value
+        assert _eff(cfg, "emergency") == BASE_EMERGENCY, value
 
 
 # ---------------------------------------------------------------------------
@@ -327,11 +333,11 @@ def test_apply_arm_recon_is_a_noop():
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, ARM_RECON)
     assert cfg.arm == ARM_RECON
-    # the search family is on (baseline), the KB stays off
+    # the research families stay off, the KB stays off
     assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is True
-    assert cfg.tools.file_outline.enabled is True
-    assert cfg.tools.log_triage.enabled is True
+    assert cfg.tools.code_search.enabled is False
+    assert cfg.tools.file_outline.enabled is False
+    assert cfg.tools.log_triage.enabled is False
     assert cfg.tools.mitre_kb.enabled is False
     assert cfg.tools.recon.enabled is True
     # recon is already wired in plan/work (deduped); the toolless review

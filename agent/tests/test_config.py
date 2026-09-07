@@ -62,10 +62,7 @@ def test_phase_values_pipeline():
     # v6-rewrite: the tool matrix lives in [tool_policy]; the phase section
     # keeps only limits.
     assert plan.tools == []  # no legacy fallback in the shipped config
-    assert cfg.tool_policy.tools_for("plan") == [
-        "read", "recon", "search", "code_search", "file_outline",
-        "log_triage",
-    ]
+    assert cfg.tool_policy.tools_for("plan") == ["read", "recon"]
     assert plan.requests == 25
     assert plan.time is None  # cap = regime constant (budget.py, 30s)
     assert plan.soft_time == 25.0  # advisory, under the 30s cap
@@ -75,8 +72,7 @@ def test_phase_values_pipeline():
     work = cfg.phases["work"]
     assert work.tools == []  # matrix in [tool_policy]
     assert cfg.tool_policy.tools_for("work") == [
-        "read", "write", "edit", "bash", "recon", "search",
-        "code_search", "file_outline", "log_triage",
+        "read", "write", "edit", "bash", "recon",
     ]
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
@@ -194,13 +190,14 @@ def test_plan_cap_env_override(monkeypatch):
 
 
 def test_search_tool_env_toggle(monkeypatch):
-    assert load_config().tools.search.enabled is True
+    # OFF in the slim baseline (2026-09-07); the env toggle still works
+    assert load_config().tools.search.enabled is False
     monkeypatch.setenv("SHLEPA_SEARCH", "0")
     assert load_config().tools.search.enabled is False
     monkeypatch.setenv("SHLEPA_SEARCH", "1")
     assert load_config().tools.search.enabled is True
     monkeypatch.setenv("SHLEPA_SEARCH", "garbage")
-    assert load_config().tools.search.enabled is True  # invalid: ignored
+    assert load_config().tools.search.enabled is False  # invalid: file value
 
 
 def test_v6_rewrite_knobs(monkeypatch):
