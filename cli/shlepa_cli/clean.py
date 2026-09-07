@@ -40,3 +40,56 @@ def clean(
             entry.unlink()
         removed.append(entry)
     return removed
+
+
+# Experiments whose runs are never touched by reconciliation: CI-owned
+# (fixed experiment override) and telemetry/registry stores that carry
+# no dev-run task runs at all.
+NEVER_RECONCILE_EXPERIMENTS = {
+    "shlepa-ci",
+    "smoke",
+    "shlepa-traces",
+    "shlepa-submissions",
+}
+
+
+def reconcile_orphan_runs(client) -> list[str]:
+    """Close dev-run task runs stuck in PENDING/RUNNING (any batch).
+
+    Global reconciliation for ``shlepa clean --reconcile`` (backlog #35):
+    a ``kill -9`` on a batch process cannot run the per-batch sweep, so
+    orphans from previous batches accumulate and pollute batch analysis.
+    Closes every run that (a) is in a dev (non-CI) experiment, (b) is
+    still PENDING or RUNNING, and (c) carries a ``batch_id`` tag (the
+    marker of a dev-run engine task run; manual/CI runs are untouched).
+    Closed runs are marked FAILED with a ``termination_reason`` tag.
+    Never raises: a reconciliation failure must not break ``clean``.
+    """
+    from shlepa_cli.run_engine import _close_run_failed
+
+    closed: list[str] = []
+    try:
+        open_statuses = ("PENDING", "RUNNING")
+        for experiment in client.search_experiments():
+            if experiment.name in NEVER_RECONCILE_EXPERIMENTS:
+                continue
+            try:
+                runs = client.search_runs(
+                    experiment_ids=[experiment.experiment_id], max_results=1000
+                )
+            except Exception:  # noqa: BLE001 - keep sweeping the rest
+                continue
+            for run in runs:
+                if run.info.status not in open_statuses:
+                    continue
+                if not run.data.tags.get("batch_id"):
+                    continue
+                _close_run_failed(
+                    client,
+                    run.info.run_id,
+                    "orphaned: still open, closed by `shlepa clean --reconcile`",
+                )
+                closed.append(run.info.run_id)
+    except Exception:  # noqa: BLE001 - reconciliation must never break clean
+        pass
+    return closed

@@ -11,8 +11,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FINAL_ANSWER = "Created hello.txt with the exact content hello"
 
-# A full plan -> work -> commit script for end-to-end tests of the typed
-# pipeline (the default single free-text final cannot complete plan/work).
+# A full hard-cycle script (v6-rewrite) for end-to-end tests of the typed
+# pipeline with the shipped config (max_cycles = 2): plan -> work ->
+# review relay -> plan -> work. The default single free-text final cannot
+# complete typed phases.
 PIPELINE_SCRIPT = [
     {
         "tool_call": {
@@ -21,7 +23,6 @@ PIPELINE_SCRIPT = [
                 "goal": "write hello.txt with the exact content hello",
                 "findings": "",
                 "steps": ["write the file", "verify it"],
-                "decision": "work",
             },
         }
     },
@@ -36,15 +37,36 @@ PIPELINE_SCRIPT = [
             },
         }
     },
+    # cycle-1 relay (typed ReviewResult: summary/done/problems/hints_next)
     {
         "tool_call": {
             "name": "final_result",
             "arguments": {
-                "status": "ok",
-                "verdict": "done",
-                "artifact": "hello.txt",
-                "checks": ["re-read the file -> content matches"],
-                "notes": FINAL_ANSWER,
+                "summary": "wrote hello.txt with the exact content hello",
+                "done": True,
+                "problems": [],
+                "hints_next": [],
+            },
+        }
+    },
+    {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "goal": "write hello.txt with the exact content hello",
+                "findings": "",
+                "steps": ["write the file", "verify it"],
+            },
+        }
+    },
+    {
+        "tool_call": {
+            "name": "final_result",
+            "arguments": {
+                "summary": FINAL_ANSWER,
+                "findings": "",
+                "deliverable": "hello.txt",
+                "confidence": 1.0,
             },
         }
     },

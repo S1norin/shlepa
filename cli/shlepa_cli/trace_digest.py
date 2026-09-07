@@ -19,7 +19,9 @@ import json
 __all__ = [
     "build_digest",
     "detect_loops",
+    "per_phase_tokens",
     "span_cache_read_tokens",
+    "span_phase_id",
     "thinking_parts_count",
     "tool_signature",
     "trace_cache_read_tokens",
@@ -45,9 +47,24 @@ _CACHE_READ_KEYS = ("gen_ai.usage.cache_read.input_tokens",)
 #: OpenInference serializes LLM output messages (with typed parts, incl.
 #: type:thinking) under this key; pre-v1 traces carry it not at all.
 _OUTPUT_MESSAGES_KEY = "gen_ai.output.messages"
-_TOOL_NAME_KEY = "tool.name"
-_TOOL_ARGS_KEY = "tool.call.arguments"
-_TOOL_RESULT_KEY = "tool.call.result"
+# The agent's instrumentation emits two key families on TOOL spans: the
+# OpenTelemetry semantic convention gen_ai.* keys and the legacy
+# OpenInference tool.* keys (both always present in current traces).
+# Accept both, preferring gen_ai.*, so identical calls hash identically.
+# The pre-F3 digest only looked for tool.call.arguments / tool.call.result,
+# keys no trace actually carries: every args normalized to "" and the loop
+# detector flagged ~93% of real traces (issue #68).
+_TOOL_NAME_KEYS = ("gen_ai.tool.name", "tool.name")
+_TOOL_ARGS_KEYS = (
+    "gen_ai.tool.call.arguments",
+    "tool.parameters",
+    "tool.call.arguments",
+)
+_TOOL_RESULT_KEYS = (
+    "gen_ai.tool.call.result",
+    "output.value",
+    "tool.call.result",
+)
 # pydantic-ai names agent-run spans 'invoke_agent <agent name>' and puts
 # the run's CUMULATIVE usage on that span under gen_ai.aggregated_usage.*
 # (per-request chat spans carry gen_ai.usage.* and are not aggregated
@@ -85,12 +102,59 @@ def _attr_first(attrs: dict, keys: tuple[str, ...]) -> int:
     return 0
 
 
+def _attr_first_raw(attrs: dict, keys: tuple[str, ...]):
+    """First present value among the key family (None when absent)."""
+    for key in keys:
+        if key in attrs:
+            return attrs[key]
+    return None
+
+
 def span_prompt_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _PROMPT_KEYS)
 
 
 def span_completion_tokens(span: dict) -> int:
     return _attr_first(span.get("attributes") or {}, _COMPLETION_KEYS)
+
+
+def span_phase_id(span: dict) -> str | None:
+    """The pipeline phase (plan/work/commit) an LLM span ran in, if labeled.
+
+    Traces exported before the F4 phase labels exist carry no such
+    attribute; the digest then omits the per-phase breakdown entirely.
+    """
+    return (span.get("attributes") or {}).get("shlepa.phase_id")
+
+
+#: Display order for per-phase token lines; unknown phases sort after.
+_PHASE_ORDER = ("plan", "work", "commit")
+
+
+def per_phase_tokens(trace: dict) -> list[tuple[str, int, int]]:
+    """(phase, prompt_tokens, completion_tokens) per labeled phase.
+
+    Ordered plan -> work -> commit, then any other phase alphabetically.
+    Empty when no LLM span carries a phase label (pre-F4 traces).
+    """
+    totals: dict[str, list[int]] = {}
+    for span in _llm_spans(trace):
+        phase = span_phase_id(span)
+        if phase is None:
+            continue
+        bucket = totals.setdefault(phase, [0, 0])
+        bucket[0] += span_prompt_tokens(span)
+        bucket[1] += span_completion_tokens(span)
+    if not totals:
+        return []
+    ordered = sorted(
+        totals.items(),
+        key=lambda item: (
+            _PHASE_ORDER.index(item[0]) if item[0] in _PHASE_ORDER else len(_PHASE_ORDER),
+            item[0],
+        ),
+    )
+    return [(phase, pin, pout) for phase, (pin, pout) in ordered]
 
 
 def span_cache_read_tokens(span: dict) -> int:
@@ -199,8 +263,11 @@ def _tool_spans(trace: dict) -> list:
 def tool_signature(span: dict) -> str:
     """Tool name + sha256 of the normalized arguments."""
     attrs = span.get("attributes") or {}
-    name = attrs.get(_TOOL_NAME_KEY) or span.get("name") or "tool"
-    return f"{name}:{hashlib.sha256(_norm(attrs.get(_TOOL_ARGS_KEY)).encode()).hexdigest()[:12]}"
+    name = _attr_first_raw(attrs, _TOOL_NAME_KEYS) or span.get("name") or "tool"
+    args = _attr_first_raw(attrs, _TOOL_ARGS_KEYS)
+    return (
+        f"{name}:{hashlib.sha256(_norm(args).encode()).hexdigest()[:12]}"
+    )
 
 
 def detect_loops(tool_spans: list) -> list[dict]:
@@ -242,8 +309,8 @@ def detect_loops(tool_spans: list) -> list[dict]:
             {
                 "signature": sig,
                 "count": total[sig],
-                "tool": attrs.get(_TOOL_NAME_KEY) or "tool",
-                "args": _norm(attrs.get(_TOOL_ARGS_KEY))[:120],
+                "tool": _attr_first_raw(attrs, _TOOL_NAME_KEYS) or "tool",
+                "args": _norm(_attr_first_raw(attrs, _TOOL_ARGS_KEYS))[:120],
             }
         )
     return result
@@ -303,7 +370,7 @@ def _repeated_results(tool_spans: list) -> int:
     counts: dict[str, int] = {}
     for span in tool_spans:
         attrs = span.get("attributes") or {}
-        value = attrs.get(_TOOL_RESULT_KEY)
+        value = _attr_first_raw(attrs, _TOOL_RESULT_KEYS)
         if value is None or not str(value).strip():
             continue
         key = hashlib.sha256(_norm(value).encode()).hexdigest()
@@ -351,9 +418,10 @@ def build_digest(trace: dict) -> str:
             f"- cache: {cache_read} read / {new_input} new input "
             f"({ratio:.0%} of input was cached)"
         )
-    # Per-phase token totals from the phase agent-run spans; absent for
-    # legacy traces (no phase-named spans) and single-phase runs without
-    # aggregated usage on the span.
+    # Per-phase token totals from the phase agent-run spans ('invoke_agent
+    # <phase-id>' with cumulative gen_ai.aggregated_usage.*); includes cache
+    # reads, so the triple matches the MLflow per-phase metrics. Absent for
+    # legacy traces (agent run named 'agent', no phase naming).
     phase_tokens = trace_phase_tokens(trace)
     if phase_tokens:
         lines.append("- phase tokens:")
@@ -361,6 +429,14 @@ def build_digest(trace: dict) -> str:
             lines.append(
                 f"  - {phase}: {tokens['in']} in / {tokens['out']} out / "
                 f"{tokens['cache_read']} cache read"
+            )
+    else:
+        # Fallback for traces whose LLM spans carry the F4 phase label
+        # (shlepa.phase_id) but whose agent-run spans predate phase naming.
+        for phase, phase_in, phase_out in per_phase_tokens(trace):
+            lines.append(
+                f"- tokens[{phase}]: {phase_in} in / {phase_out} out "
+                f"(total {phase_in + phase_out})"
             )
     lines.append(f"- llm_calls: {len(llm)}")
     if llm:
@@ -407,7 +483,8 @@ def build_digest(trace: dict) -> str:
             )
         if tool_errors:
             names = ", ".join(
-                ((s.get("attributes") or {}).get(_TOOL_NAME_KEY) or s.get("name"))
+                _attr_first_raw(s.get("attributes") or {}, _TOOL_NAME_KEYS)
+                or s.get("name")
                 for s in tool_errors
             )
             lines.append(f"- **tool errors**: {len(tool_errors)} ({names})")

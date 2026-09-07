@@ -21,6 +21,7 @@ import json
 import os
 import weakref
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from shlepa_agent import __version__
@@ -46,6 +47,7 @@ def is_enabled() -> bool:
 # omitted (no empty attributes).
 _ENV_ATTRIBUTES: tuple[tuple[str, str], ...] = (
     ("SLEPA_BATCH_ID", "shlepa.batch_id"),
+    ("SLEPA_EXECUTION_ID", "shlepa.execution_id"),
     ("SLEPA_PRESET", "shlepa.preset"),
     ("SLEPA_GIT_SHA", "git.commit"),
     ("SLEPA_AGENT_VERSION", "shlepa.agent_version"),
@@ -84,6 +86,32 @@ def _span_attr_limit() -> int:
 # enough. None when no root span is open.
 _ROOT_SPAN_REF: "weakref.ref[Any] | None" = None
 
+# The pipeline phase currently being executed (F4: per-span phase labels).
+# Set by the runner around each phase execution (and its final_ask); the
+# span processor copies it onto every span started inside the phase so
+# traces can be read as PLAN -> WORK -> REVIEW. None outside a phase.
+_PHASE_ID: ContextVar[str | None] = ContextVar("shlepa_phase_id", default=None)
+
+
+@contextmanager
+def phase_context(phase_id: str):
+    """Mark the current execution as ``phase_id`` for the duration.
+
+    Spans started inside the block (tool calls, LLM requests, final_ask)
+    are stamped with ``shlepa.phase_id`` by :class:`_ShlepaSpanProcessor`.
+    Restores the previous phase on exit.
+    """
+    token = _PHASE_ID.set(phase_id)
+    try:
+        yield
+    finally:
+        _PHASE_ID.reset(token)
+
+
+def current_phase_id() -> str | None:
+    """The phase id of the current execution context, if any."""
+    return _PHASE_ID.get()
+
 
 def _set_root_ref(span: Any) -> None:
     """Register the open agent.run root span for late attribute stamping."""
@@ -98,11 +126,20 @@ _COMPLETION_TOKEN_KEYS = (
     "llm.token_count.completion",
     "gen_ai.usage.output_tokens",
 )
-# Cache tokens, first-class gen_ai usage attributes (emitted by pydantic-ai
-# when the endpoint reports them; OpenAI-compatible endpoints report reads
-# via prompt_tokens_details.cached_tokens).
-_CACHE_READ_KEYS = ("gen_ai.usage.cache_read.input_tokens",)
-_CACHE_WRITE_KEYS = ("gen_ai.usage.cache_creation.input_tokens",)
+# Prompt-cache token keys (0/absent when the endpoint does not report
+# caching). Instrumentation versions emit different key families (the
+# gen_ai.usage.* first-class attributes and the gen_ai.usage.details.*
+# legacy family carry the same counts on current traces; OpenAI-flavoured
+# builds name the write axis cache_creation). First present key wins.
+_CACHE_READ_KEYS = (
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.details.cache_read_tokens",
+)
+_CACHE_WRITE_KEYS = (
+    "gen_ai.usage.cache_write.input_tokens",
+    "gen_ai.usage.cache_creation.input_tokens",
+    "gen_ai.usage.details.cache_write_tokens",
+)
 
 
 class _ShlepaSpanProcessor(SpanProcessor):
@@ -132,6 +169,9 @@ class _ShlepaSpanProcessor(SpanProcessor):
             task_slug = os.environ.get("SLEPA_TASK_SLUG")
             if task_slug and "task" not in span.attributes:
                 span.set_attribute("task", task_slug)
+            phase_id = current_phase_id()
+            if phase_id and "shlepa.phase_id" not in span.attributes:
+                span.set_attribute("shlepa.phase_id", phase_id)
         except Exception:  # pragma: no cover - defensive, must never raise
             pass
 
@@ -153,12 +193,12 @@ class _ShlepaSpanProcessor(SpanProcessor):
         completion = self._first_present(attrs, _COMPLETION_TOKEN_KEYS)
         if prompt is None and completion is None:
             return  # not an LLM span: nothing to count
+        cache_read = self._first_present(attrs, _CACHE_READ_KEYS)
+        cache_write = self._first_present(attrs, _CACHE_WRITE_KEYS)
         if prompt is not None:
             self._prompt_tokens += int(prompt)
         if completion is not None:
             self._completion_tokens += int(completion)
-        cache_read = self._first_present(attrs, _CACHE_READ_KEYS)
-        cache_write = self._first_present(attrs, _CACHE_WRITE_KEYS)
         if cache_read is not None:
             self._cache_read_tokens += int(cache_read)
         if cache_write is not None:
@@ -369,6 +409,92 @@ def mark_termination(reason: str) -> None:
         return
     span.set_attribute("shlepa.termination_reason", reason)
     span.set_status(Status(StatusCode.ERROR, reason))
+
+
+#: Cap for free-text values stamped onto spans (F4): the trace UI and the
+#: digest builder should stay readable; full transcripts live in the
+#: per-task trace JSON anyway.
+_TEXT_CAP = 16_000
+
+
+def _capped(value: str, limit: int = _TEXT_CAP) -> str:
+    value = str(value)
+    return value if len(value) <= limit else value[:limit] + " [truncated]"
+
+
+def _current_recording_span() -> Any | None:
+    """The active recording span, or None (SDK absent / no span open)."""
+    try:
+        from opentelemetry import trace
+    except ImportError:  # baseline without the otel extra
+        return None
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return None
+    return span
+
+
+def mark_input(value: str) -> None:
+    """Stamp ``input.value`` (the task instruction) on the current span.
+
+    Called from the runner while the agent.run root span is open (F4): the
+    trace then carries the instruction directly instead of hiding it inside
+    the first LLM span. No-op when there is no active recording span or the
+    SDK is not installed. Never raises.
+    """
+    try:
+        span = _current_recording_span()
+        if span is not None:
+            span.set_attribute("input.value", _capped(value))
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+def mark_outcome(status: str, output: str = "") -> None:
+    """Stamp ``shlepa.status`` + ``output.value`` on the current span (F4).
+
+    The final pipeline status (done/timeout/error) and, when present, the
+    final output text. Complements shlepa.termination_reason, which only
+    covers crash/timeout exits. No-op rules as in :func:`mark_input`.
+    Never raises.
+    """
+    try:
+        span = _current_recording_span()
+        if span is not None:
+            span.set_attribute("shlepa.status", status)
+            if output:
+                span.set_attribute("output.value", _capped(output))
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+@contextmanager
+def final_ask_span(phase_id: str, prompt: str, provider: Any | None = None):
+    """Span for one toolless final_ask request (F4).
+
+    Carries the triggering phase id (``shlepa.phase_id``) and the prompt on
+    start; the caller stamps ``shlepa.ok`` / ``output.value`` before
+    exiting. ``provider`` is optional (tests inject their TracerProvider);
+    by default the globally configured one is used. Yields the span, or
+    None when the otel SDK is unavailable (baseline path), so the caller
+    guards attribute writes on a non-None span. A failure to open the span
+    degrades to a None yield, never a raised error: telemetry must not
+    break the run.
+    """
+    try:
+        if provider is not None:
+            tracer = provider.get_tracer("shlepa-agent")
+        else:
+            from opentelemetry import trace
+
+            tracer = trace.get_tracer("shlepa-agent")
+    except Exception:  # pragma: no cover - baseline without the otel extra
+        yield None
+        return
+    with tracer.start_as_current_span("final_ask") as span:
+        span.set_attribute("shlepa.phase_id", phase_id)
+        span.set_attribute("input.value", _capped(prompt, 4000))
+        yield span
 
 
 def configure(exporter: Any | None = None) -> TracerProvider:

@@ -1,4 +1,4 @@
-# Agent configuration (v5)
+# Agent configuration (v6-rewrite)
 
 The agent reads all tuning values from a single file:
 
@@ -10,119 +10,160 @@ The file ships inside the package, so the submission zip carries it
 automatically. Environment variables (`SHLEPA_*`) override individual keys
 at runtime; **invalid env values are ignored** (the file value wins).
 
-## Fixed cycle regime (v5)
+## Fixed regime (v6-rewrite)
 
 There is **NO task time limit T** in the agent — not detected, not
 assumed, not logged (issue #63: the contest does not expose T to the
-agent anyway). The agent works in plan → work → review **cycles** and the
-only bounds are the fixed per-operation constants
-(`shlepa_agent/budget.py`):
+agent anyway). The agent runs a **hard number of plan → work cycles**
+(`agent.max_cycles`, env `SHLEPA_MAX_CYCLES`, default 2) with a review
+**relay** between cycles, and the only bounds are the fixed
+per-operation constants (`shlepa_agent/budget.py`):
 
 ```
-plan   = 60s    work = 120s per cycle    review (commit) = 45s
-bash   = 30s per call (also the tool max)
+plan    = 30s per cycle
+work    = 120s per cycle
+review  = 45s (relay, between cycles only; SHLEPA_REVIEW_TIME)
+bash    = 30s per call (also the tool max)
 llm wall = 180s per request (open -> last chunk)
-full cycle = plan + work + review = 225s
+finalize reserve = 15s (SHLEPA_FINALIZE_RESERVE)
 ```
 
-There is **NO global hard stop, NO request-start gate and NO cycle cap**:
-the run stops only when (a) the review verdict is `done`, (b) a phase
-fails after its retries (status `error`), or (c) the container itself is
-killed at the task's own limit (the external boundary — the work phase
-keeps the deliverable file fresh on disk, so the partial result is what
-scores). There is also **NO token budget and NO request-count limit**
-(issue #62): token usage is still logged per request (telemetry /
-tie-break analysis) but never enforced.
+An explicit `[phases.<id>].time` overrides the regime cap for that phase
+(dev/testing knob); the shipped config leaves plan/work/review unset so
+the regime constants apply.
 
-## The plan → work → review cycle (v5)
+There is **NO global hard stop, NO request-start gate, NO token budget
+and NO request-count limit** (issue #62): token usage is still logged
+per request (telemetry / tie-break analysis) but never enforced. The run
+ends exactly after the last WORK (its outcome decides the final status),
+or when the container is killed at the task's own limit (the external
+boundary).
 
-Every run walks the phase graph (phase ids: `plan`, `work`, `commit` — the
-commit phase is the **reviewer**). The entry is always `plan` (`agent.entry`
-is a dev knob to force `work`).
+## The hard cycle loop (v6-rewrite)
+
+Every run walks exactly `max_cycles` plan → work cycles (phase ids:
+`plan`, `work`, `review` — the review is the **relay**). The entry is
+always `plan` (`agent.entry` is a dev knob to force `work`).
 
 ```
-   ┌────────────────── next_round (always) ──────────────────┐
-   ▼                                                        │
-plan ──> work ──> review (commit)   (terminal, typed ReviewResult)
+plan ──> work ──> review (relay) ──> plan ──> work ──> exit
+              (cycle 1)      (between cycles only,   (cycle N = max_cycles)
+                               toolless, typed)           the run ends here)
 ```
 
-The plan has no shortcut around work: it returns `decision = work | commit`
-in the schema, but the runner **always routes plan → work** (the plan phase
-has no write tools and can never deliver anything; a hallucinated
-`decision = commit` is ignored).
+The plan has no shortcut around work: the `PlanResult` schema carries no
+routing field, and the runner **always routes plan → work** (the plan phase
+has no write tools and can never deliver anything).
 
 | Phase      | Fresh/continued | Output         | Hard time cap | Retries | Reasoning |
 |------------|-----------------|----------------|---------------|---------|-----------|
-| `plan`     | fresh run       | `PlanResult` (typed) | 60s | 1 | — |
-| `work`     | fresh run (gets the plan hand-off) | `WorkResult` (typed) | 120s per cycle | 1 | — |
-| `commit`   | continues the work conversation | `ReviewResult` (typed) | 45s; the terminal handler | 0 | low |
-| `emergency`| — (UNUSED in v5, kept in code) | — | — | 0 | low |
+| `plan`     | fresh run (cycle ≥ 2: + previous work result + relay) | `PlanResult` (typed) | 30s (`SHLEPA_PLAN_TIME`) | 1 | — |
+| `work`     | fresh run (gets the plan +, cycle ≥ 2, the relay) | `WorkResult` (typed) | 120s per cycle | 1 | — |
+| `review`   | resumes the just-finished WORK transcript (trimmed) | `ReviewResult` relay (typed) | 45s (`SHLEPA_REVIEW_TIME`) | 0 | low |
+
+Tool policy (`[tool_policy]` in `config.toml` — the single source of
+truth; `[phases.*].tools` is only a legacy fallback for dev/test
+configs): `plan` is read-only (`read`, `recon`); `work` gets
+`read`, `write`, `edit`, `bash`, `recon`; `review` (relay) is
+**toolless** (`[]`). Per-iteration overrides use `<phase>_c<N>` keys
+(e.g. `work_c2`) — they only apply to that specific cycle.
+`[tool_policy].disabled` lists the unrouted phases (`commit`, `repair`,
+`salvage`, `emergency` — kept on disk for re-enable).
 
 An explicit `[phases.*].time` overrides the regime cap for that phase
 (dev/testing knob); the shipped config leaves them unset.
 
-Routing rules (runner):
+Routing rules (runner, v6-rewrite):
 
-- `plan` returns a typed `PlanResult` with `decision = work | commit`,
-  but the runner **always routes to work** — the plan phase has no write
-  tools and can never deliver the file itself, so the (legacy) trivial-task
-  shortcut is gone; a hallucinated `decision = commit` is ignored.
+- **Hard cycles**: exactly `agent.max_cycles` (env `SHLEPA_MAX_CYCLES`,
+  default 2) plan → work cycles run, unconditionally.
+- A done `plan` (typed `PlanResult`, `goal`/`findings`/`steps`/`risks` —
+  no routing field) **always** flows to WORK, even a trivial plan.
+- `plan` timeout → one toolless `final_ask` on the plan conversation, then
+  WORK. The final_ask is always typed: the model emits a `PartialHandoff`
+  (objective, findings, files_seen, hypotheses, failed_paths, next_action,
+  deliverable_path_if_known) and the harness independently extracts the
+  deterministic LAST_TOOLS tail (last 6 tool calls with capped args and
+  results, `SHLEPA_LAST_TOOLS_N`). Both land in the fresh WORK prompt —
+  the full plan transcript is never carried (KV-cache: the final_ask
+  prefix is byte-identical to the plan's last request).
+- `plan` error (after retries) → WORK with a direct-execution note
+  (there is no plan to follow).
 - `work` returns a typed `WorkResult` (`summary`, `findings`,
-  `deliverable`, `confidence`) — it has **no decision**: the run always
-  continues to the review phase.
-- `review` (the commit phase) returns a typed `ReviewResult`
-  (`status` ok/partial, `verdict` done/next_round, `artifact`, `checks`,
-  `hints`, `notes`); the reported run output is `notes` (falling back to
-  `artifact`). The reviewer is **toolless**: it judges the plan/work
-  transcript from the conversation alone — it cannot read files, run
-  checks, or repair anything. A broken deliverable is fixed by the next
-  plan/work round, not by the review.
-- **Cycle continuation**: a `verdict = next_round` **always** starts a new
-  plan/work cycle (logged as a `cycle` event). There is no cycle cap and
-  no time check — the container kill at the task's own limit is the only
-  external bound.
+  `deliverable`, `confidence`). The reported run output is the last
+  work's `summary`.
+- `review` (the relay) returns a typed `ReviewResult` (`summary`, `done`,
+  `problems`, `hints_next`). It is **distillation only** — it never
+  routes, never repairs, never decides the exit. Its full typed fields
+  (summary + problems + "do next" list, plus a context note when
+  `done=true`) reach the next cycle's PLAN and WORK prompts via the
+  `previous_results` block.
+- **Relay failure is not fatal**: a relay cut by its cap or failing after
+  its retries is logged as `review_fallback` (`reason` `timeout` / `error`) and
+  the next cycle starts without it.
+- **The run ends after the last WORK**: the final status is the last
+  work's outcome — `done` / `timeout` / `error`. A plan timeout or error
+  in the last cycle never changes it by itself.
+- **Cycle continuation**: after every cycle except the last, the relay
+  runs (logged as a `cycle` event, `reason=relay`); the next cycle's PLAN
+  receives the previous work result + the previous relay, and its WORK
+  additionally receives the relay.
 - **Phase hard timeouts** (`plan`/`work` cap expiry) and phase errors are
-  hand-offs, not crashes: on a timeout the runner issues **one** toolless
-  `final_ask` request on the same conversation — "time is up, write the
-  deliverable now, no tools" — capped at 30s, then hands off to the
-  review phase (the request prefix is byte-identical to the phase's last
-  request, so the local LLM server reuses its KV cache).
-- **The emergency phase** (v4 terminal rescue) is UNUSED: routing to it is
-  hard-off, the class and config section are kept for compatibility.
+  hand-offs, not crashes. Work timeout: one toolless `final_ask` on the
+  same conversation — "time is up, write the deliverable now, no tools" —
+  capped at 30s, then the relay (between cycles) or the exit (last cycle).
+  Plan timeout: one typed `final_ask` (partial hand-off), then WORK.
+  Both requests reuse the phase's last request prefix byte-for-byte
+  (KV-cache reuse on the local LLM server). The `final_ask` log event
+  carries the `mode` (`partial` = typed hand-off, `off` = plain message).
+- **Disabled phases** (kept on disk, never routed): `commit` (the v6
+  reviewer/verifier — superseded by the relay + the mechanical exit
+  gate), `repair`, `salvage` and `emergency`. Their phase classes,
+  prompts and `[phases.*]` sections stay in the package for possible
+  re-enable; `[tool_policy].disabled` is the routing gate.
 - **Step guard** (`agent.max_steps` > 0, dev knob, off by default): once
   the number of phase runs reaches the cap, the run stops at the next
-  boundary (final status `timeout`).
-- The review phase is terminal: the run ends when it finishes.
+  BETWEEN-CYCLES boundary (final status `timeout`); it never stops in the
+  middle of the last cycle.
+- **Mechanical exit gate**: after the last work the runner runs the
+  deliverable check (file/format/keys) and the test-file hash guard —
+  pure mechanics, no LLM. Endpoint safety net: a persistent 429/402/5xx
+  storm finalizes the run as `done` (`endpoint_finalized`).
 - **Retries** apply to non-timeout errors only: `plan` 1, `work` 1,
-  `commit` 0. Timeout results (time caps, context-limit breaches) are
+  `review` 0. Timeout results (time caps, context-limit breaches) are
   never retried — they hand off per the rules above.
 - **State hand-off**: after every phase the runner persists the run state
   (elapsed, cycles, regime, per-phase results) to the run-state file
   (`$SHLEPA_STATE_FILE`, default `/tmp/shlepa_state.json`) — never into
   the task workdir; the structured bridge between phases and cycles.
 
-## Baseline tool policy (v5.1)
+## Baseline tool policy (v6 slim, 2026-09-07)
 
 The packaged `config.toml` **is** the baseline (the `baseline` arm is a
-no-op on top of it):
+no-op on top of it). The slim-down (batch `388fde`: the orientation bundle
+was never adopted — `code_search` 0/649 calls, the extra tool list bloated
+every request) left `recon` as the ONLY custom tool:
 
-| Phase      | Tools                                                        | Notes |
-|------------|--------------------------------------------------------------|-------|
-| `plan`     | `read`, `recon`, `code_search`, `file_outline`               | maps and plans only — **no bash, no writes** |
-| `work`     | `read`, `write`, `edit`, `bash`, `recon`, `code_search`, `file_outline` | the only phase with **bash** and the only phase that writes the deliverable |
-| `commit`   | — (toolless)                                                 | the review judge; empty tool list, never augmented by arms/env |
-| `emergency`| `read`, `write`, `edit`, `bash` (legacy, unused)             | arm additions still land here (deduped, harmless) |
+| Phase      | Tools                                    | Notes |
+|------------|------------------------------------------|-------|
+| `plan`     | `read`, `recon`                          | maps and plans only — **no bash, no writes** |
+| `work`     | `read`, `write`, `edit`, `bash`, `recon` | the only phase with **bash** and the only phase that writes the deliverable |
+| `review`   | — (toolless)                             | the relay; empty tool list, never augmented by arms/env |
+| `commit` / `repair` / `salvage` / `emergency` | — (disabled, unused) | unrouted; arm additions dedupe to a no-op |
 
+- `search`, `code_search`, `file_outline` and `log_triage` are **off** in
+  the baseline. A dev config can re-enable them (`[tools.*].enabled` / the
+  `SHLEPA_SEARCH` env var) or use one of the arms below.
 - `recon` ships in the baseline, so the recon prompt block renders the
   **tool variant** (`recon_tool.md`) in the tooled phases; the toolless
   review renders no recon block at all. The script variant
-  (`recon_script.md`) remains for phases without the recon tool (e.g. the
-  read-only arm's phases).
-- The arms are now **engine/variant switches on top of the baseline**:
-  `+smart-grep` pins the search engine to `rg` (the baseline default),
-  `+sifs` to SIFS, `+forensics`/`+mitre-kb` add their tool to every tooled
-  phase, `+recon` is a no-op (recon is baseline), `read-only` replaces the
-  tooled phases with read/write/edit + recon (no bash).
+  (`recon_script.md`) remains for phases without the recon tool.
+- The arms are **tool re-adds on top of the slim baseline**:
+  `+smart-grep` / `+sifs` re-add the `code_search`/`file_outline` pair on
+  the pinned engine (`rg` / SIFS), `+forensics` re-adds `log_triage`,
+  `+mitre-kb` adds `mitre_kb` (+ the KB index prompt prefix), `+recon` is
+  a no-op (recon is baseline), `read-only` replaces the tooled phases
+  with read/write/edit + recon (no bash).
 
 ## Env-var overrides
 
@@ -142,22 +183,30 @@ no-op on top of it):
 | `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 45s) | float |
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
 | `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
+| `SHLEPA_PLAN_TIME` | `phases.plan.time` (default: plan cap 30s) | float |
+| `SHLEPA_SEARCH` | `tools.search.enabled` | 1/0 (bool; search is **off** in the slim baseline — 1 re-enables the tool) |
+| `SHLEPA_MAX_CYCLES` | `agent.max_cycles` | int ≥ 1: the hard plan/work cycle count (default 2) |
+| `SHLEPA_REVIEW_TIME` | `phases.review.time` | float: relay cap override (default: regime 45s) |
+| `SHLEPA_FINALIZE_RESERVE` | — (read directly by `budget.py`) | float: seconds reserved for finalization at run end (default 15) |
+| `SHLEPA_REVIEW_SUBCAPS` | — (read directly by the phases) | 1/0: 1 (default) keeps the legacy commit/repair subcaps for the disabled phases; 0 restores the 45s envelope |
+| `SHLEPA_LAST_TOOLS_N` | — (read directly by the harness) | int: how many last tool calls go into the LAST_TOOLS block (default 6, 0 disables) |
 
 Model/endpoint variables are unchanged (set by the harness, not the
 config): `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LOCAL_AGENT_MODEL`.
 
 ### AGENT_CODE_SEARCH (deliberate `AGENT_*` exception)
 
-Dev switch for the code-search engine (the legacy `AGENT_*` set was
+Dev switch for the code-search tools (the legacy `AGENT_*` set was
 dropped in v2; this one is wired on purpose). Values: `rg` (ripgrep
 fixed-string scan) or `sifs` (bundled SIFS binary, BM25-offline;
-`agent/tools/bin/sifs`). The baseline ships search **on** with the `rg`
-engine; the switch only pins the engine. Unset or an invalid value: the
-packaged baseline stays as-is (search on, `rg`), byte-identical to the
-golden fixture (`agent/tests/fixtures/default_prompt.txt`). When set, the
-config layer stores the engine (`code_search.engine`) and appends
-`code_search` + `file_outline` to every tooled phase (deduped; the
-toolless review is never augmented).
+`agent/tools/bin/sifs`). The slim baseline does **not** ship the
+`code_search`/`file_outline` pair, so the switch is what re-adds them:
+when set, the config layer stores the engine (`code_search.engine`) and
+enables + appends both tools to every active tooled phase (deduped; the
+toolless review is never augmented). Unset or an invalid value: the
+packaged baseline stays as-is (pair off), byte-identical to the golden
+fixture (`agent/tests/fixtures/default_prompt.txt`). `AGENT_TOOLSET`
+supersedes this switch when both are set.
 Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
 BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
 model, dev only); a missing/broken SIFS binary degrades to rg/regex with a
@@ -173,8 +222,10 @@ mutation.
   `llm_wall = 180s` (open -> last chunk). There is NO hard stop, NO
   request-start gate, NO request-count limit and NO token budget.
 - **Hard, enforced by the runner**: the fixed per-phase time caps (plan
-  60s / work 120s / review 45s; `[phases.*].time` overrides) and the
-  optional step guard.
+  30s / work 120s / review 45s; `[phases.*].time` overrides), the hard
+  cycle count (`SHLEPA_MAX_CYCLES`) and the optional step guard.
+- **Hard, enforced by the environment**: the container kill at the
+  task's own time limit — the only external bound on the cycles.
 - **External budget — developer-owned, never agent-visible**: each task
   has an official **time limit** (the container kill) and **token limit**
   (contest README: *"Each task has its own token and time limits"*). The
@@ -197,7 +248,7 @@ mutation.
     tight on budget. (The legacy `emergency` phase, unused in v5, was
     reworded to carry no deadline language for the same reason.)
 - **Advisory (rendered into prompts/status, never enforced)**:
-  per-phase `soft_time`/`soft_tokens` (`plan`: 45s/15k, `work`: 105s — no
+  per-phase `soft_time`/`soft_tokens` (`plan`: 25s/15k, `work`: 105s — no
   token note for work, `commit`: 35s/20k; every soft time stays under its
   phase's hard cap) and `phases.*.requests` (legacy slices, no longer
   enforced — kept as prompt context only).
@@ -206,8 +257,13 @@ mutation.
 
 - `[agent]` — pipeline entry (dev knob, default `plan`), temperature
   (opt-in: sent to the endpoint only when `send_temp` is enabled; default:
-  not sent, the endpoint decides), step guard (dev knob), emergency
-  phase name (unused in v5).
+  not sent, the endpoint decides), `max_cycles` (the hard plan/work cycle
+  count, default 2), step guard (dev knob), emergency phase name (unused —
+  emergency is disabled).
+- `[tool_policy]` — the single source of truth for per-phase tool
+  surfaces (`phases.<id>` lists; `<phase>_c<N>` per-cycle overrides) and
+  the `disabled` list of unrouted phases. Legacy `[phases.*].tools` is
+  only a fallback for configs without `[tool_policy]`.
 - `[budget]` — per-request caps: `max_tokens`, `request_timeout`
   (the phase caps are constants in `budget.py`).
 - `[tools.*]` — per-tool `enabled` plus caps: `timeout`/`max_timeout`/
@@ -236,8 +292,8 @@ fields:
 
 | Event | Fields | Notes |
 |---|---|---|
-| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `entry` | first line of a run (the stable CLI fields stay; `temp` is present only when `agent.send_temp` is enabled). Additive (v5): `emergency`, `max_steps`, `plan_cap`, `work_cap`, `review_cap`, `bash_cap`, `llm_wall` (CLI ignores unknown fields; there is NO `t`/`t_source`/`hard_time`/`soft_time`/`commit_deadline`) |
-| `usage` | `request`, `input_tokens`, `output_tokens`, `cumulative_input`, `cumulative_output`, `cumulative_total`, `elapsed_s` | per model request |
+| `agent_start` | `model`, `base_url`, `workdir`, `prompt`, `entry` | first line of a run (the stable CLI fields stay; `temp` is present only when `agent.send_temp` is enabled). Additive (v6-rewrite): `emergency`, `max_steps`, `max_cycles`, `plan_cap`, `work_cap`, `review_cap`, `bash_cap`, `llm_wall` (CLI ignores unknown fields; there is NO `t`/`t_source`/`hard_time`/`soft_time`/`commit_deadline`) |
+| `usage` | `request`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write`, `cumulative_input`, `cumulative_output`, `cumulative_cache_read`, `cumulative_cache_write`, `cumulative_total`, `elapsed_s` | per model request (v6: prompt-cache counters, 0 when the endpoint reports none) |
 | `agent_done` | `status`, `elapsed_s`, `output` | final line; `status` ∈ `done` / `timeout` / `error` |
 | `agent_error` | `error`, `elapsed_s` | unexpected failure (the run still exits 0) |
 
@@ -248,10 +304,11 @@ Additive pipeline events (v3):
 | `phase` | `id`, `start`, `cycle`, `requests`, `cap_s`, `elapsed_s` | phase entry (no more skips — there is no horizon to run out of) |
 | `phase_done` | `id`, `status`, `duration_s`, `elapsed_s` | phase exit |
 | `phase_retry` | `phase`, `attempt`, `elapsed_s` | non-budget error retry |
-| `final_ask` | `phase`, `start`/`ok`, `cap_s`, `history_messages`, `elapsed_s` | one-shot toolless rescue request |
-| `cycle` | `reason`, `cycle`, `elapsed_s` | a `next_round` review verdict started a new plan/work cycle (always) |
+| `final_ask` | `phase`, `mode`, `start`/`ok`, `cap_s`, `history_messages`, `elapsed_s` | one-shot toolless rescue request (`mode`: `off` = v5 message, `partial` = typed hand-off) |
+| `cycle` | `reason`, `cycle`, `elapsed_s` | a review relay finished between cycles (`reason=relay`) — the next plan/work cycle is about to start |
+| `review_fallback` | `reason`, `valid`, `elapsed_s` | the relay was cut (`timeout`) or failed (`error`); the next cycle starts without it |
 | `budget` | `reason`, `elapsed_s` (+ `detail`) | regime hand-off (`regime` logs the fixed caps at startup; `<phase> time cap`, `max_steps`, …) |
-| `commit` | `phase`, `start`, `history_messages`, `time_cap_s`, `elapsed_s` | review (commit) terminal entry |
+| `deliverable_check` | `kind`, `path`, `exists`, `non_empty`, `parse_ok`, `keys_ok`, `valid`, `reason` | the mechanical exit gate after the last work (no LLM) |
 | `llm_thinking` / `llm_tool_call` / `llm_tool_result` / `run_usage` | (v2, unchanged) | per-request observability |
 
 ## Instrumented tool results

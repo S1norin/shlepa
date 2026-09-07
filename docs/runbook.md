@@ -178,3 +178,10 @@ Note: a hard `exec_timeout` kills the container; most spans are already
 flushed (batch processor), and every span now carries `shlepa.batch_id`
 so the trace still correlates by batch even if the `agent.run` root span
 never made it.
+
+## Agent metrics and batch comparisons
+
+See [Agent measurement schema v2](mlflow-metrics.md) for reward validity,
+resource counters, run statuses and artifact semantics. After collecting runs,
+`shlepa metrics-summary BATCH_ID` saves per-family/configuration summaries.
+Multiple batch IDs can be supplied for repeated attempts with compatible tasks.

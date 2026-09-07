@@ -173,7 +173,22 @@ def test_parse_agent_metrics() -> None:
         "tokens_cache_write": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
+
+
+def test_parse_agent_metrics_cache_passthrough() -> None:
+    stderr = (
+        'SLEPA_AGENT_METRICS_JSON={"final_output": "", "tokens_in": 5, '
+        '"tokens_out": 7, "tokens_cache_read": 120, '
+        '"tokens_cache_write": 8, "tool_calls": 0, "termination": "ok"}\n'
+    )
+    parsed = dev_env.parse_agent_metrics(stderr)
+    assert parsed["tokens_cache_read"] == 120
+    assert parsed["tokens_cache_write"] == 8
 
 
 def test_parse_agent_metrics_carries_cache_fields() -> None:
@@ -192,11 +207,15 @@ def test_parse_agent_metrics_missing_or_broken() -> None:
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
-        "tool_calls": 0,
         "tokens_cache_read": 0,
         "tokens_cache_write": 0,
+        "tool_calls": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
     assert dev_env.parse_agent_metrics("no marker") == defaults
     assert dev_env.parse_agent_metrics("") == defaults
@@ -340,11 +359,17 @@ def test_parse_agent_metrics_reports_termination() -> None:
         "final_output": "",
         "tokens_in": 0,
         "tokens_out": 0,
+        "tokens_cache_read": 0,
+        "tokens_cache_write": 0,
         "tool_calls": 0,
         "tokens_cache_read": 0,
         "tokens_cache_write": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
 
 

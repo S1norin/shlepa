@@ -10,7 +10,12 @@ import time
 from pydantic_ai import RunContext
 
 from shlepa_agent.log import _log_event, _truncate
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    finalizing_result,
+    format_tool_result,
+)
 
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_TIMEOUT = 30.0
@@ -106,6 +111,11 @@ async def bash(
     args = {"command": command}
     if timeout is not None:
         args["timeout"] = timeout
+
+    # w3-2: inside the finalization reserve bash is not executed.
+    blocked = finalizing_result(ctx, "bash", t0, args=args)
+    if blocked is not None:
+        return blocked
 
     def finish(body: str, *, note: str | None = None, failed: str | None = None) -> str:
         return format_tool_result(

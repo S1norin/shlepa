@@ -16,6 +16,7 @@ Stages (fail-fast; each stage is reported on its own line):
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Callable
 
 from shlepa_cli.config import Settings
@@ -73,9 +74,41 @@ def run_smoke(
     out("doctor: ok")
 
     # Stage 2: task
+    run_id = None
+    trace_experiment_id = None
     if task_result is None:
-        task_result = _run_smoke_task(effective)
+        if mlflow_client is None:
+            from shlepa_cli.mlflow_client import get_mlflow_client
+
+            mlflow_client = get_mlflow_client(effective)
+        from shlepa_cli.mlflow_client import masked_client_stdout
+
+        target = mlflow_client.get_experiment_by_name(experiment)
+        trace_experiment_id = (
+            target.experiment_id
+            if target is not None
+            else mlflow_client.create_experiment(experiment)
+        )
+        execution_id = secrets.token_hex(16)
+        with masked_client_stdout():
+            run_id = mlflow_client.create_run(
+                experiment_id=trace_experiment_id,
+                run_name=SMOKE_TASK_SLUG,
+                tags={
+                    "run_kind": "trial",
+                    "metrics_schema_version": "2",
+                    "execution_id": execution_id,
+                    "task": SMOKE_TASK_SLUG,
+                },
+            ).info.run_id
+        task_result = _run_smoke_task(
+            effective,
+            execution_id=execution_id,
+            trace_experiment_id=trace_experiment_id,
+        )
     if task_result is None:
+        if run_id is not None:
+            mlflow_client.set_terminated(run_id, status="FAILED")
         out(f"task: FAIL (task {SMOKE_TASK_SLUG} not found)")
         return False
     if not task_result.ok:
@@ -105,18 +138,28 @@ def run_smoke(
             task_result,
             endpoint_class=endpoint_class,
             experiment_name=experiment,
+            run_id=run_id,
         )
         run = mlflow_client.get_run(run_id)
-        if run.info.status != "FINISHED":
-            raise RuntimeError(f"run status is {run.info.status}, not FINISHED")
+        # A crashed task closes its run as FAILED (see
+        # run_engine.log_task_to_mlflow); any terminal state means the
+        # record was logged and closed.
+        if run.info.status not in ("FINISHED", "FAILED"):
+            raise RuntimeError(
+                f"run status is {run.info.status}, not a terminal state"
+            )
     except Exception as exc:  # noqa: BLE001 - report the stage failure
         out(f"mlflow: FAIL ({type(exc).__name__}: {exc})")
         return False
     out(f"mlflow: ok (experiment={experiment} run={run_id})")
-    return bool(task_result.ok and task_result.solved)
+    return bool(task_result.ok and task_result.solved and run.info.status == "FINISHED")
 
 
-def _run_smoke_task(settings: Settings) -> TaskResult | None:
+def _run_smoke_task(
+    settings: Settings,
+    execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
+) -> TaskResult | None:
     """Run the smoke task through the dev engine (real docker or host)."""
     from shlepa_cli import run_engine
     from shlepa_cli.tasks import discover_tasks
@@ -134,4 +177,6 @@ def _run_smoke_task(settings: Settings) -> TaskResult | None:
         settings,
         model=settings.local_agent_model,
         no_docker=no_docker,
+        execution_id=execution_id,
+        trace_experiment_id=trace_experiment_id,
     )

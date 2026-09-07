@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import secrets
+from shlepa_cli.evaluation import Grade, reward_grade, pytest_grade, fingerprint, config_hash
 import subprocess
 import sys
 import time
@@ -29,6 +29,7 @@ from pathlib import Path
 from shlepa_cli import mlflow_compat as compat
 from shlepa_cli.config import Settings
 from shlepa_cli.tasks import Task, task_family
+from shlepa_cli.metrics_capture import MetricsCapture as _HostMetricsCapture
 
 DEFAULT_TRACE_EXPERIMENT = "shlepa-traces"
 AGENT_SERVICE = "shlepa-agent"
@@ -48,7 +49,7 @@ class AgentRun:
     final_output: str
     tokens_in: int
     tokens_out: int
-    tool_calls: int
+    tool_calls: int = 0
     termination: str = "ok"
     # Cache subset of the input tokens (0 when the endpoint doesn't
     # report them); appended so positional constructors stay valid.
@@ -57,6 +58,10 @@ class AgentRun:
     # Per-phase token deltas: phase id -> {"in", "out", "cache_read"}
     # ({} for legacy runs without phase-tagged usage events). Issue #73.
     phase_tokens: dict = field(default_factory=dict)
+    measurements: dict = field(default_factory=dict)
+    configuration: dict = field(default_factory=dict)
+    usage_status: str = "unknown"
+    cache_usage_status: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -79,11 +84,22 @@ class TaskResult:
     error: str | None
     score_detail: str
     workspace: Path
-    termination: str = "ok"
     tokens_cache_read: int = 0
     tokens_cache_write: int = 0
+    termination: str = "ok"
     # Per-phase token deltas ({} for legacy runs). Issue #73.
     phase_tokens: dict = field(default_factory=dict)
+    measurements: dict = field(default_factory=dict)
+    configuration: dict = field(default_factory=dict)
+    usage_status: str = "unknown"
+    cache_usage_status: str = "unknown"
+
+    reward: float | None = None
+    evaluation_valid: bool = False
+    grader_status: str = "unknown"
+    timings: dict = field(default_factory=dict)
+    execution_id: str = field(default_factory=lambda: secrets.token_hex(16))
+    provenance: dict = field(default_factory=dict)
 
 
 def make_workspace(repo_root: Path, slug: str) -> Path:
@@ -98,56 +114,6 @@ def make_batch_id() -> str:
     """Batch id for one 'shlepa run' invocation: <UTCcompact>-<6hex>."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"{timestamp}-{secrets.token_hex(3)}"
-
-
-class _HostMetricsCapture(logging.Handler):
-    """Collect token/tool metrics from the agent's JSON event log.
-
-    The runner logs a ``usage`` event with cumulative tokens after each
-    model request and a ``llm_tool_call`` event per tool invocation.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.tokens_in = 0
-        self.tokens_out = 0
-        self.cache_read = 0
-        self.cache_write = 0
-        self.tool_calls = 0
-        # Per-phase deltas from phase-tagged cumulative usage events
-        # ({} for legacy events without a phase). Issue #73.
-        self.phase_tokens: dict = {}
-        self._last_in = 0
-        self._last_out = 0
-        self._last_cache_read = 0
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            data = json.loads(record.getMessage())
-        except (TypeError, ValueError):
-            return
-        event = data.get("event")
-        if event == "usage":
-            ci = int(data.get("cumulative_input") or 0)
-            co = int(data.get("cumulative_output") or 0)
-            cr = int(data.get("cumulative_cache_read") or 0)
-            self.tokens_in = ci
-            self.tokens_out = co
-            self.cache_read = cr
-            self.cache_write = int(data.get("cumulative_cache_write") or 0)
-            phase = data.get("phase")
-            if phase:
-                bucket = self.phase_tokens.setdefault(
-                    phase, {"in": 0, "out": 0, "cache_read": 0}
-                )
-                bucket["in"] += max(0, ci - self._last_in)
-                bucket["out"] += max(0, co - self._last_out)
-                bucket["cache_read"] += max(0, cr - self._last_cache_read)
-            self._last_in = ci
-            self._last_out = co
-            self._last_cache_read = cr
-        elif event == "llm_tool_call":
-            self.tool_calls += 1
 
 
 def run_agent_on_host(
@@ -187,7 +153,19 @@ def run_agent_on_host(
                 )
             )
         except asyncio.TimeoutError:
-            raise TimeoutError(f"agent timed out after {timeout_sec}s") from None
+            error = TimeoutError(f"agent timed out after {timeout_sec}s")
+            error.agent_run = AgentRun(
+                "",
+                capture.tokens_in,
+                capture.tokens_out,
+                capture.tool_calls,
+                termination="timeout",
+                tokens_cache_read=capture.cache_read,
+                tokens_cache_write=capture.cache_write,
+                phase_tokens=capture.phase_tokens,
+                **capture.snapshot(),
+            )
+            raise error from None
     finally:
         if old_model is None:
             os.environ.pop("LOCAL_AGENT_MODEL", None)
@@ -207,6 +185,8 @@ def run_agent_on_host(
         tokens_cache_write=capture.cache_write,
         tool_calls=capture.tool_calls,
         phase_tokens=capture.phase_tokens,
+        termination={"done": "ok"}.get(capture.status, capture.status or "ok"),
+        **capture.snapshot(),
     )
 
 
@@ -245,6 +225,7 @@ def find_batch_trace(
     task_slug: str,
     since_ms: int | None = None,
     max_results: int = 50,
+    experiment_id: str | None = None,
 ) -> str | None:
     """Find the trace of one task in this batch; returns its id or None.
 
@@ -253,12 +234,10 @@ def find_batch_trace(
     Never raises: the caller treats None as 'not found yet'.
     """
     try:
-        exp_id = _resolve_trace_experiment_id(client, settings)
+        exp_id = experiment_id or _resolve_trace_experiment_id(client, settings)
         if exp_id is None:
             return None
-        return _find_batch_trace_inner(
-            client, exp_id, batch_id, task_slug, since_ms, max_results
-        )
+        return _find_batch_trace_inner(client, exp_id, batch_id, task_slug, since_ms, max_results)
     except Exception:  # noqa: BLE001 - lookup must never fail the run
         return None
 
@@ -303,6 +282,7 @@ def record_trace_tag(
     task_slug: str,
     batch_started_ms: int | None = None,
     timeout_sec: float = 15.0,
+    experiment_id: str | None = None,
 ) -> str | None:
     """Retry the batch trace lookup (the collector exports with a lag)
     and store the trace id in the run tag ``mlflow_trace_id``, then
@@ -314,7 +294,12 @@ def record_trace_tag(
     deadline = time.monotonic() + max(timeout_sec, 0.0)
     while True:
         trace_id = find_batch_trace(
-            client, settings, batch_id, task_slug, since_ms=batch_started_ms
+            client,
+            settings,
+            batch_id,
+            task_slug,
+            since_ms=batch_started_ms,
+            experiment_id=experiment_id,
         )
         if trace_id is not None:
             client.set_tag(run_id, "mlflow_trace_id", trace_id)
@@ -351,6 +336,68 @@ def _link_trace_to_run(client, run_id: str, trace_id: str) -> None:
         )
 
 
+def _close_run_failed(client, run_id: str, reason: str) -> None:
+    """Close a still-open task run as FAILED with a termination reason.
+
+    Best effort and idempotent: sets the ``termination_reason`` tag, then
+    terminates the run as FAILED. Never raises; a run that is already in
+    a terminal state is left untouched.
+    """
+    try:
+        client.set_tag(run_id, "termination_reason", reason[:500])
+    except Exception:  # noqa: BLE001 - telemetry must never fail the run
+        pass
+    try:
+        client.set_terminated(run_id, status="FAILED")
+    except Exception:  # noqa: BLE001 - telemetry must never fail the run
+        pass
+
+
+def sweep_orphaned_batch_runs(client, batch_id: str | None) -> list[str]:
+    """Close leftover PENDING/RUNNING runs of a finished batch.
+
+    Sweeps every active experiment for runs tagged with the batch's
+    ``batch_id`` that are still open (e.g. a logging step died between
+    create_run and set_terminated) and marks them FAILED with the
+    ``termination_reason`` tag. The batch id is generated as
+    ``YYYYMMDD-HHMMSS-<6 hex>`` (digits, dashes and hex only), so it is
+    safe to interpolate into the filter string. Returns the ids of the
+    closed runs. Never raises: a sweep failure must not break the batch
+    shutdown.
+    """
+    closed: list[str] = []
+    if not batch_id:
+        return closed
+    open_statuses = ("PENDING", "RUNNING")
+    try:
+        experiment_ids = [
+            experiment.experiment_id
+            for experiment in client.search_experiments()
+        ]
+        if not experiment_ids:
+            return closed
+        runs = client.search_runs(
+            experiment_ids=experiment_ids,
+            # The run filter grammar does not support status IN (...);
+            # fetch the (small) batch's runs and filter status here.
+            filter_string=f"tags.batch_id = '{batch_id}'",
+            max_results=500,
+        )
+        for run in runs:
+            if run.info.status not in open_statuses:
+                continue
+            _close_run_failed(
+                client,
+                run.info.run_id,
+                "orphaned: still open at batch shutdown; closed by the "
+                "post-batch sweep",
+            )
+            closed.append(run.info.run_id)
+    except Exception:  # noqa: BLE001 - the sweep must never break shutdown
+        pass
+    return closed
+
+
 def log_task_to_mlflow(
     client,
     settings: Settings,
@@ -363,6 +410,7 @@ def log_task_to_mlflow(
     trace_wait_sec: float = 15.0,
     experiment_name: str | None = None,
     arm: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Log one task result as an MLflow run; returns the run id.
 
@@ -374,6 +422,11 @@ def log_task_to_mlflow(
     reflects ``preset_name``. With otel on and a ``batch_id`` given, the
     run is tagged with ``batch_id`` and (when the trace is found)
     ``mlflow_trace_id``.
+
+    The run always ends in a terminal state: FINISHED for a task that ran
+    (solved or not), FAILED with a ``termination_reason`` tag for a
+    crashed task, and FAILED if MLflow logging itself fails or the engine
+    is interrupted (the run must never stay PENDING/RUNNING).
     """
     import shlepa_agent
 
@@ -389,6 +442,15 @@ def log_task_to_mlflow(
         "agent_version": shlepa_agent.__version__,
         "git_sha": _git_sha(settings.repo_root),
         "endpoint_class": endpoint_class,
+        "metrics_schema_version": "2",
+        "run_kind": "trial",
+        "task": result.slug,
+        "execution_id": result.execution_id,
+        "grader_status": result.grader_status,
+        "termination_reason": result.termination,
+        "usage_status": result.usage_status,
+        "cache_usage_status": result.cache_usage_status,
+        "configuration_status": "captured" if result.configuration else "unavailable",
     }
     if batch_id:
         tags["batch_id"] = batch_id
@@ -401,11 +463,13 @@ def log_task_to_mlflow(
         tags["trace_ref"] = f"{jaeger} service=shlepa-agent task={result.slug}"
     from shlepa_cli.mlflow_client import masked_client_stdout
 
-    with masked_client_stdout():  # defensive: mask any raw client output
-        run = client.create_run(
-            experiment_id=experiment_id, run_name=result.slug, tags=tags
-        )
-    run_id = run.info.run_id
+    if run_id is None:
+        with masked_client_stdout():  # defensive: mask any raw client output
+            run = client.create_run(experiment_id=experiment_id, run_name=result.slug, tags=tags)
+        run_id = run.info.run_id
+    else:
+        for key, value in tags.items():
+            client.set_tag(run_id, key, value)
     # The library's own View-run URL carries the embedded basic-auth
     # credentials; print a clean one instead (host without userinfo).
     parts = urlsplit(settings.mlflow_tracking_uri or "")
@@ -417,50 +481,103 @@ def log_task_to_mlflow(
             f"mlflow run: https://{host}/#/experiments/{experiment_id}/runs/{run_id}",
             flush=True,
         )
-    client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
-    client.log_metric(run_id, "duration_sec", result.duration_sec)
-    client.log_metric(run_id, "tokens_in", result.tokens_in)
-    client.log_metric(run_id, "tokens_out", result.tokens_out)
-    client.log_metric(run_id, "tokens_total", result.tokens_total)
-    # Always logged (0 when the endpoint doesn't report cache) so the
-    # runs table schema is stable across endpoint classes.
-    client.log_metric(run_id, "tokens_cache_read", result.tokens_cache_read)
-    client.log_metric(run_id, "tokens_cache_write", result.tokens_cache_write)
-    # Per-phase token deltas for every phase that ran (legacy runs have
-    # no phase data and keep their metric shape). Issue #73.
-    for phase, tokens in (result.phase_tokens or {}).items():
-        client.log_metric(run_id, f"tokens_in.{phase}", tokens.get("in", 0))
-        client.log_metric(run_id, f"tokens_out.{phase}", tokens.get("out", 0))
-        client.log_metric(
-            run_id, f"tokens_cache_read.{phase}", tokens.get("cache_read", 0)
+    terminated = False
+    close_reason = "engine interrupted before the MLflow run was closed"
+    try:
+        client.log_metric(run_id, "solved", 1.0 if result.solved else 0.0)
+        client.log_metric(run_id, "duration_sec", result.duration_sec)
+        client.log_metric(run_id, "tokens_in", result.tokens_in)
+        client.log_metric(run_id, "tokens_out", result.tokens_out)
+        client.log_metric(run_id, "tokens_total", result.tokens_total)
+        # Always logged (0 when the endpoint doesn't report cache) so the
+        # runs table schema is stable across endpoint classes.
+        client.log_metric(run_id, "tokens_cache_read", result.tokens_cache_read)
+        client.log_metric(run_id, "tokens_cache_write", result.tokens_cache_write)
+        # Per-phase token deltas for every phase that ran (legacy runs have
+        # no phase data and keep their metric shape). Issue #73.
+        for phase, tokens in (result.phase_tokens or {}).items():
+            client.log_metric(run_id, f"tokens_in.{phase}", tokens.get("in", 0))
+            client.log_metric(run_id, f"tokens_out.{phase}", tokens.get("out", 0))
+            client.log_metric(
+                run_id, f"tokens_cache_read.{phase}", tokens.get("cache_read", 0)
+            )
+        client.log_metric(run_id, "tool_calls", result.tool_calls)
+        client.log_metric(run_id, "evaluation_valid", float(result.evaluation_valid))
+        if result.reward is not None:
+            client.log_metric(run_id, "reward", result.reward)
+        for key, value in {**result.measurements, **result.timings}.items():
+            client.log_metric(run_id, key, value)
+        for key, value in result.provenance.items():
+            if value is not None:
+                client.log_param(run_id, key, value)
+        if result.configuration:
+            client.log_param(run_id, "config_hash", config_hash(result.configuration))
+        # Store full output and grader detail, never truncate them into params.
+        result.workspace.mkdir(parents=True, exist_ok=True)
+        artifacts = {
+            "final-output.txt": result.final_output,
+            "error.txt": result.error or "",
+            "grader.json": json.dumps(
+                {
+                    "status": result.grader_status,
+                    "valid": result.evaluation_valid,
+                    "reward": result.reward,
+                    "detail": result.score_detail,
+                }
+            ),
+            "configuration.json": json.dumps(result.configuration, indent=2),
+        }
+        for name, content in artifacts.items():
+            path = result.workspace / name
+            path.write_text(content)
+            client.log_artifact(run_id, str(path), artifact_path="data")
+        client.log_param(run_id, "termination", result.termination)
+        result_json = result.workspace / "result.json"
+        if result_json.is_file():
+            client.log_artifact(run_id, str(result_json), artifact_path="data")
+        if settings.shlepa_otel_enabled and batch_id:
+            record_trace_tag(
+                client,
+                settings,
+                run_id,
+                batch_id,
+                result.slug,
+                batch_started_ms=batch_started_ms,
+                timeout_sec=trace_wait_sec,
+                experiment_id=experiment_id,
+            )
+        failed = not result.ok or result.termination in {"error", "crash", "oom"}
+        failed = failed or (
+            not result.evaluation_valid and result.grader_status != "unknown"
         )
-    client.log_metric(run_id, "tool_calls", result.tool_calls)
-    client.log_param(run_id, "final_output", result.final_output[:2000])
-    client.log_param(run_id, "termination", result.termination)
-    if result.error:
-        client.log_param(run_id, "error", result.error[:2000])
-    result_json = result.workspace / "result.json"
-    if result_json.is_file():
-        client.log_artifact(run_id, str(result_json), artifact_path="data")
-    if settings.shlepa_otel_enabled and batch_id:
-        record_trace_tag(
-            client,
-            settings,
-            run_id,
-            batch_id,
-            result.slug,
-            batch_started_ms=batch_started_ms,
-            timeout_sec=trace_wait_sec,
-        )
-    client.set_terminated(run_id, status="FINISHED")
+        if failed:
+            # Hard task error (agent crash, invalid evaluation): the run
+            # represents a failed execution.
+            close_reason = (
+                f"task {result.termination}: "
+                f"{result.error or 'invalid evaluation'}"
+            )
+            _close_run_failed(client, run_id, close_reason)
+        else:
+            # Normal path (solved or unsolved): unchanged FINISHED status.
+            client.set_terminated(run_id, status="FINISHED")
+        terminated = True
+    except Exception as exc:  # noqa: BLE001 - close the run, then surface
+        close_reason = f"mlflow logging failed: {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if not terminated:
+            # MLflow logging itself raised, or the engine was interrupted
+            # (Ctrl-C/SIGTERM): the run must not stay PENDING/RUNNING.
+            _close_run_failed(client, run_id, close_reason)
     return run_id
 
 
-def _score_no_docker(task: Task, workspace: Path) -> tuple[bool, str]:
+def _score_no_docker(task: Task, workspace: Path) -> Grade:
     """Run the task's tests/ with pytest on the host (SLEPA_NO_DOCKER mode)."""
     tests_dir = task.path / "tests"
     if not tests_dir.is_dir():
-        return False, "no tests/ directory in task"
+        return Grade(False, "no tests/ directory in task", status="missing_verifier")
     env = {
         **os.environ,
         "SLEPA_WORKSPACE": str(workspace),
@@ -483,7 +600,7 @@ def _score_no_docker(task: Task, workspace: Path) -> tuple[bool, str]:
         text=True,
         timeout=300,
     )
-    return proc.returncode == 0, (proc.stdout or proc.stderr)[-2000:]
+    return pytest_grade(proc.returncode, (proc.stdout or proc.stderr)[-2000:])
 
 
 def run_preset(
@@ -508,9 +625,7 @@ def run_preset(
     batch_id = batch_id or make_batch_id()
     batch_started_ms = int(time.time() * 1000)
     if settings.shlepa_otel_enabled:
-        endpoint = (
-            settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
-        )
+        endpoint = settings.otel_exporter_otlp_endpoint or "http://localhost:4318"
         if not _probe_collector(endpoint):
             print(
                 f"warning: OTel collector unreachable (probed {endpoint}) "
@@ -520,37 +635,94 @@ def run_preset(
                 flush=True,
             )
     results: list[TaskResult] = []
-    for index, task in enumerate(tasks, 1):
-        print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
-        result = run_task(
-            task,
-            settings,
-            model=model,
-            no_docker=no_docker,
-            agent_runner=agent_runner,
-            docker_client=docker_client,
-            batch_id=batch_id,
-            preset_name=preset.name,
-            arm=arm,
-        )
-        results.append(result)
-        if mlflow_client is not None:
-            log_task_to_mlflow(
-                mlflow_client,
-                settings,
-                preset.name,
-                model,
-                result,
-                batch_id=batch_id,
-                batch_started_ms=batch_started_ms,
-                arm=arm,
+    try:
+        for index, task in enumerate(tasks, 1):
+            print(f"[{index}/{len(tasks)}] {task.slug}", flush=True)
+            execution_id = secrets.token_hex(16)
+            run_id = None
+            trace_experiment_id = (
+                settings.mlflow_telemetry_experiment_id
+                if settings.shlepa_otel_enabled
+                and (settings.mlflow_telemetry_experiment_id or "").isdigit()
+                else None
             )
-        print(
-            f"  -> {result.slug}: solved={result.solved} "
-            f"duration={result.duration_sec}s tokens={result.tokens_total}"
-            + (f" error={result.error}" if result.error else ""),
-            flush=True,
-        )
+            if mlflow_client is not None:
+                from shlepa_cli.mlflow_client import masked_client_stdout
+
+                family = task_family(task.slug)
+                experiment = mlflow_client.get_experiment_by_name(family)
+                experiment_id = (
+                    experiment.experiment_id
+                    if experiment
+                    else mlflow_client.create_experiment(family)
+                )
+                if settings.shlepa_otel_enabled:
+                    trace_experiment_id = experiment_id
+                with masked_client_stdout():
+                    run_id = mlflow_client.create_run(
+                        experiment_id=experiment_id,
+                        run_name=task.slug,
+                        tags={
+                            "run_kind": "trial",
+                            "metrics_schema_version": "2",
+                            "batch_id": batch_id,
+                            "execution_id": execution_id,
+                            "preset": preset.name,
+                            "model": model or "env",
+                            "task": task.slug,
+                        },
+                    ).info.run_id
+                mlflow_client.log_param(
+                    run_id, "requested_timeout_sec", task.timeout_sec or "unset"
+                )
+            try:
+                result = run_task(
+                    task,
+                    settings,
+                    model=model,
+                    no_docker=no_docker,
+                    agent_runner=agent_runner,
+                    docker_client=docker_client,
+                    batch_id=batch_id,
+                    preset_name=preset.name,
+                    arm=arm,
+                    execution_id=execution_id,
+                    trace_experiment_id=trace_experiment_id,
+                )
+            except BaseException:
+                if run_id is not None:
+                    mlflow_client.set_terminated(run_id, status="FAILED")
+                raise
+            results.append(result)
+            if mlflow_client is not None:
+                log_task_to_mlflow(
+                    mlflow_client,
+                    settings,
+                    preset.name,
+                    model,
+                    result,
+                    batch_id=batch_id,
+                    batch_started_ms=batch_started_ms,
+                    arm=arm,
+                    run_id=run_id,
+                )
+            print(
+                f"  -> {result.slug}: solved={result.solved} "
+                f"duration={result.duration_sec}s tokens={result.tokens_total}"
+                + (f" error={result.error}" if result.error else ""),
+                flush=True,
+            )
+    finally:
+        # Engine shutdown path (normal completion and interrupt alike):
+        # close any batch run left open. The sweep never raises.
+        if mlflow_client is not None:
+            closed = sweep_orphaned_batch_runs(mlflow_client, batch_id)
+            if closed:
+                print(
+                    f"  closed {len(closed)} orphaned run(s) from batch "
+                    f"{batch_id}: {', '.join(closed)}",
+                    flush=True,
+                )
     return results
 
 
@@ -558,9 +730,7 @@ def format_summary(results: list[TaskResult]) -> str:
     """Final summary table for a preset run."""
     if not results:
         return "no tasks run"
-    lines = [
-        f"{'SLUG':<40} {'STATUS':<7} {'SOLVED':<8} {'DUR(s)':>8} {'TOKENS':>8}  NOTE"
-    ]
+    lines = [f"{'SLUG':<40} {'STATUS':<7} {'SOLVED':<8} {'DUR(s)':>8} {'TOKENS':>8}  NOTE"]
     for r in results:
         status = "OK" if r.ok else "ERROR"
         note = r.error[:50] if r.error else ("unsolved" if not r.solved else "")
@@ -574,9 +744,7 @@ def format_summary(results: list[TaskResult]) -> str:
 
 
 def _write_result_json(workspace: Path, result: TaskResult) -> None:
-    (workspace / "result.json").write_text(
-        json.dumps(asdict(result), indent=2, default=str)
-    )
+    (workspace / "result.json").write_text(json.dumps(asdict(result), indent=2, default=str))
 
 
 def _call_agent(
@@ -589,6 +757,8 @@ def _call_agent(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> AgentRun:
     """Invoke the agent with SLEPA_TASK_SLUG set for the duration of the run.
 
@@ -598,6 +768,12 @@ def _call_agent(
     old_slug = os.environ.get("SLEPA_TASK_SLUG")
     os.environ["SLEPA_TASK_SLUG"] = task.slug
     extra: dict[str, str] = {}
+    if execution_id:
+        extra["SLEPA_EXECUTION_ID"] = execution_id
+    if settings.shlepa_otel_enabled and trace_experiment_id:
+        extra["OTEL_EXPORTER_OTLP_HEADERS"] = (
+            f"x-mlflow-experiment-id={trace_experiment_id}"
+        )
     if settings.shlepa_otel_enabled:
         if batch_id:
             extra["SLEPA_BATCH_ID"] = batch_id
@@ -629,7 +805,7 @@ def _call_agent(
                 os.environ[key] = value
 
 
-def _score_container(docker, container: str, task: Task) -> tuple[bool, str]:
+def _score_container(docker, container: str, task: Task) -> Grade:
     """Fallback scoring: run the task's tests/ with pytest in the container.
 
     Used only when the task has no tests/test.sh (non-contest or legacy
@@ -639,7 +815,7 @@ def _score_container(docker, container: str, task: Task) -> tuple[bool, str]:
     """
     tests_dir = task.path / "tests"
     if not tests_dir.is_dir():
-        return False, "no tests/ directory in task"
+        return Grade(False, "no tests/ directory in task", status="missing_verifier")
     probe = docker.exec(container, ["python", "-m", "pytest", "--version"], {})
     if probe.returncode != 0:
         install = docker.exec(
@@ -647,18 +823,20 @@ def _score_container(docker, container: str, task: Task) -> tuple[bool, str]:
         )
         if install.returncode != 0:
             detail = (install.stdout or install.stderr)[-1000:]
-            return False, f"pytest unavailable in container and install failed: {detail}"
+            return Grade(
+                False,
+                f"pytest unavailable in container and install failed: {detail}",
+                status="verifier_setup_error",
+            )
     proc = docker.exec(
         container,
         ["python", "-m", "pytest", "/tests", "-q", "--tb=short", "-p", "no:cacheprovider"],
         {"SLEPA_WORKSPACE": "/workspace", "SLEPA_TASK_SLUG": task.slug},
     )
-    return proc.returncode == 0, (proc.stdout or proc.stderr)[-2000:]
+    return pytest_grade(proc.returncode, (proc.stdout or proc.stderr)[-2000:])
 
 
-def _score_container_faithful(
-    docker, container: str, task: Task, reward_file: Path
-) -> tuple[bool, str]:
+def _score_container_faithful(docker, container: str, task: Task, reward_file: Path) -> Grade:
     """Run the contest verifier (tests/test.sh) inside the container.
 
     The verifier writes 1/0 to /logs/verifier/reward.txt; that path is
@@ -667,7 +845,7 @@ def _score_container_faithful(
     """
     test_sh = task.path / "tests" / "test.sh"
     if not test_sh.is_file():
-        return False, "no tests/test.sh in task"
+        return Grade(False, "no tests/test.sh in task", status="missing_verifier")
     timeout = task.verifier_timeout_sec or 300
     proc = docker.exec(
         container,
@@ -677,16 +855,17 @@ def _score_container_faithful(
     )
     if not reward_file.is_file():
         tail = (proc.stdout or proc.stderr)[-1000:]
-        return (
+        return Grade(
             False,
             f"verifier wrote no reward.txt (rc={proc.returncode}): {tail}",
+            status="missing_reward",
         )
     content = reward_file.read_text().strip()
     detail = (
         f"reward={content or 'empty'} rc={proc.returncode} "
         f"out={(proc.stdout or proc.stderr)[-500:]}"
     )
-    return content == "1", detail
+    return reward_grade(content, detail, proc.returncode)
 
 
 def _probe_collector(endpoint: str) -> bool:
@@ -731,6 +910,8 @@ def _agent_env(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> dict[str, str]:
     """docker-exec environment for the in-container agent."""
     env: dict[str, str] = {
@@ -738,6 +919,12 @@ def _agent_env(
         "LOCAL_AGENT_MODEL": model or settings.local_agent_model or "",
         "SLEPA_TASK_SLUG": task.slug,
     }
+    if execution_id:
+        env["SLEPA_EXECUTION_ID"] = execution_id
+    if settings.shlepa_otel_enabled and trace_experiment_id:
+        env["OTEL_EXPORTER_OTLP_HEADERS"] = (
+            f"x-mlflow-experiment-id={trace_experiment_id}"
+        )
     if settings.openai_api_key:
         env["OPENAI_API_KEY"] = settings.openai_api_key
     if settings.openai_base_url:
@@ -773,6 +960,14 @@ def _agent_version() -> str:
         return "unknown"
 
 
+def _timed(timings, metric_name, fn, /, *args, **kwargs):
+    started = time.monotonic()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        timings[metric_name] = timings.get(metric_name, 0) + time.monotonic() - started
+
+
 def run_task(
     task: Task,
     settings: Settings,
@@ -784,6 +979,8 @@ def run_task(
     batch_id: str | None = None,
     preset_name: str | None = None,
     arm: str | None = None,
+    execution_id: str | None = None,
+    trace_experiment_id: str | None = None,
 ) -> TaskResult:
     """Run one task and return its TaskResult.
 
@@ -801,11 +998,25 @@ def run_task(
 
         docker_client = DockerClient()
 
+    execution_id = execution_id or secrets.token_hex(16)
     workspace = make_workspace(settings.repo_root, task.slug)
     instruction_file = task.path / "instruction.md"
     started = time.monotonic()
-    agent_run = AgentRun("", 0, 0, 0)
+    agent_run = AgentRun(final_output="", tokens_in=0, tokens_out=0)
     solved = False
+    grade = Grade(False, "verifier not run")
+    timings = {}
+    stage = "setup"
+    provenance = {
+        "agent_source_hash": fingerprint(
+            settings.repo_root / "agent", (settings.repo_root / "agent" / "shlepa_agent").rglob("*")
+        ),
+        "task_hash": fingerprint(task.path, task.path.rglob("*")),
+        "grader_hash": fingerprint(task.path, (task.path / "tests").rglob("*")),
+        "timeout_sec": task.timeout_sec,
+        "verifier_timeout_sec": task.verifier_timeout_sec,
+        "runner": "host" if no_docker else "container",
+    }
     score_detail = ""
     error: str | None = None
     container: str | None = None
@@ -815,7 +1026,11 @@ def run_task(
     elif no_docker:
         try:
             instruction = instruction_file.read_text()
-            agent_run = _call_agent(
+            stage = "agent"
+            agent_run = _timed(
+                timings,
+                "agent_duration_sec",
+                _call_agent,
                 agent_runner,
                 task,
                 instruction,
@@ -825,13 +1040,18 @@ def run_task(
                 batch_id=batch_id,
                 preset_name=preset_name,
                 arm=arm,
+                execution_id=execution_id,
+                trace_experiment_id=trace_experiment_id,
             )
-            solved, score_detail = _score_no_docker(task, workspace)
+            stage = "grader"
+            grade = _timed(timings, "grader_duration_sec", _score_no_docker, task, workspace)
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
-            agent_run = AgentRun(
-                "", 0, 0, 0, termination=_classify_termination(exc)
-            )
+            if stage == "agent":
+                agent_run = getattr(exc, "agent_run", None) or AgentRun(
+                    "", 0, 0, 0, termination=_classify_termination(exc)
+                )
+            grade = Grade(False, error, status=f"{stage}_error")
     else:
         from shlepa_cli import dev_env
         from shlepa_cli.docker_client import Mount
@@ -840,8 +1060,13 @@ def run_task(
         dev_image = f"shlepa-task-{task.slug}:dev"
         logs_dir = workspace / "logs" / "verifier"
         try:
-            docker_client.build(env_image, task.environment_dir)
-            dev_env.build_dev_image(
+            _timed(
+                timings, "setup_duration_sec", docker_client.build, env_image, task.environment_dir
+            )
+            _timed(
+                timings,
+                "setup_duration_sec",
+                dev_env.build_dev_image,
                 docker_client,
                 env_image=env_image,
                 dev_image=dev_image,
@@ -849,7 +1074,10 @@ def run_task(
                 workdir=workspace,
             )
             logs_dir.mkdir(parents=True, exist_ok=True)
-            container = docker_client.run(
+            container = _timed(
+                timings,
+                "setup_duration_sec",
+                docker_client.run,
                 name=f"shlepa-{task.slug}-{time.time_ns() % 10**8}",
                 image=dev_image,
                 network="host",
@@ -860,7 +1088,11 @@ def run_task(
                 env=task.env,
             )
             instruction = instruction_file.read_text()
-            agent_run = dev_env.run_agent_in_container(
+            stage = "agent"
+            agent_run = _timed(
+                timings,
+                "agent_duration_sec",
+                dev_env.run_agent_in_container,
                 docker_client,
                 container,
                 instruction,
@@ -871,16 +1103,25 @@ def run_task(
                     batch_id=batch_id,
                     preset_name=preset_name,
                     arm=arm,
+                    execution_id=execution_id,
+                    trace_experiment_id=trace_experiment_id,
                 ),
                 timeout_sec=task.timeout_sec,
             )
+            stage = "grader"
             if (task.path / "tests" / "test.sh").is_file():
-                solved, score_detail = _score_container_faithful(
-                    docker_client, container, task, logs_dir / "reward.txt"
+                grade = _timed(
+                    timings,
+                    "grader_duration_sec",
+                    _score_container_faithful,
+                    docker_client,
+                    container,
+                    task,
+                    logs_dir / "reward.txt",
                 )
             else:
-                solved, score_detail = _score_container(
-                    docker_client, container, task
+                grade = _timed(
+                    timings, "grader_duration_sec", _score_container, docker_client, container, task
                 )
             try:
                 docker_client.cp_out(container, "/app", workspace / "app")
@@ -888,9 +1129,11 @@ def run_task(
                 pass
         except Exception as exc:  # noqa: BLE001 - keep the batch going
             error = f"{type(exc).__name__}: {exc}"
-            agent_run = AgentRun(
-                "", 0, 0, 0, termination=_classify_termination(exc)
-            )
+            if stage == "agent":
+                agent_run = getattr(exc, "agent_run", None) or AgentRun(
+                    "", 0, 0, 0, termination=_classify_termination(exc)
+                )
+            grade = Grade(False, error, status=f"{stage}_error")
         finally:
             if container is not None:
                 try:
@@ -898,6 +1141,7 @@ def run_task(
                 except Exception:  # noqa: BLE001 - best effort cleanup
                     pass
 
+    solved, score_detail = grade
     duration = time.monotonic() - started
     result = TaskResult(
         slug=task.slug,
@@ -910,12 +1154,22 @@ def run_task(
         tokens_cache_read=agent_run.tokens_cache_read,
         tokens_cache_write=agent_run.tokens_cache_write,
         phase_tokens=agent_run.phase_tokens,
+        measurements=agent_run.measurements,
+        configuration=agent_run.configuration,
+        usage_status=agent_run.usage_status,
+        cache_usage_status=agent_run.cache_usage_status,
         tool_calls=agent_run.tool_calls,
         final_output=agent_run.final_output,
         error=error,
         score_detail=score_detail,
         workspace=workspace,
         termination=agent_run.termination,
+        reward=grade.reward,
+        evaluation_valid=grade.valid,
+        grader_status=grade.status,
+        timings=timings,
+        provenance=provenance,
+        execution_id=execution_id,
     )
     _write_result_json(workspace, result)
     return result

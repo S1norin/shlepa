@@ -12,8 +12,14 @@ from shlepa_cli import trace_digest
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _llm_span(i, prompt, completion, start_ns=None):
+def _llm_span(i, prompt, completion, start_ns=None, phase=None):
     start = (start_ns if start_ns is not None else i) * 1_000_000_000
+    attributes = {
+        "llm.token_count.prompt": str(prompt),
+        "llm.token_count.completion": str(completion),
+    }
+    if phase is not None:
+        attributes["shlepa.phase_id"] = phase
     return {
         "span_id": f"llm-{i}",
         "parent_id": None,
@@ -23,10 +29,7 @@ def _llm_span(i, prompt, completion, start_ns=None):
         "status": "OK",
         "start_time_ns": start,
         "end_time_ns": start + 1_000_000_000,
-        "attributes": {
-            "llm.token_count.prompt": str(prompt),
-            "llm.token_count.completion": str(completion),
-        },
+        "attributes": attributes,
         "events": [],
         "inputs": None,
         "outputs": None,
@@ -111,6 +114,39 @@ def test_header_aggregates_tokens_calls_and_duration():
     assert "300" in digest  # peak = max prompt
     assert "tool_errors" in digest.lower() or "tool errors" in digest.lower()
     assert "1" in digest  # one ERROR tool span
+
+
+def test_header_per_phase_token_lines():
+    spans = [
+        _llm_span(1, 100, 10, phase="work"),
+        _llm_span(2, 50, 5, phase="plan"),
+        _llm_span(3, 20, 2, phase="commit"),
+    ]
+    digest = trace_digest.build_digest(_trace(spans))
+    plan_line = next(ln for ln in digest.splitlines() if ln.startswith("- tokens[plan]:"))
+    work_line = next(ln for ln in digest.splitlines() if ln.startswith("- tokens[work]:"))
+    commit_line = next(
+        ln for ln in digest.splitlines() if ln.startswith("- tokens[commit]:")
+    )
+    assert "50 in / 5 out" in plan_line
+    assert "100 in / 10 out" in work_line
+    assert "20 in / 2 out" in commit_line
+    # plan -> work -> commit ordering regardless of span order
+    assert digest.index(plan_line) < digest.index(work_line) < digest.index(commit_line)
+
+
+def test_per_phase_lines_absent_for_unlabeled_traces():
+    spans = [_llm_span(1, 100, 10), _llm_span(2, 200, 20)]
+    digest = trace_digest.build_digest(_trace(spans))
+    assert "tokens[" not in digest
+
+
+def test_per_phase_tokens_helper_ignores_unlabeled_spans():
+    spans = [
+        _llm_span(1, 100, 10, phase="plan"),
+        _llm_span(2, 200, 20),  # unlabeled: excluded
+    ]
+    assert trace_digest.per_phase_tokens(_trace(spans)) == [("plan", 100, 10)]
 
 
 def test_repeated_identical_tool_results_counted():
@@ -293,6 +329,86 @@ def test_real_fixture_thinking_parts():
     """Golden fixture: the real span (tr-a5420d2d) has a thinking part."""
     span = json.loads((FIXTURES / "llm_span_real.json").read_text())
     assert trace_digest.thinking_parts_count(span) >= 1
+
+
+# --- F3: real gen_ai.* / legacy key families (issue #68) -------------------
+# Current traces carry gen_ai.tool.* + tool.parameters/output.value, never
+# the bare tool.call.arguments / tool.call.result the pre-F3 digest looked
+# for (which collapsed every signature to empty args -> mass false loops).
+
+
+def _tool_span_real_keys(i, name="bash", args=None, result="ok"):
+    """Tool span shaped like the real traces (gen_ai + legacy families)."""
+    span = _tool_span(i, name=name, args=None, result=None)
+    attrs = {
+        "gen_ai.tool.name": name,
+        "gen_ai.tool.call.id": f"call-{i}",
+    }
+    if args is not None:
+        attrs["gen_ai.tool.call.arguments"] = (
+            args if isinstance(args, dict) else json.loads(args)
+        )
+        attrs["tool.parameters"] = attrs["gen_ai.tool.call.arguments"]
+    if result is not None:
+        attrs["gen_ai.tool.call.result"] = result
+        attrs["output.value"] = result
+    attrs["tool.name"] = name
+    span["attributes"] = attrs
+    return span
+
+
+def test_loop_positive_on_repeated_args_genai_keys():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": "curl http://x"})
+        for i in range(5)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    loop = [s for s in signals if s.startswith("loop:bash:5")]
+    assert loop, signals
+    assert "curl http://x" in loop[0]
+
+
+def test_loop_negative_on_distinct_args_genai_keys():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": f"ls dir-{i}"})
+        for i in range(8)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert not [s for s in signals if s.startswith("loop:")], signals
+
+
+def test_repeated_results_uses_genai_result_key():
+    spans = [
+        _tool_span_real_keys(1, "bash", {"command": "a"}, "same output"),
+        _tool_span_real_keys(2, "bash", {"command": "b"}, "same output"),
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert "repeated_results:1" in signals
+
+
+def test_repeated_results_empty_never_counts():
+    spans = [
+        _tool_span_real_keys(i, "bash", {"command": f"c-{i}"}, "")
+        for i in range(4)
+    ]
+    signals = trace_digest.trace_signals(_trace(spans))
+    assert not [s for s in signals if s.startswith("repeated_results:")], signals
+
+
+def test_legacy_tool_parameters_args_still_supported():
+    # Pre-gen_ai traces: only the legacy tool.name + tool.parameters pair.
+    spans = []
+    for i in range(5):
+        span = _tool_span(i, name="bash", args=None, result=None)
+        span["attributes"] = {
+            "tool.name": "bash",
+            "tool.parameters": {"command": "ping host"},
+        }
+        spans.append(span)
+    signals = trace_digest.trace_signals(_trace(spans))
+    loop = [s for s in signals if s.startswith("loop:bash:5")]
+    assert loop, signals
+    assert "ping host" in loop[0]
 
 
 # --- Cache-read reporting --------------------------------------------------

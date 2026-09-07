@@ -72,6 +72,27 @@ class RunState:
     results: dict[str, PhaseResult] = field(default_factory=dict)
     #: Completed plan->work cycles (replan count).
     cycles: int = 0
+    #: v6 plan-timeout hand-off payload, set by the runner when a plan
+    #: timeout is routed to WORK: {"handoff": <PartialHandoff JSON or None>,
+    #: "last_tools": [LAST_TOOLS entries]}. Rendered into the work prompt;
+    #: None for normal plans and for ``SHLEPA_HANDOFF=off``.
+    plan_handoff: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-3): deliverable spec resolved after WORK (from the plan's
+    #: artifact_spec / WorkResult.deliverable); None when no path is known.
+    deliverable_spec: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-3): latest mechanical check result (deliverable_check.py);
+    #: refreshed after WORK and again after SALVAGE; consumed by REVIEW.
+    deliverable_check: dict[str, Any] | None = field(default=None)
+    #: v6 (w2-9): last check-PASSING snapshot of the deliverable
+    #: {"path": <relative>, "sha256": <hex>, "content": <text>}; restored
+    #: on exit when a later round left a broken file (best-at-exit).
+    best_snapshot: dict[str, Any] | None = field(default=None)
+    #: v6 (w3-6): in-environment test-file hashes recorded at bootstrap
+    #: (tamper guard); None when the task ships no test files.
+    test_hashes: dict[str, str] | None = field(default=None)
+    #: v6 (w3-6): True when the test files changed mid-run — the run's
+    #: own test results are then invalid.
+    test_tampered: bool = False
 
     @property
     def cfg(self) -> AgentConfig:
@@ -91,8 +112,17 @@ class Phase(ABC):
     terminal: bool = False
 
     # -- config-driven defaults ------------------------------------------
-    def tools(self, cfg: AgentConfig) -> list[str]:
-        return cfg.phases[self.id].tools
+    def tools(self, cfg: AgentConfig, cycle: int = 1) -> list[str]:
+        """Tool list for this phase run (v6-rewrite).
+
+        Single source: the ``[tool_policy]`` section (phase x iteration
+        matrix, per-iteration ``<phase>_c<N>`` overrides). Falls back to the
+        legacy ``[phases.<id>].tools`` for configs without the policy
+        section (dev/test).
+        """
+        return cfg.tool_policy.tools_for(
+            self.id, cycle, fallback=cfg.phases[self.id].tools
+        )
 
     def limits(self, cfg: AgentConfig) -> PhaseLimits:
         p = cfg.phases[self.id]
@@ -116,11 +146,13 @@ class Phase(ABC):
         if self.id == "plan":
             cap = lim.time if lim.time is not None else PLAN_CAP
             parts.append(f"this phase is hard-capped at {cap:.0f}s")
+            if state.cycles > 0:
+                parts.append(f"this is re-plan cycle {state.cycles + 1}")
         elif self.id == "work":
             cap = lim.time if lim.time is not None else WORK_CAP
             parts.append(f"this cycle is hard-capped at {cap:.0f}s")
             parts.append(f"this is cycle {state.cycles + 1}")
-        elif self.id == "commit":  # review phase
+        elif self.id in ("commit", "review"):  # relay (v6-rewrite) / verifier (disabled)
             cap = lim.time if lim.time is not None else REVIEW_CAP
             parts.append(f"this phase is hard-capped at {cap:.0f}s")
         else:
