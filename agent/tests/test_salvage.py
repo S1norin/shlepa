@@ -48,7 +48,10 @@ def events():
         LOGGER.setLevel(old_level)
 
 
-def _run(monkeypatch, stub_openai, tmp_path, agent_cfg, task="create hello.txt", salvage: str | None = None):
+def _run(
+    monkeypatch, stub_openai, tmp_path, agent_cfg,
+    task="create hello.txt", salvage: str | None = None,
+):
     from shlepa_agent import runner
 
     monkeypatch.setenv("OPENAI_BASE_URL", stub_openai)

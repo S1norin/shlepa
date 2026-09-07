@@ -27,7 +27,6 @@ def test_registry_has_all_tools():
     }
 
 
-
 def test_registry_slim_baseline_has_no_code_search_tools(monkeypatch):
     # 2026-09-07 slim-down: the packaged baseline no longer ships the
     # code_search/file_outline pair (batch 388fde: never adopted; context

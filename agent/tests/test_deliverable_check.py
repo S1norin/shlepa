@@ -54,7 +54,9 @@ def test_expected_content_mismatch(workdir: Path):
 # ---------------------------------------------------------------- missing / empty
 def test_missing_file(workdir: Path):
     r = _check(workdir, path="nope.txt")
-    assert r == DeliverableCheck(False, False, False, False, False, "missing: " + str(workdir / "nope.txt"))
+    assert r == DeliverableCheck(
+        False, False, False, False, False, "missing: " + str(workdir / "nope.txt")
+    )
 
 
 def test_empty_file(workdir: Path):
@@ -136,8 +138,11 @@ def test_keys_on_text_rejected(workdir: Path):
 
 # ---------------------------------------------------------------- spec conversion
 def test_from_any_dict_and_pydantic():
-    s = ArtifactSpec.from_any({"kind": "answer", "path": "/a", "keys": ["x", "y"], "expected_content": "1"})
-    assert s.kind == "answer" and s.path == "/a" and s.keys == ("x", "y") and s.expected_content == "1"
+    s = ArtifactSpec.from_any(
+        {"kind": "answer", "path": "/a", "keys": ["x", "y"], "expected_content": "1"}
+    )
+    assert s.kind == "answer" and s.path == "/a"
+    assert s.keys == ("x", "y") and s.expected_content == "1"
     assert ArtifactSpec.from_any(None) is None
     s3 = ArtifactSpec.from_any({"path": "p"})  # defaults
     assert s3.kind == "file" and s3.format == "" and s3.keys == () and s3.expected_content is None

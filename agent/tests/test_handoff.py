@@ -7,8 +7,6 @@ prompt regardless of the model's answer quality.
 """
 from __future__ import annotations
 
-import pytest
-
 from shlepa_agent.outputs import PartialHandoff
 
 

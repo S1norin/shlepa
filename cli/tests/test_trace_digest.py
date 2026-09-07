@@ -123,9 +123,11 @@ def test_header_per_phase_token_lines():
         _llm_span(3, 20, 2, phase="commit"),
     ]
     digest = trace_digest.build_digest(_trace(spans))
-    plan_line = next(l for l in digest.splitlines() if l.startswith("- tokens[plan]:"))
-    work_line = next(l for l in digest.splitlines() if l.startswith("- tokens[work]:"))
-    commit_line = next(l for l in digest.splitlines() if l.startswith("- tokens[commit]:"))
+    plan_line = next(ln for ln in digest.splitlines() if ln.startswith("- tokens[plan]:"))
+    work_line = next(ln for ln in digest.splitlines() if ln.startswith("- tokens[work]:"))
+    commit_line = next(
+        ln for ln in digest.splitlines() if ln.startswith("- tokens[commit]:")
+    )
     assert "50 in / 5 out" in plan_line
     assert "100 in / 10 out" in work_line
     assert "20 in / 2 out" in commit_line

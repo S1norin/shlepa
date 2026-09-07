@@ -8,8 +8,6 @@ repeated N x). Knob SHLEPA_LEDGER (on by default; 0/false/off disables).
 
 from types import SimpleNamespace
 
-import pytest
-
 from shlepa_agent.config import load_config
 from shlepa_agent.state import (
     canonical_failure_key,
@@ -19,7 +17,10 @@ from shlepa_agent.state import (
 )
 from shlepa_agent.tools.base import AgentDeps, format_tool_result
 
-_BASH_BODY = "$ ls nothere\n[cwd] /w\n[exit_code] 2\n[stdout]\n<empty>\n[stderr]\nls: nothere: No such file or directory"
+_BASH_BODY = (
+    "$ ls nothere\n[cwd] /w\n[exit_code] 2\n[stdout]\n<empty>\n[stderr]\n"
+    "ls: nothere: No such file or directory"
+)
 
 
 def _ctx(tmp_path):
@@ -96,7 +97,7 @@ def test_ledger_knob_off(tmp_path, monkeypatch):
 
 def test_success_results_not_ledgered(tmp_path):
     ctx, deps = _ctx(tmp_path)
-    r1 = format_tool_result(ctx, "read", "same body", 0.0, args={"path": "a"})
+    format_tool_result(ctx, "read", "same body", 0.0, args={"path": "a"})
     r2 = format_tool_result(ctx, "read", "same body", 0.0, args={"path": "a"})
     assert "REPEATED" not in r2
     assert deps.ledger == {}

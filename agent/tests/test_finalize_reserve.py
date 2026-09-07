@@ -9,8 +9,6 @@ working. Default R = 10 s, override SHLEPA_FINALIZE_RESERVE (0 = off).
 import asyncio
 import time
 
-import pytest
-
 from shlepa_agent.config import load_config
 from shlepa_agent.tools.base import AgentDeps, PhaseWindow
 from shlepa_agent.tools.bash import bash

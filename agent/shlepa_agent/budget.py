@@ -61,6 +61,7 @@ def finalize_reserve() -> float:
             pass
     return FINALIZE_RESERVE
 
+
 # v6 (w2-6) review-stage subcaps: VERIFY / REPAIR / decide each run as a
 # separate request under the 45 s envelope, so the envelope kill can never
 # catch "work + decide" in one in-flight stream.

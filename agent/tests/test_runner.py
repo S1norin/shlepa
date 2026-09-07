@@ -413,8 +413,9 @@ def test_relay_fields_carried_into_cycle2(monkeypatch, stub_openai, tmp_path, ev
     stub_state["script"] = [
         _plan_step(),
         _work_step(),
-        _relay_step(done=True, problems=["out.json is not valid json"], hints=["rewrite it"])
-        ,
+        _relay_step(
+            done=True, problems=["out.json is not valid json"], hints=["rewrite it"]
+        ),
         _plan_step(),
         _work_step(),
     ]
@@ -484,7 +485,10 @@ def test_plan_error_routes_to_work(monkeypatch, stub_openai, tmp_path, events):
     # direct-execution note (there is no plan to follow). Each failed plan
     # attempt consumes two stub steps (initial output call + one output
     # retry), so the script carries two bad steps per attempt.
-    stub_state["script"] = [*(_bad_plan() for _ in range(4)), _work_step(), _relay_step(), _plan_step(), _work_step()]
+    stub_state["script"] = [
+        *(_bad_plan() for _ in range(4)), _work_step(), _relay_step(),
+        _plan_step(), _work_step(),
+    ]
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
     assert _status(events) == "done"  # work finished the task
     starts = [e["id"] for e in events if e.get("event") == "phase" and e.get("start")]
@@ -523,7 +527,10 @@ ROUTING_CASES = [
     },
     {
         "name": "plan_error_direct_execution",
-        "script": [*(_bad_plan() for _ in range(4)), _work_step(), _relay_step(), _plan_step(), _work_step()],
+        "script": [
+            *(_bad_plan() for _ in range(4)), _work_step(), _relay_step(),
+            _plan_step(), _work_step(),
+        ],
         "cfg": {},
         "phases": ["plan", "work", "review", "plan", "work"],
         "status": "done",
@@ -560,7 +567,10 @@ ROUTING_CASES = [
     },
     {
         "name": "work_error_last_cycle_reports_error",
-        "script": [_plan_step(), _work_step(), _relay_step(), _plan_step(), *(_bad_work() for _ in range(2))],
+        "script": [
+            _plan_step(), _work_step(), _relay_step(), _plan_step(),
+            *(_bad_work() for _ in range(2)),
+        ],
         "cfg": {},
         "phases": ["plan", "work", "review", "plan", "work"],
         "status": "error",

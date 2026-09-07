@@ -93,7 +93,7 @@ from shlepa_agent.state import extract_last_tools, save_state
 from shlepa_agent.test_guard import bootstrap_test_hashes, check_test_hashes
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
-from shlepa_agent.tools.base import PhaseWindow, RepairScope
+from shlepa_agent.tools.base import PhaseWindow
 
 #: Hard cap for the one-shot final_ask request after a phase time-out.
 FINAL_ASK_CAP_S = 30.0
@@ -157,6 +157,7 @@ def _stamp_final_ask(span: Any, *, ok: bool, text: str = "",
             span.set_attribute("shlepa.error", error[:300])
     except Exception:  # pragma: no cover - defensive, must never raise
         pass
+
 
 FINAL_ASK_MESSAGE = (
     "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. You have no tools "

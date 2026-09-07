@@ -6,7 +6,6 @@ cap, and truncation use a fake script so the tests stay fast and hermetic.
 """
 
 import asyncio
-import json
 import time
 
 from shlepa_agent.config import load_config

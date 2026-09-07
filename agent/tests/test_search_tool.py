@@ -79,7 +79,7 @@ def test_grep_limit_shows_first_n_but_counts_all(tree):
     body = _body(out)
     assert "123 total match(es)" in body
     assert "showing first 5" in body
-    shown = [l for l in body.splitlines() if l.startswith("big.txt:")]
+    shown = [ln for ln in body.splitlines() if ln.startswith("big.txt:")]
     assert len(shown) == 5
     assert "118 more match(es) not shown" in out
 
@@ -165,5 +165,5 @@ def test_line_excerpt_cuts_long_lines(tree):
     (tree / "long.txt").write_text(long_line + "\n")
     out = _search(tree, pattern="start")
     body = _body(out)
-    line = next(l for l in body.splitlines() if l.startswith("long.txt:"))
+    line = next(ln for ln in body.splitlines() if ln.startswith("long.txt:"))
     assert len(line) < 300  # the 200-char excerpt keeps it bounded

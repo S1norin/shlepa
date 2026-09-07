@@ -110,7 +110,9 @@ def _parse_content(path: Path, fmt: str) -> tuple[bool, Any, str, str]:
         return True, rows, raw, ""
     if fmt == "patch":
         lines = raw.splitlines()
-        if any(l.startswith("---") for l in lines) and any(l.startswith("+++") for l in lines):
+        if any(ln.startswith("---") for ln in lines) and any(
+            ln.startswith("+++") for ln in lines
+        ):
             return True, raw, raw, ""
         return False, None, raw, "patch: no unified-diff headers"
     # plain text / unknown format: a readable file is parseable
@@ -127,7 +129,8 @@ def _keys_ok(parsed: Any, keys: tuple[str, ...], fmt: str) -> tuple[bool, str]:
         missing = [k for k in keys if k not in parsed]
         return (not missing, f"missing keys: {', '.join(missing)}") if missing else (True, "")
     if fmt == "csv":
-        header = [str(h).strip() for h in (parsed[0] if isinstance(parsed, list) and parsed else [])]
+        first_row = parsed[0] if isinstance(parsed, list) and parsed else []
+        header = [str(h).strip() for h in first_row]
         missing = [k for k in keys if k not in header]
         return (not missing, f"missing columns: {', '.join(missing)}") if missing else (True, "")
     return False, f"keys are checkable only for json/csv, not '{fmt}'"
