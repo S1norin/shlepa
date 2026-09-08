@@ -82,20 +82,35 @@ Routing rules (runner):
   plan/work cycle (logged as a `cycle` event). There is no cycle cap and
   no time check — the container kill at the task's own limit is the only
   external bound.
-- **Phase hard timeouts** (`plan`/`work` cap expiry) and phase errors are
-  hand-offs, not crashes: on a timeout the runner issues **one** toolless
-  `final_ask` request on the same conversation (capped at 30s; the request
-  prefix is byte-identical to the phase's last request, so the local LLM
-  server reuses its KV cache) and then the pipeline continues:
-  - `plan` timeout — "limit reached (time or context): leave your plan as
-    plain text (goal / findings / steps / risks)" — the reply is stored on
-    the plan `PhaseResult.note` and **work runs next**, executing the
-    salvaged plan (flagged as possibly incomplete); if the final_ask
-    produced nothing, work falls back to deriving the minimum work from the
-    task instruction;
-  - `work` timeout — "limit reached (time or context): name the deliverable
-    path and say what is complete/missing" — then hands off to the review
-    phase.
+- **Phase breaches** (`plan`/`work` time-cap expiry, context-limit / model
+  errors) are hand-offs, not crashes, and the pipeline continues after
+  them. On a **time cap** (or a non-context model error) the runner issues
+  **one** toolless `final_ask` request on the same conversation (capped at
+  30s; the request prefix is byte-identical to the phase's last request,
+  so the local LLM server reuses its KV cache):
+  - `plan` — "hard time limit reached: leave your plan as plain text
+    (goal / findings / steps / risks)" — the reply is stored on the plan
+    `PhaseResult.note` and **work runs next**, executing the salvaged plan
+    (flagged as possibly incomplete); if the final_ask produced nothing,
+    work falls back to deriving the minimum work from the task instruction;
+  - `work` — "hard time limit reached: name the deliverable path and say
+    what is complete/missing" — then hands off to the review phase.
+  A **context-limit breach** skips the final_ask (the overflowed history
+  cannot be re-sent — the endpoint would 400 the identical request) and
+  logs a `final_ask(skipped=true)` event instead; a generic model error
+  (e.g. HTTP 500) gets the final_ask with a "model/endpoint error" head
+  instead of the wrong time-limit claim.
+- **Context-breach recovery in the review**: when the review's resumed
+  work history no longer fits the model context, the review is re-run with
+  a progressively truncated tail (most recent messages kept; logged as
+  `history_truncate` events) instead of dying with `timeout`; the judge
+  still
+  sees the end of the work conversation and re-checks the disk.
+- **Status semantics**: the review verdict is authoritative — a `done`
+  verdict ends the run as `done` even if an earlier phase breached its cap
+  (the breach stays visible in the `budget`/`phase_done` events). `timeout`
+  is reported only when the run ends without a review verdict (the
+  terminal review itself was cut / model-errored, or a step-guard stop).
 - **The emergency phase** (v4 terminal rescue) is UNUSED: routing to it is
   hard-off, the class and config section are kept for compatibility.
 - **Step guard** (`agent.max_steps` > 0, dev knob, off by default): once
@@ -257,7 +272,8 @@ Additive pipeline events (v3):
 | `phase` | `id`, `start`, `cycle`, `requests`, `cap_s`, `elapsed_s` | phase entry (no more skips — there is no horizon to run out of) |
 | `phase_done` | `id`, `status`, `duration_s`, `elapsed_s` | phase exit |
 | `phase_retry` | `phase`, `attempt`, `elapsed_s` | non-budget error retry |
-| `final_ask` | `phase`, `start`/`ok`, `cap_s`, `history_messages`, `elapsed_s` | one-shot toolless rescue request |
+| `final_ask` | `phase`, `start`/`ok`/`skipped`, `cap_s`, `history_messages`, `elapsed_s` | one-shot toolless rescue request (`skipped=true` + `reason` when a context-limit breach forbids re-sending the history) |
+| `history_truncate` | `phase`, `kept_messages`, `reason` | terminal review re-run on a truncated history tail after a context-limit breach |
 | `cycle` | `reason`, `cycle`, `elapsed_s` | a `next_round` review verdict started a new plan/work cycle (always) |
 | `budget` | `reason`, `elapsed_s` (+ `detail`) | regime hand-off (`regime` logs the fixed caps at startup; `<phase> time cap`, `max_steps`, …) |
 | `commit` | `phase`, `start`, `history_messages`, `time_cap_s`, `elapsed_s` | review (commit) terminal entry |

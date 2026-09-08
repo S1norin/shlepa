@@ -230,14 +230,33 @@ not deleted.
   `PhaseResult.note`, and the pipeline continues with **work** executing
   that salvaged plan (work flags it as possibly incomplete); the
   derive-from-task fallback stays for a final_ask that produced nothing.
-- **A2 / B6**: `FINAL_ASK_MESSAGE` split into reason-specific heads
-  (`_final_ask(..., reason="time" | "context")`): the time variant keeps
-  the "hard time limit" framing, the context variant says the context
-  window is exhausted (no more history will fit) instead of a wrong time
-  claim; both now tell the model the review will re-check the disk.
-  `commit.md` step 1 explicitly covers "work timed out but a path is
-  named in the transcript": treat the line as the deliverable report,
-  verify it with read, judge from disk.
+- **A2 / B6**: the wrong "time limit" message is gone — refined in the
+  same branch in two steps. First, reason-specific heads; then the
+  context case was fixed at the mechanism level, not just the text:
+  - a **context-limit breach** (error text mentions the context limit)
+    now **skips the final_ask entirely** — re-sending the overflowed
+    history would just 400 again; the skip is logged as
+    `final_ask(skipped=true)` and the pipeline continues (plan -> work
+    with the task-derived fallback, work -> review);
+  - a **non-context model error** (e.g. HTTP 500) gets the final_ask with
+    an honest "model/endpoint error" head (no time-limit claim);
+  - **B6 cascade in the review**: when the review's resumed work history
+    no longer fits the model context, the review is re-run with a
+    progressively truncated tail (most recent messages kept,
+    `keep_recent` in `phases/commit.py`, `history_truncate` events) so
+    the judge still sees the end of the work conversation and re-checks
+    the disk instead of the run dying with `timeout`/`error`;
+  - `commit.md` step 1 covers "work timed out but a path is named in the
+    transcript": treat the line as the deliverable report, verify it with
+    read, judge from disk.
+- **Status semantics (audit follow-up)**: the review verdict is
+  authoritative for the run status — a `done` verdict ends the run as
+  `done` even if an earlier phase breached its cap (the breach stays
+  visible in the `budget`/`phase_done` events). Before this, a
+  work-cap-breach + review-`done` run ended `timeout` while a
+  plan-cap-breach recovered the same way ended `done` (asymmetric);
+  `timeout` is now reported only when the run ends WITHOUT a review
+  verdict (terminal review self-failure, step guard).
 - **A3**: `work.md` FRESHNESS now states `write` is first creation only;
   updates go through `edit` or a bash write.
 - **B2**: `PlanResult.decision` marked DEAD (legacy, ignored by the

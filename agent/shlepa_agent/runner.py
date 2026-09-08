@@ -21,12 +21,18 @@ kept for compatibility.
 
 Rules:
 - A phase time cap (or a context-limit / persistent model error) is a
-  NORMAL hand-off, never a retryable error: it triggers ONE extra toolless
-  ``final_ask`` request on the same conversation, and then the pipeline
-  continues. The plan phase's final_ask leaves the plan as plain text
-  (the work phase executes it, salvaged-plan fallback included); the work
-  phase's final_ask names the deliverable path, then the review phase
-  (terminal) judges.
+  NORMAL hand-off, never a retryable error, and the pipeline continues
+  after it. On a time cap (or a non-context model error) it triggers ONE
+  extra toolless ``final_ask`` request on the same conversation: the plan
+  phase leaves its plan as plain text (stored on the PhaseResult as
+  ``note``; the work phase executes it, salvaged-plan fallback included),
+  the work phase names the deliverable path. A context-limit breach SKIPS
+  the final_ask (the overflowed history cannot be re-sent) and is logged
+  as ``final_ask(skipped=...)`` instead.
+- A context-limit breach in the terminal review is recovered internally:
+  the review is re-run with a progressively truncated history tail (most
+  recent messages kept; ``history_truncate`` events) so the judge can
+  still see the end of the work conversation and re-check the disk.
 - A phase ERROR (any other exception) in plan/work is retried up to the
   phase's ``max_retries`` (fresh run per attempt), then routes to the
   review phase. The review phase is never retried.
@@ -41,8 +47,8 @@ Log contract (the CLI dev engine parses a subset — ``usage`` and
 ``llm_tool_call`` — keep those fields stable; unknown events are ignored
 by the CLI): agent_start, usage, llm_thinking, llm_tool_call,
 llm_tool_result, run_usage, budget, phase, phase_done, phase_retry,
-cycle, final_ask, commit (legacy, terminal-phase marker), agent_done,
-agent_error.
+cycle, final_ask, history_truncate, commit (legacy, terminal-phase
+marker), agent_done, agent_error.
 """
 
 from __future__ import annotations
@@ -69,7 +75,7 @@ from shlepa_agent.log import (
 from shlepa_agent.model import BudgetExceeded, TrackedModel
 from shlepa_agent.phases import get_phase
 from shlepa_agent.phases.base import Phase, PhaseResult, RunState
-from shlepa_agent.phases.commit import trim_history
+from shlepa_agent.phases.commit import keep_recent, trim_history
 from shlepa_agent.state import save_state
 from shlepa_agent.template import load_prompt, render_system
 from shlepa_agent.tools import AgentDeps, get_tools
@@ -80,9 +86,13 @@ FINAL_ASK_CAP_S = 30.0
 _FINAL_ASK_HEAD_TIME = (
     "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase."
 )
-_FINAL_ASK_HEAD_CONTEXT = (
-    "\u26a0\ufe0f CONTEXT LIMIT REACHED for this phase: the conversation ran "
-    "out of room."
+# A context-limit breach does NOT get a final_ask at all (the overflowed
+# history cannot be re-sent — see _is_context_overflow and the _pipeline
+# timeout branch); this head covers the remaining hand-off case: a
+# non-context model/endpoint error (e.g. HTTP 500).
+_FINAL_ASK_HEAD_MODEL = (
+    "\u26a0\ufe0f THIS PHASE STOPPED on a model/endpoint error before it "
+    "could finish."
 )
 _FINAL_ASK_WORK_TAIL = (
     " You have no tools now: if the deliverable file is already on disk, "
@@ -103,16 +113,16 @@ _FINAL_ASK_PLAN_BODY = (
 )
 
 
-def _final_ask_message(phase_id: str = "work", reason: str = "time") -> str:
-    """Compose the final_ask user message for the breach reason and phase.
+def _final_ask_message(phase_id: str = "work", kind: str = "time") -> str:
+    """Compose the final_ask user message for the breach kind and phase.
 
-    The plan phase is asked to leave its plan as text (the work phase then
-    executes it); every other phase is asked for the deliverable path and
-    what is complete/missing.
+    ``kind`` is ``"time"`` (phase time cap) or ``"model"`` (a non-context
+    model/endpoint error); a context-limit breach never reaches final_ask
+    (the overflowed history cannot be re-sent). The plan phase is asked to
+    leave its plan as text (the work phase then executes it); every other
+    phase is asked for the deliverable path and what is complete/missing.
     """
-    head = (
-        _FINAL_ASK_HEAD_TIME if reason == "time" else _FINAL_ASK_HEAD_CONTEXT
-    )
+    head = _FINAL_ASK_HEAD_TIME if kind == "time" else _FINAL_ASK_HEAD_MODEL
     body = _FINAL_ASK_PLAN_BODY if phase_id == "plan" else _FINAL_ASK_WORK_TAIL
     return head + body
 
@@ -169,6 +179,28 @@ def _is_handoff_error(exc: BaseException) -> bool:
             return True
         e = e.__cause__ or e.__context__
     return False
+
+
+#: Error-text markers of a context-limit breach (llama.cpp / OpenAI-style
+#: "maximum context length exceeded", "context_length_exceeded", ...).
+_CONTEXT_OVERFLOW_MARKERS = ("context", "too long")
+
+
+def _is_context_overflow(result: PhaseResult) -> bool:
+    """True when a hand-off result is a context-limit breach (not a plain
+    time cap and not a generic model error).
+
+    Heuristic on the captured error text: both llama.cpp and OpenAI-style
+    endpoints report a context breach with a 400 whose message mentions
+    the context limit. A generic 500 does NOT match — truncation would
+    not help there, so it gets no special treatment.
+    """
+    err = (result.error or "").lower()
+    return (
+        result.status == "timeout"
+        and "time cap" not in err
+        and any(marker in err for marker in _CONTEXT_OVERFLOW_MARKERS)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +320,17 @@ def _model_settings(cfg: AgentConfig) -> dict[str, Any]:
 
 
 async def _run_phase(
-    state: RunState, phase: Phase, agent: Agent
+    state: RunState,
+    phase: Phase,
+    agent: Agent,
+    history_override: list[Any] | None = None,
 ) -> PhaseResult:
-    """Run one phase under its wall-clock cap; returns its PhaseResult."""
+    """Run one phase under its wall-clock cap; returns its PhaseResult.
+
+    ``history_override`` replaces ``phase.history(state)`` (used by the
+    terminal review's context-breach recovery, which re-runs the phase on
+    a truncated history tail).
+    """
     cfg = state.cfg
     model = state.model
     limits = phase.limits(cfg)
@@ -301,7 +341,11 @@ async def _run_phase(
     model_settings: dict[str, Any] = _model_settings(cfg)
     if limits.reasoning_effort is not None:
         model_settings["openai_reasoning_effort"] = limits.reasoning_effort
-    history = phase.history(state) or None
+    history = (
+        history_override
+        if history_override is not None
+        else phase.history(state)
+    ) or None
     if phase.terminal:
         _log_event(
             "commit",
@@ -375,6 +419,31 @@ async def _run_phase_with_retries(
         state, phase, build_phase_agent(state.model, state.cfg, phase, state.task, instrument)
     )
     state.results[phase.id] = result
+    # Context-breach recovery for the terminal review: the review resumes
+    # a long work conversation, and when that history no longer fits the
+    # model context, the re-run with the SAME history would just 400
+    # again. Re-run the review with a progressively truncated tail (most
+    # recent messages kept) so the judge still sees the end of the work
+    # conversation and can re-check the disk. A generic model error (e.g.
+    # HTTP 500) is NOT an overflow: truncation would not help, so it is
+    # left to the normal terminal handling.
+    if phase.terminal and _is_context_overflow(result):
+        history = phase.history(state) or []
+        while _is_context_overflow(result) and len(history) > 2:
+            history = keep_recent(history, max(len(history) // 2, 1))
+            _log_event(
+                "history_truncate",
+                phase=phase.id,
+                kept_messages=len(history),
+                reason="context-limit breach",
+            )
+            result = await _run_phase(
+                state,
+                phase,
+                build_phase_agent(state.model, state.cfg, phase, state.task, instrument),
+                history_override=history,
+            )
+            state.results[phase.id] = result
     max_retries = 0 if phase.terminal else state.cfg.phases[phase.id].max_retries
     attempts = 1
     while result.status == "error" and attempts <= max_retries:
@@ -394,19 +463,20 @@ async def _run_phase_with_retries(
 
 
 async def _final_ask(
-    state: RunState, phase: Phase, reason: str = "time"
+    state: RunState, phase: Phase, kind: str = "time"
 ) -> str | None:
     """One extra toolless request after a phase breach.
 
-    ``reason`` is ``"time"`` (phase time cap) or ``"context"`` (context-
-    limit / persistent model error); the message head names the actual
-    breach (a full conversation is not a time limit). Appends a single
-    user message to the SAME conversation (byte-identical prompt prefix ->
-    KV-cache reuse on the local server). The plan phase is asked to leave
-    its plan as text; every other phase is asked to name the deliverable
-    path and state what is complete/missing. Returns the reply text (None
-    when nothing usable came back) — the caller stores it on the plan
-    PhaseResult (``note``) so the work phase can execute it.
+    ``kind`` is ``"time"`` (phase time cap) or ``"model"`` (a non-context
+    model/endpoint error); the message head names the actual breach. A
+    context-limit breach never reaches this function — the overflowed
+    history cannot be re-sent (see the _pipeline timeout branch). Appends
+    a single user message to the SAME conversation (byte-identical prompt
+    prefix -> KV-cache reuse on the local server). The plan phase is asked
+    to leave its plan as text; every other phase is asked to name the
+    deliverable path and state what is complete/missing. Returns the reply
+    text (None when nothing usable came back) — the caller stores it on the
+    plan PhaseResult (``note``) so the work phase can execute it.
     """
     cfg = state.cfg
     model = state.model
@@ -429,7 +499,7 @@ async def _final_ask(
     try:
         async with asyncio.timeout(cap):
             async with agent.run_stream_events(
-                _final_ask_message(phase.id, reason),
+                _final_ask_message(phase.id, kind),
                 deps=state.deps,
                 model_settings=_model_settings(cfg),
                 message_history=history,
@@ -476,15 +546,17 @@ async def _pipeline(
 ) -> tuple[str, str]:
     """Walk the v5 pipeline (plan -> work -> review cycles); returns (status, output).
 
-    status is the decisive outcome: "done" (the review verdict was done),
-    "timeout" (a phase time cap / context-limit hand-off with no review
-    verdict, or a step-guard stop), "error" (a phase failed after its
-    retries). There is NO task time limit T, NO cycle cap and NO emergency
-    routing: a "next_round" verdict ALWAYS starts a new plan/work cycle.
+    status is the decisive outcome, and the review verdict is authoritative
+    for it: "done" (the review verdict was done — even if an earlier phase
+    breached its cap; the breach stays visible in the budget / phase_done
+    events), "timeout" (the terminal review itself was cut by its cap or
+    a model error, or a step-guard stop — no review verdict), "error"
+    (the terminal review failed). There is NO task time limit T, NO cycle
+    cap and NO emergency routing: a "next_round" verdict ALWAYS starts a
+    new plan/work cycle.
     """
     phase_id = entry
     steps = 0
-    final_status = "done"
     output = ""
 
     while True:
@@ -553,30 +625,39 @@ async def _pipeline(
                     cycle=state.cycles,
                     elapsed_s=round(state.model.elapsed(), 1),
                 )
-                final_status = "done"
                 phase_id = "plan"
                 continue
-            return (
-                final_status if final_status in ("timeout", "error") else "done",
-                output,
-            )
+            # The review verdict is authoritative: an earlier phase breach
+            # (time cap / hand-off) does not override a "done" verdict —
+            # the judge checked the disk and the deliverable passed.
+            return "done", output
         if result.status == "timeout":
-            # Time cap / context-limit breach: one toolless final_ask on
-            # the same conversation, then the pipeline continues. The plan
-            # phase salvages its plan as text in the final_ask reply (stored
-            # on its PhaseResult as ``note``) and work executes it; any
-            # other phase (work) hands off straight to the terminal review.
-            # The breach reason comes from the error text ("... time cap
-            # reached" is set by _run_phase for the wall-cap path).
-            reason = "time" if "time cap" in (result.error or "") else "context"
-            note = await _final_ask(state, phase, reason=reason)
-            if phase.id == "plan" and note:
-                state.results["plan"].note = note
-            final_status = "timeout"
+            # A phase breach (time cap / context-limit / model error) is a
+            # normal hand-off, and the pipeline continues after it. On a
+            # time cap (or a non-context model error) one toolless
+            # final_ask runs on the SAME conversation: the plan phase
+            # salvages its plan as text in the reply (stored on its
+            # PhaseResult as ``note``; work then executes it, or falls
+            # back to the task instruction when the reply is empty), any
+            # other phase (work) names the deliverable path before the
+            # terminal review. A context-limit breach SKIPS the final_ask
+            # (the overflowed history cannot be re-sent) and logs the skip.
+            if _is_context_overflow(result):
+                _log_event(
+                    "final_ask",
+                    phase=phase.id,
+                    skipped=True,
+                    reason="context-limit breach: the overflowed history "
+                           "cannot be re-sent",
+                )
+            else:
+                kind = "time" if "time cap" in (result.error or "") else "model"
+                note = await _final_ask(state, phase, kind=kind)
+                if phase.id == "plan" and note:
+                    state.results["plan"].note = note
             phase_id = "work" if phase.id == "plan" else "commit"
             continue
         if result.status == "error":
-            final_status = "error"
             phase_id = "commit"
             continue
         if phase.id == "plan":
@@ -585,12 +666,10 @@ async def _pipeline(
             # deliverable (the old trivial plan->commit shortcut is gone;
             # a hallucinated decision="commit" is ignored).
             phase_id = "work"
-            final_status = "done"
             continue
         # work -> review (there is no decision in WorkResult; the review's
         # verdict decides done vs. a new cycle).
         phase_id = "commit"
-        final_status = "done"
         continue
 
 

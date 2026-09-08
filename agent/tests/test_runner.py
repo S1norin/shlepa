@@ -438,12 +438,64 @@ def test_work_time_cap_triggers_final_ask_then_commit(monkeypatch, stub_openai, 
     ]
     cfg = _cfg(tmp_path, work_time=1.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "timeout"  # work was cut by its cap
+    # the work cap breach is real (budget event below), but the review
+    # verdict is authoritative: the judge checked the disk and said done
+    assert _status(events) == "done"
+    assert any(
+        e.get("event") == "budget" and "work time cap" in (e.get("reason") or "") for e in events
+    )
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "work"]
     assert asks and asks[-1].get("ok") is True
     assert len(_phase_starts(events, "work")) == 1  # work was NOT rerun
     assert _phase_starts(events, "commit")
     assert len(stub_state["bodies"]) == 4
+
+
+def test_work_context_breach_skips_final_ask(monkeypatch, stub_openai, tmp_path, events):
+    # A context-limit breach in work cannot get a final_ask: the overflowed
+    # history cannot be re-sent (the endpoint would 400 the identical
+    # request). The skip is logged, and the pipeline hands off to the
+    # review (whose verdict is authoritative for the run status).
+    stub_state["script"] = [
+        _plan_step("work"),
+        {"error": 400, "error_message": "context_length_exceeded: request too large"},
+        _review_step(),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "done"
+    asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "work"]
+    assert asks and asks[-1].get("skipped") is True  # logged skip, no request
+    assert all(e.get("start") is not True for e in asks)  # no request was sent
+    assert _phase_starts(events, "commit")
+    assert len(stub_state["bodies"]) == 3  # plan, work (400), review
+
+
+def test_review_context_breach_retries_with_truncated_history(
+    monkeypatch, stub_openai, tmp_path, events
+):
+    # The review resumes the work conversation; when that history no longer
+    # fits the model context, the review is re-run on a truncated tail
+    # (most recent messages kept) instead of dying with "timeout".
+    stub_state["script"] = [
+        _plan_step("work"),
+        # work: two read round-trips before final_result -> multi-message
+        # history that the review then has to resume
+        {"tool_call": {"name": "read", "arguments": {"path": "hello.txt"}}},
+        {"tool_call": {"name": "read", "arguments": {"path": "hello.txt"}}},
+        _work_step(),
+        # review attempt 1: the full resumed history does not fit
+        {"error": 400, "error_message": "context_length_exceeded"},
+        # review attempt 2 (truncated tail): fits and judges
+        _review_step(),
+    ]
+    _run(monkeypatch, stub_openai, tmp_path, agent_cfg=_cfg(tmp_path))
+    assert _status(events) == "done"
+    tr = [e for e in events if e.get("event") == "history_truncate"]
+    assert tr and tr[0].get("phase") == "commit" and tr[0]["kept_messages"] >= 1
+    bodies = stub_state["bodies"]
+    # the retry request carries a strictly smaller history than the one
+    # that overflowed
+    assert len(bodies[-1]["messages"]) < len(bodies[-2]["messages"])
 
 
 def test_step_guard_exhaustion_stops_run(monkeypatch, stub_openai, tmp_path, events):
