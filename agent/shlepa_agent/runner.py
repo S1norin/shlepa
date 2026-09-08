@@ -13,7 +13,7 @@ agent cycles until the review verdict is "done" (or an unrecoverable
 error). The container itself is killed at the task's own limit, and the
 work phase keeps the deliverable file fresh on disk, so whatever exists at
 kill time is what scores. The only bounds are the fixed per-operation ones
-(plan 60s / work 120s / review 45s / bash 30s / llm wall 180s —
+(plan 80s / work 120s / review 60s / bash 30s / llm wall 180s —
 ``budget.py``); explicit positive ``[phases.*].time`` values override the
 phase caps (dev knob). The emergency phase (v4 terminal rescue) is UNUSED
 in v5 — routing to it is hard-off; the class and its config section are
@@ -22,8 +22,9 @@ kept for compatibility.
 Rules:
 - A phase time cap (or a context-limit / persistent model error) is a
   NORMAL hand-off, never a retryable error: it triggers ONE extra toolless
-  ``final_ask`` request on the same conversation ("write the deliverable
-  now"), then hands off to the review phase (terminal).
+  ``final_ask`` request on the same conversation ("name the deliverable
+  path and say what is complete/missing"), then hands off to the review
+  phase (terminal).
 - A phase ERROR (any other exception) in plan/work is retried up to the
   phase's ``max_retries`` (fresh run per attempt), then routes to the
   review phase. The review phase is never retried.
@@ -74,14 +75,33 @@ from shlepa_agent.tools import AgentDeps, get_tools
 #: Hard cap for the one-shot final_ask request after a phase time-out.
 FINAL_ASK_CAP_S = 30.0
 
-FINAL_ASK_MESSAGE = (
-    "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase. You have no tools "
-    "now: if the deliverable file is already on disk, reply with one short "
-    "line naming its path and stating what in it is complete or missing. If "
-    "it is not complete, still name the path and state exactly what is "
-    "missing — the review phase reads only this transcript and cannot check "
-    "the disk itself. Do not call any tools and do not think any further."
+_FINAL_ASK_HEAD_TIME = (
+    "\u26a0\ufe0f HARD TIME LIMIT REACHED for this phase."
 )
+_FINAL_ASK_HEAD_CONTEXT = (
+    "\u26a0\ufe0f CONTEXT LIMIT REACHED for this phase: the conversation ran "
+    "out of room."
+)
+_FINAL_ASK_TAIL = (
+    " You have no tools now: if the deliverable file is already on disk, "
+    "reply with one short line naming its path and stating what in it is "
+    "complete or missing. If it is not complete, still name the path and "
+    "state exactly what is missing — the review phase that follows will "
+    "re-check the file on disk with its read tools. Reply now with plain "
+    "text only; do not call any tools."
+)
+
+
+def _final_ask_message(reason: str = "time") -> str:
+    """Compose the final_ask user message for the breach reason."""
+    head = (
+        _FINAL_ASK_HEAD_TIME if reason == "time" else _FINAL_ASK_HEAD_CONTEXT
+    )
+    return head + _FINAL_ASK_TAIL
+
+
+# Backward-compatible alias (the time-cap wording; see _final_ask_message).
+FINAL_ASK_MESSAGE = _final_ask_message("time")
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +165,10 @@ def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
     to the recon prompt variant selected by the resolved tools: the tool
     variant (``recon_tool.md``) when the phase has the recon tool (the
     baseline plan/work), the script variant (``recon_script.md``) when it
-    has no recon but does have other tools, and NOTHING at all for a
-    toolless phase (the baseline review judges from the transcript and
-    has no recon to talk about).
+    has no recon but does have bash (the script is run via bash), and
+    NOTHING at all for a phase with neither recon nor bash (the baseline
+    review: read-only verification, no recon to talk about, no bash to
+    run the script with).
 
     The +mitre-kb arm additionally appends the KB prefix (the full
     technique index + old->new alias map, ~10K tokens of static, stable
@@ -159,11 +180,14 @@ def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
         from shlepa_agent.mitre_kb import kb_prefix
 
         tools_block += "\n\n" + kb_prefix()
-    if tools:
-        variant = "recon_tool.md" if any(t.name == "recon" for t in tools) else "recon_script.md"
-        recon_block = load_prompt(variant)
+    if any(t.name == "recon" for t in tools):
+        recon_block = load_prompt("recon_tool.md")
+    elif any(t.name == "bash" for t in tools):
+        recon_block = load_prompt("recon_script.md")
     else:
-        # A toolless phase (the baseline review) gets no recon block at all.
+        # No recon tool and no bash: the baseline review (read + search)
+        # gets no recon block at all — the script variant would instruct
+        # it to run a bash command it has no channel to run.
         recon_block = ""
     system_block = load_prompt("base.md").replace("{recon}", recon_block)
     return render_system(
@@ -351,13 +375,18 @@ async def _run_phase_with_retries(
     return result
 
 
-async def _final_ask(state: RunState, phase: Phase) -> None:
-    """One extra toolless request after a phase hard-timeout.
+async def _final_ask(
+    state: RunState, phase: Phase, reason: str = "time"
+) -> None:
+    """One extra toolless request after a phase breach.
 
-    Appends a single user message to the SAME conversation (byte-identical
-    prompt prefix -> KV-cache reuse on the local server) and asks the model
-    to write the deliverable right now, without tools. Its outcome does not
-    change routing: plan/work -> review.
+    ``reason`` is ``"time"`` (phase time cap) or ``"context"`` (context-
+    limit / persistent model error); the message head names the actual
+    breach (a full conversation is not a time limit). Appends a single
+    user message to the SAME conversation (byte-identical prompt prefix ->
+    KV-cache reuse on the local server) and asks the model to name the
+    deliverable path and state what is complete/missing, without tools.
+    Its outcome does not change routing: plan/work -> review.
     """
     cfg = state.cfg
     model = state.model
@@ -379,7 +408,7 @@ async def _final_ask(state: RunState, phase: Phase) -> None:
     try:
         async with asyncio.timeout(cap):
             async with agent.run_stream_events(
-                FINAL_ASK_MESSAGE,
+                _final_ask_message(reason),
                 deps=state.deps,
                 model_settings=_model_settings(cfg),
                 message_history=history,
@@ -508,7 +537,10 @@ async def _pipeline(
         if result.status == "timeout":
             # Time cap / context-limit breach: one toolless final_ask on the
             # same conversation, then hand off to the terminal review.
-            await _final_ask(state, phase)
+            # The breach reason comes from the error text ("... time cap
+            # reached" is set by _run_phase for the wall-cap path).
+            reason = "time" if "time cap" in (result.error or "") else "context"
+            await _final_ask(state, phase, reason=reason)
             final_status = "timeout"
             phase_id = "commit"
             continue
@@ -518,7 +550,7 @@ async def _pipeline(
             continue
         if phase.id == "plan":
             # The plan never skips work: plan has no write tools and the
-            # review is toolless, so only the work phase can produce the
+            # review is read-only, so only the work phase can produce the
             # deliverable (the old trivial plan->commit shortcut is gone;
             # a hallucinated decision="commit" is ignored).
             phase_id = "work"

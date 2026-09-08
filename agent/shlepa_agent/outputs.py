@@ -54,7 +54,9 @@ class PlanResult(BaseModel):
             "every plan to work). 'commit' is a legacy value: the runner "
             "treats it exactly like 'work'."
         )
-    )
+    )  # DEAD FIELD: never read by the pipeline (see
+    # docs/phase-dataflow-audit.md, B2): every plan routes to work; kept for
+    # schema stability, the prompt already warns against choosing 'commit'.
 
 
 class WorkResult(BaseModel):
@@ -82,15 +84,17 @@ class WorkResult(BaseModel):
             "How sure you are (0-1) that the deliverable is complete and "
             "correct. Be honest: 1.0 only after a passing mechanical check."
         ),
-    )
+    )  # DEAD FIELD: no consumer — the review judges the evidence, not this
+    # number; kept for schema stability, ignored by the pipeline.
 
 
 class ReviewResult(BaseModel):
     """Structured output of the terminal review phase (v5).
 
-    The review phase (phase id ``commit``) is TOOLLESS: it judges the
-    run from the transcript alone (it cannot read, run checks, or repair
-    anything), then decides: ``verdict='done'`` stops the run,
+    The review phase (phase id ``commit``) is READ-ONLY: it judges the run
+    from the transcript AND re-checks the disk with read-only tools (read,
+    code_search, file_outline — no bash, no writes; it cannot run commands
+    or repair anything), then decides: ``verdict='done'`` stops the run,
     ``verdict='next_round'`` starts a new plan/work cycle (always — there
     is no time or cycle cap).
     """
@@ -118,19 +122,21 @@ class ReviewResult(BaseModel):
     checks: list[str] = Field(
         default_factory=list,
         description=(
-            "Verification evidence OBSERVED IN THE TRANSCRIPT (this phase "
-            "has no tools and runs nothing itself): the mechanical checks "
-            "the work phase reported with their outcomes, e.g. 'work ran: "
-            "jq . /app/out.json -> valid'. Empty if the transcript shows no "
-            "checks."
+            "Verification evidence: the mechanical checks the work phase "
+            "reported with their outcomes (e.g. 'work ran: jq . /app/out."
+            "json -> valid') AND the checks YOU re-ran with read/code_"
+            "search (e.g. 'review: read /app/out.json -> present, 3 "
+            "keys'); 'NOT verified: <claim>' for a claim you could not "
+            "check. "
+            "Empty if there is no evidence at all."
         ),
     )
     hints: list[str] = Field(
         default_factory=list,
         description=(
-            "For verdict='next_round' only: concrete hints for the next "
-            "plan/work round — what was wrong and what must change. Empty "
-            "for 'done'."
+            "For verdict='next_round' ONLY: concrete hints for the next "
+            "plan/work round — what was wrong and what must change. The "
+            "list MUST be non-empty for 'next_round'; empty for 'done'."
         ),
     )
     notes: str = Field(

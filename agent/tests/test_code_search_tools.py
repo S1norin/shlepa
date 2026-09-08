@@ -3,12 +3,12 @@
 Two behaviors are under test:
 
 - BASELINE (env unset): the packaged config.toml IS the baseline — search
-  and recon on, rg engine, toolless review. The per-phase system prompts
-  and registered tool names diff clean against the committed golden
-  fixture (``fixtures/default_prompt.txt``).
+  and recon on, rg engine, read-only review (read + search). The per-phase
+  system prompts and registered tool names diff clean against the committed
+  golden fixture (``fixtures/default_prompt.txt``).
 - ENGINE SWITCH (env = rg | sifs): the engine follows the env value; the
   tool notes render into the system prompt of every tooled phase; the
-  toolless review phase is never augmented.
+  review phase keeps its fixed read-only set (never augmented).
 """
 
 import asyncio
@@ -133,7 +133,11 @@ def test_env_unset_baseline_matrix(monkeypatch):
         "code_search",
         "file_outline",
     ]
-    assert list(cfg.phases["commit"].tools) == []  # toolless review
+    assert list(cfg.phases["commit"].tools) == [
+        "read",
+        "code_search",
+        "file_outline",
+    ]  # read-only review
     assert list(cfg.phases["emergency"].tools) == ["read", "write", "edit", "bash"]
 
 
@@ -168,14 +172,19 @@ def test_build_phase_agent_exposes_code_search_tools(monkeypatch):
 
 @pytest.mark.parametrize("engine", ["rg", "sifs"])
 def test_env_registers_tools_and_notes_in_tooled_phases(monkeypatch, engine):
-    # The engine switch never augments toolless phases: plan/work carry the
-    # tools (already wired by the baseline), the review stays toolless.
+    # The engine switch never augments the review phase: plan/work carry the
+    # tools (already wired by the baseline), the review keeps its fixed
+    # read-only set.
     monkeypatch.setenv("AGENT_CODE_SEARCH", engine)
     cfg = load_config()
     assert cfg.code_search.engine == engine
     assert cfg.tools.code_search.enabled is True
     assert cfg.tools.file_outline.enabled is True
-    assert list(cfg.phases["commit"].tools) == []
+    assert list(cfg.phases["commit"].tools) == [
+        "read",
+        "code_search",
+        "file_outline",
+    ]
     for phase_id in ("plan", "work", "emergency"):
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
@@ -198,11 +207,13 @@ def test_env_registers_tools_and_notes_in_tooled_phases(monkeypatch, engine):
         prompt = _system_prompt(cfg, phase, TASK)
         assert "code_search: search the codebase" in prompt
         assert "file_outline: list def/class/func symbols" in prompt
-    # the toolless review gets no tools block and no tool notes
-    assert list(get_tools(cfg, cfg.phases["commit"].tools)) == []
-    assert "code_search: search the codebase" not in _system_prompt(
-        cfg, get_phase("commit"), TASK
-    )
+    # the read-only review gets the search tools (read + search, no bash,
+    # no writes) and their notes
+    commit_names = [t.name for t in get_tools(cfg, cfg.phases["commit"].tools)]
+    assert commit_names == ["read", "code_search", "file_outline"]
+    commit_prompt = _system_prompt(cfg, get_phase("commit"), TASK)
+    assert "code_search: search the codebase" in commit_prompt
+    assert "file_outline: list def/class/func symbols" in commit_prompt
 
 
 def test_code_search_timeout_env_override(monkeypatch):

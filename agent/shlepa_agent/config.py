@@ -256,11 +256,14 @@ TOOLSET_ENV = "AGENT_TOOLSET"
 def _append_to_phases(cfg: AgentConfig, names: tuple[str, ...]) -> None:
     """Append tool names to every phase's tool list (deduped).
 
-    An EMPTY phase tool list is a deliberate toolless phase (the baseline
-    review/commit) — it is never augmented by an arm mutation, so a
-    toolless phase stays toolless on every arm.
+    The review phase (``commit``) is NEVER augmented: its tool list is a
+    fixed read-only verification set (read + search) — arm tools (recon's
+    25-30s per-call wall, the ~10K-token mitre KB prefix, log_triage) do
+    not belong in the 60s judge. (``cfg.phases`` is keyed by phase id.)
     """
-    for phase in cfg.phases.values():
+    for phase_id, phase in cfg.phases.items():
+        if phase_id == "commit":
+            continue
         if not phase.tools:
             continue
         for name in names:
@@ -330,10 +333,13 @@ def _apply_read_only_arm(cfg: AgentConfig) -> None:
     The experiment arm proving recon is usable by an agent without a
     code-execution channel (deliverable writing stays possible via
     write/edit; 'read-only' = no bash, not a read-only filesystem).
-    A toolless phase (the review) stays toolless under every arm.
+    The review phase keeps its fixed read-only verification set under
+    every arm (it never gets write/edit or arm tools).
     """
     cfg.tools.recon.enabled = True
-    for phase in cfg.phases.values():
+    for phase_id, phase in cfg.phases.items():
+        if phase_id == "commit":
+            continue
         if not phase.tools:
             continue
         phase.tools = ["read", "write", "edit", "recon"]

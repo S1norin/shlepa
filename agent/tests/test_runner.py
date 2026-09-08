@@ -238,9 +238,10 @@ def test_build_phase_agent_named_per_phase(tmp_path):
         assert agent.name == phase_id
 
 
-def test_review_agent_is_toolless_from_packaged_config(tmp_path):
-    """The baseline review (commit) phase builds with NO tools: it judges
-    the transcript, it cannot read/write/run anything. The plan phase
+def test_review_agent_is_read_only_from_packaged_config(tmp_path):
+    """The baseline review (commit) phase builds with READ-ONLY tools only:
+    it judges the transcript and re-checks the disk, but cannot
+    read/write/run anything (no bash, no write/edit). The plan phase
     builds without bash/writes; the work phase is the only one with bash.
     """
     from pydantic_ai.providers.openai import OpenAIProvider
@@ -259,7 +260,8 @@ def test_review_agent_is_toolless_from_packaged_config(tmp_path):
         agent = build_phase_agent(model, cfg, get_phase(phase_id), "some task")
         return set(agent._function_toolset.tools)
 
-    assert names("commit") == set()  # toolless review
+    assert names("commit") == {"read", "code_search", "file_outline"}
+    # read-only review: read + search, no bash, no writes
     assert names("plan") == {"read", "recon", "code_search", "file_outline"}
     assert names("work") == {
         "read",
@@ -538,9 +540,9 @@ def test_log_contract_stable_events_and_fields(monkeypatch, stub_openai, tmp_pat
     # v5 fixed-regime details are additive (unknown to the CLI, but logged);
     # there is NO t / t_source / hard_time / soft_time / commit_deadline
     assert {"plan_cap", "work_cap", "review_cap", "bash_cap", "llm_wall"} <= set(start)
-    assert start["plan_cap"] == pytest.approx(60.0)
+    assert start["plan_cap"] == pytest.approx(80.0)
     assert start["work_cap"] == pytest.approx(120.0)
-    assert start["review_cap"] == pytest.approx(45.0)
+    assert start["review_cap"] == pytest.approx(60.0)
     assert start["bash_cap"] == pytest.approx(30.0)
     assert start["llm_wall"] == pytest.approx(180.0)
     usage = next(e for e in events if e.get("event") == "usage")

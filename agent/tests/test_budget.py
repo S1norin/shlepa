@@ -17,23 +17,23 @@ from shlepa_agent.budget import (
 
 
 def test_regime_constants():
-    assert PLAN_CAP == 60.0
+    assert PLAN_CAP == 80.0
     assert WORK_CAP == 120.0
-    assert REVIEW_CAP == 45.0
+    assert REVIEW_CAP == 60.0
     assert BASH_MAX == 30.0
     assert LLM_WALL == 180.0
 
 
 def test_full_cycle():
     assert FULL_CYCLE == PLAN_CAP + WORK_CAP + REVIEW_CAP
-    assert FULL_CYCLE == 225.0
+    assert FULL_CYCLE == 260.0
 
 
 def test_regime_snapshot():
     assert regime() == {
-        "plan": 60.0,
+        "plan": 80.0,
         "work": 120.0,
-        "review": 45.0,
+        "review": 60.0,
         "bash": 30.0,
         "llm_wall": 180.0,
     }

@@ -19,10 +19,10 @@ only bounds are the fixed per-operation constants
 (`shlepa_agent/budget.py`):
 
 ```
-plan   = 60s    work = 120s per cycle    review (commit) = 45s
+plan   = 80s    work = 120s per cycle    review (commit) = 60s
 bash   = 30s per call (also the tool max)
 llm wall = 180s per request (open -> last chunk)
-full cycle = plan + work + review = 225s
+full cycle = plan + work + review = 260s
 ```
 
 There is **NO global hard stop, NO request-start gate and NO cycle cap**:
@@ -53,9 +53,9 @@ has no write tools and can never deliver anything; a hallucinated
 
 | Phase      | Fresh/continued | Output         | Hard time cap | Retries | Reasoning |
 |------------|-----------------|----------------|---------------|---------|-----------|
-| `plan`     | fresh run       | `PlanResult` (typed) | 60s | 1 | — |
+| `plan`     | fresh run       | `PlanResult` (typed) | 80s | 1 | — |
 | `work`     | fresh run (gets the plan hand-off) | `WorkResult` (typed) | 120s per cycle | 1 | — |
-| `commit`   | continues the work conversation | `ReviewResult` (typed) | 45s; the terminal handler | 0 | low |
+| `commit`   | continues the work conversation | `ReviewResult` (typed) | 60s; the terminal handler | 0 | — (endpoint default) |
 | `emergency`| — (UNUSED in v5, kept in code) | — | — | 0 | low |
 
 An explicit `[phases.*].time` overrides the regime cap for that phase
@@ -73,18 +73,20 @@ Routing rules (runner):
 - `review` (the commit phase) returns a typed `ReviewResult`
   (`status` ok/partial, `verdict` done/next_round, `artifact`, `checks`,
   `hints`, `notes`); the reported run output is `notes` (falling back to
-  `artifact`). The reviewer is **toolless**: it judges the plan/work
-  transcript from the conversation alone — it cannot read files, run
-  checks, or repair anything. A broken deliverable is fixed by the next
-  plan/work round, not by the review.
+  `artifact`). The reviewer is **read-only**: it judges the plan/work
+  transcript from the conversation AND re-checks the disk with read-only
+  tools (`read`, `code_search`, `file_outline`) — it cannot run commands
+  or repair anything. A broken deliverable is fixed by the next plan/work
+  round, not by the review.
 - **Cycle continuation**: a `verdict = next_round` **always** starts a new
   plan/work cycle (logged as a `cycle` event). There is no cycle cap and
   no time check — the container kill at the task's own limit is the only
   external bound.
 - **Phase hard timeouts** (`plan`/`work` cap expiry) and phase errors are
   hand-offs, not crashes: on a timeout the runner issues **one** toolless
-  `final_ask` request on the same conversation — "time is up, write the
-  deliverable now, no tools" — capped at 30s, then hands off to the
+  `final_ask` request on the same conversation — "limit reached (time or
+  context, whichever breached): name the deliverable path and say what is
+  complete/missing, no tools" — capped at 30s, then hands off to the
   review phase (the request prefix is byte-identical to the phase's last
   request, so the local LLM server reuses its KV cache).
 - **The emergency phase** (v4 terminal rescue) is UNUSED: routing to it is
@@ -110,14 +112,14 @@ no-op on top of it):
 |------------|--------------------------------------------------------------|-------|
 | `plan`     | `read`, `recon`, `code_search`, `file_outline`               | maps and plans only — **no bash, no writes** |
 | `work`     | `read`, `write`, `edit`, `bash`, `recon`, `code_search`, `file_outline` | the only phase with **bash** and the only phase that writes the deliverable |
-| `commit`   | — (toolless)                                                 | the review judge; empty tool list, never augmented by arms/env |
+| `commit`   | `read`, `code_search`, `file_outline`                       | the read-only review judge; fixed set — never augmented by arms/env |
 | `emergency`| `read`, `write`, `edit`, `bash` (legacy, unused)             | arm additions still land here (deduped, harmless) |
 
 - `recon` ships in the baseline, so the recon prompt block renders the
-  **tool variant** (`recon_tool.md`) in the tooled phases; the toolless
-  review renders no recon block at all. The script variant
-  (`recon_script.md`) remains for phases without the recon tool (e.g. the
-  read-only arm's phases).
+  **tool variant** (`recon_tool.md`) in the phases that have the recon
+  tool; the read-only review (no recon, no bash) renders no recon block
+  at all. The script variant (`recon_script.md`) remains for phases with
+  bash but no recon tool (e.g. the legacy emergency, never routed).
 - The arms are now **engine/variant switches on top of the baseline**:
   `+smart-grep` pins the search engine to `rg` (the baseline default),
   `+sifs` to SIFS, `+forensics`/`+mitre-kb` add their tool to every tooled
@@ -139,7 +141,7 @@ no-op on top of it):
 | `SHLEPA_BASH_MAX_OUTPUT` | `tools.bash.max_output` | int |
 | `SHLEPA_READ_MAX_LIMIT` | `tools.read.max_limit` | int |
 | `SHLEPA_READ_MAX_OUTPUT` | `tools.read.max_output` | int |
-| `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 45s) | float |
+| `SHLEPA_COMMIT_TIME` | `phases.commit.time` (default: review cap 60s) | float |
 | `SHLEPA_COMMIT_REASONING_EFFORT` | `phases.commit.reasoning_effort` | str |
 | `SHLEPA_CODE_SEARCH_TIMEOUT` | `tools.code_search.timeout` (per-call wall, default 30s) | float |
 
@@ -157,7 +159,7 @@ packaged baseline stays as-is (search on, `rg`), byte-identical to the
 golden fixture (`agent/tests/fixtures/default_prompt.txt`). When set, the
 config layer stores the engine (`code_search.engine`) and appends
 `code_search` + `file_outline` to every tooled phase (deduped; the
-toolless review is never augmented).
+review phase is never augmented).
 Engine resolution inside the tools: `rg` → the ripgrep scan; `sifs` →
 BM25, or hybrid when the model asks (`mode="hybrid"`, needs the embedding
 model, dev only); a missing/broken SIFS binary degrades to rg/regex with a
@@ -173,7 +175,7 @@ mutation.
   `llm_wall = 180s` (open -> last chunk). There is NO hard stop, NO
   request-start gate, NO request-count limit and NO token budget.
 - **Hard, enforced by the runner**: the fixed per-phase time caps (plan
-  60s / work 120s / review 45s; `[phases.*].time` overrides) and the
+  80s / work 120s / review 60s; `[phases.*].time` overrides) and the
   optional step guard.
 - **External budget — developer-owned, never agent-visible**: each task
   has an official **time limit** (the container kill) and **token limit**
@@ -197,10 +199,10 @@ mutation.
     tight on budget. (The legacy `emergency` phase, unused in v5, was
     reworded to carry no deadline language for the same reason.)
 - **Advisory (rendered into prompts/status, never enforced)**:
-  per-phase `soft_time`/`soft_tokens` (`plan`: 45s/15k, `work`: 105s — no
-  token note for work, `commit`: 35s/20k; every soft time stays under its
-  phase's hard cap) and `phases.*.requests` (legacy slices, no longer
-  enforced — kept as prompt context only).
+  per-phase `soft_time`/`soft_tokens` (`plan`: 60s/15k, `work`: 105s — no
+  token note for work, `commit`: 45s/20k; every soft time stays under its
+  phase's hard cap) and `phases.*.requests` (UNUSED in v5 — no
+  request-count limit; kept for compatibility only).
 
 ## Sections overview
 

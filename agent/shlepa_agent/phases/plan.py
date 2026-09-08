@@ -38,12 +38,22 @@ class PlanPhase(Phase):
                 )
         review = state.results.get("commit")
         if review is not None and review.output is not None:
-            hints = getattr(review.output, "hints", None) or []
+            hints = list(getattr(review.output, "hints", None) or [])
             if hints:
                 parts.append(
                     "review phase verdict (previous cycle): next_round — "
                     "follow these hints in the new plan:\n"
                     + "\n".join(f"- {h}" for h in hints)
+                )
+            else:
+                # Legal but useless otherwise: a next_round without hints
+                # still starts a replan, and the plan phase must know it is
+                # a replan (and target the previous work result above).
+                parts.append(
+                    "review phase verdict (previous cycle): next_round — "
+                    "the review gave no specific hints: re-read the "
+                    "previous work result above and target its weakest or "
+                    "unchecked claims."
                 )
         if parts:
             contents["previous_results"] = "\n\n".join(parts)

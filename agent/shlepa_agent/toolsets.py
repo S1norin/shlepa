@@ -10,8 +10,8 @@ Arms (the current set; the registry grows as new tool families land):
 - ``baseline``: the current default tool policy — plan gets
   read + recon + code_search/file_outline (no bash, no writes), work
   gets the full set (read/write/edit/bash + recon + search), review
-  (commit) is toolless. No config mutation: the packaged config.toml
-  IS the baseline.
+  (commit) is read-only (read + code_search/file_outline; no bash, no
+  writes). No config mutation: the packaged config.toml IS the baseline.
 - ``+smart-grep``: baseline with the code_search engine pinned to
   ripgrep (the rg engine; the "smart grep" primitive from the code-search
   plan — now also the baseline default, so the arm is mainly a
@@ -92,7 +92,7 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
 
     ``baseline`` records the arm and mutates nothing (the packaged
     config.toml already carries the baseline tool policy: recon + search
-    in plan/work, toolless review). Search arms pin the code_search
+    in plan/work, read-only review). Search arms pin the code_search
     engine (rg | sifs) — the tools are enabled and phase-wired by the
     baseline config; the mutation dedupes to the engine switch (see
     :func:`shlepa_agent.config._enable_search_tools`).

@@ -40,8 +40,8 @@ def test_registry_has_all_tools():
 
 def test_registry_default_config_search_tools_in_tooled_phases(monkeypatch):
     # baseline behavior: with AGENT_CODE_SEARCH unset the packaged config
-    # names the code-search tools in plan/work; the toolless review and the
-    # legacy emergency phase never register them.
+    # names the code-search tools in plan/work and the read-only review;
+    # the legacy emergency phase never registers them.
     from shlepa_agent.phases import get_phase
 
     monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
@@ -51,7 +51,11 @@ def test_registry_default_config_search_tools_in_tooled_phases(monkeypatch):
         names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
         assert "code_search" in names
         assert "file_outline" in names
-    for phase_id in ("commit", "emergency"):
+    for phase_id in ("commit",):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "code_search" in names
+        assert "file_outline" in names
+    for phase_id in ("emergency",):
         names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
         assert "code_search" not in names
         assert "file_outline" not in names

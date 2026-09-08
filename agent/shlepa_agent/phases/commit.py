@@ -2,8 +2,9 @@
 
 Continues the CURRENT conversation (trimmed message history) so the model
 keeps its full context (the plan + work runs of the current cycle). The
-user message asks it to JUDGE from the transcript alone — the phase is
-TOOLLESS: it cannot read files, run checks, or repair anything. It decides:
+user message asks it to JUDGE from the transcript and, where it matters,
+to re-check the disk — the phase is READ-ONLY: it has read/search tools
+but cannot run commands or repair anything. It decides:
 ``verdict='done'`` stops the run, ``verdict='next_round'`` starts a new
 plan/work cycle (always — no time or cycle cap; the hints for the next plan
 ride along in ``state.results`` and are rendered by the next plan prompt). A
@@ -45,7 +46,8 @@ def trim_history(messages: list[Any]) -> list[Any]:
 
 
 class CommitPhase(Phase):
-    """Toolless reviewer: judges done vs next_round from the transcript."""
+    """Read-only reviewer: judges done vs next_round from the transcript
+    and targeted read/search re-checks."""
 
     id = "commit"
     output_type = ReviewResult

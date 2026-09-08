@@ -160,7 +160,8 @@ def test_plan_and_work_are_fresh_runs():
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
     # the baseline tool policy: plan maps (no bash/writes), work executes
-    # (the only bash phase), review is toolless, emergency stays legacy.
+    # (the only bash phase), review is read-only (read + search),
+    # emergency stays legacy.
     cfg = load_config()
     assert PlanPhase().tools(cfg) == ["read", "recon", "code_search", "file_outline"]
     assert WorkPhase().tools(cfg) == [
@@ -172,7 +173,8 @@ def test_phase_toolsets_from_config():
         "code_search",
         "file_outline",
     ]
-    assert CommitPhase().tools(cfg) == []  # toolless review
+    assert CommitPhase().tools(cfg) == ["read", "code_search", "file_outline"]
+    # read-only review: read + search, no bash, no writes
     assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
 
 
@@ -181,7 +183,7 @@ def test_phase_limits_from_config():
     plan = PlanPhase().limits(cfg)
     assert plan.requests == 25
     assert plan.time is None  # cap = regime constant (budget.py)
-    assert plan.soft_time == 45.0
+    assert plan.soft_time == 60.0
     assert plan.soft_tokens == 15000
     assert plan.reasoning_effort is None
 
@@ -194,9 +196,9 @@ def test_phase_limits_from_config():
     commit = CommitPhase().limits(cfg)
     assert commit.requests == 20
     assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 35.0  # advisory, under the 45s cap
+    assert commit.soft_time == 45.0  # advisory, under the 60s cap
     assert commit.soft_tokens == 20000
-    assert commit.reasoning_effort == "low"
+    assert commit.reasoning_effort is None  # endpoint default, not "low"
 
     emergency = EmergencyPhase().limits(cfg)
     assert emergency.requests == 20
@@ -207,16 +209,16 @@ def test_phase_limits_from_config():
 def test_limits_note_rendered_regime_caps():
     state = _state()
     plan_note = PlanPhase().limits_note(state)
-    # fixed regime caps (plan 60s) + advisory soft values
-    assert "hard-capped at 60s" in plan_note
-    assert "45s" in plan_note
+    # fixed regime caps (plan 80s) + advisory soft values
+    assert "hard-capped at 80s" in plan_note
+    assert "60s" in plan_note
     assert "15000" in plan_note
     work_note = WorkPhase().limits_note(state)
     assert "hard-capped at 120s" in work_note
     assert "cycle 1" in work_note  # state.cycles == 0 -> "this is cycle 1"
     commit_note = CommitPhase().limits_note(state)
-    # the review (commit) phase gets its fixed regime cap (45s)
-    assert "hard-capped at 45s" in commit_note
+    # the review (commit) phase gets its fixed regime cap (60s)
+    assert "hard-capped at 60s" in commit_note
 
 
 def test_limits_note_time_override():

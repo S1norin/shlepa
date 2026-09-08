@@ -23,7 +23,7 @@ send_temp = false
 
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
-# budget.py (plan 60 / work 120 / review 45 / bash 30 / llm wall 180).
+# budget.py (plan 80 / work 120 / review 60 / bash 30 / llm wall 180).
 # There is NO task time limit T, NO global hard stop, NO request-start
 # gate, NO global token budget and NO request-count limit: token usage is
 # logged per request for analysis only.
@@ -92,14 +92,15 @@ engine = "rg"
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
-# structured plan. Hard cap is the fixed regime constant (plan = 60s,
+# structured plan. Hard cap is the fixed regime constant (plan = 80s,
 # budget.py). An explicit `time` value would override the cap (dev knob;
 # omitted here). Soft values are advisory (rendered into the prompt).
 # Tool policy (baseline): read + recon + search only — NO bash, NO writes;
 # planning never mutates the environment.
 tools = ["read", "recon", "code_search", "file_outline"]
+# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
 requests = 25
-soft_time = 45.0
+soft_time = 60.0
 soft_tokens = 15000
 max_retries = 1
 
@@ -112,27 +113,34 @@ max_retries = 1
 # Tool policy (baseline): the FULL set — file tools + bash (the only phase
 # with bash) + recon + search.
 tools = ["read", "write", "edit", "bash", "recon", "code_search", "file_outline"]
+# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
 requests = 100
 soft_time = 105.0
 max_retries = 1
 
 [phases.commit]
-# Terminal REVIEW phase: toolless judge. It resumes the work transcript and
-# decides done|next_round WITHOUT any tools — it cannot repair anything; a
-# broken deliverable is fixed by the next plan/work cycle it routes to.
-# Hard cap is the fixed regime constant (review = 45s, budget.py). The soft
-# time stays UNDER the hard cap.
-tools = []
+# Terminal REVIEW phase: the read-only verification judge. It resumes the
+# work transcript and decides done|next_round; it can RE-CHECK the disk
+# (read + search, no bash, no writes) but cannot repair anything — a broken
+# deliverable is fixed by the next plan/work cycle it routes to.
+# Hard cap is the fixed regime constant (review = 60s, budget.py; the cap
+# covers a few targeted read/search verification round trips). The soft time
+# stays UNDER the hard cap.
+# NO explicit reasoning_effort: the endpoint default applies (same as
+# plan/work) — the done/next_round verdict is the most consequential
+# decision of the run and must not run with degraded reasoning.
+tools = ["read", "code_search", "file_outline"]
+# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
 requests = 20
-soft_time = 35.0
+soft_time = 45.0
 soft_tokens = 20000
-reasoning_effort = "low"
 max_retries = 0
 
 [phases.emergency]
 # UNUSED in v5 (kept for compatibility): the v4 terminal rescue. The runner
 # never routes to it.
 tools = ["read", "write", "edit", "bash"]
+# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
 requests = 20
 soft_tokens = 20000
 reasoning_effort = "low"

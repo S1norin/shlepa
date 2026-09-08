@@ -2,8 +2,9 @@
 
 The packaged config.toml IS the baseline: recon + code_search + file_outline
 on (rg engine), with the per-phase tool matrix (plan: read + recon + search,
-no bash; work: full set + recon + search; review: toolless; emergency:
-legacy four). The arms are switches on top of it:
+no bash; work: full set + recon + search; review: read-only read + search,
+no bash, no writes; emergency: legacy four). The arms are switches on top of
+it:
 +smart-grep (pin rg), +sifs (pin sifs), +forensics (log_triage),
 +mitre-kb (mitre_kb), +recon (no-op, recon is baseline now), read-only
 (read/write/edit + recon, no bash). AGENT_TOOLSET is the sole driver of the
@@ -35,8 +36,8 @@ TASK = "TASK"
 
 #: The baseline tool matrix (config.toml). Arm mutations are diffs against
 #: this: search arms only pin the engine (tools already wired), forensics /
-#: mitre-kb append their tool to every TOOLED phase, and the toolless review
-#: stays toolless under every arm.
+#: mitre-kb append their tool to every TOOLED phase, and the review keeps
+#: its fixed read-only set under every arm.
 BASE_PLAN = ["read", "recon", "code_search", "file_outline"]
 BASE_WORK = [
     "read",
@@ -47,7 +48,7 @@ BASE_WORK = [
     "code_search",
     "file_outline",
 ]
-BASE_COMMIT = []
+BASE_COMMIT = ["read", "code_search", "file_outline"]
 BASE_EMERGENCY = ["read", "write", "edit", "bash"]
 BASE_MATRIX = {
     "plan": BASE_PLAN,
@@ -66,10 +67,11 @@ def _with_tools(phase_id: str, tools: tuple[str, ...]) -> list[str]:
     """Baseline phase list after an arm appends ``tools``.
 
     Mirrors ``_append_to_phases``: every TOOLED phase gets the arm tools
-    (deduped, order preserved); a toolless phase stays toolless.
+    (deduped, order preserved); an empty phase list stays empty, and the
+    review (commit) keeps its fixed read-only set under every arm.
     """
     base = list(BASE_MATRIX[phase_id])
-    if not base:
+    if not base or phase_id == "commit":
         return base
     for tool in tools:
         if tool not in base:
@@ -78,7 +80,8 @@ def _with_tools(phase_id: str, tools: tuple[str, ...]) -> list[str]:
 
 
 #: Baseline matrix after a search arm / the legacy switch: the search tools
-#: are already wired in plan/work (deduped) but land in the legacy emergency.
+#: are already wired in plan/work/review (deduped) but land in the legacy
+#: emergency.
 SEARCH_MATRIX = {
     p: _with_tools(p, ("code_search", "file_outline")) for p in PHASES
 }
@@ -360,8 +363,8 @@ def test_apply_arm_read_only_composes_toolset():
     assert cfg.tools.recon.enabled is True
     for phase_id in PHASES:
         if phase_id == "commit":
-            # the toolless review stays toolless under every arm
-            assert list(cfg.phases[phase_id].tools) == []
+            # the review keeps its fixed read-only set under every arm
+            assert list(cfg.phases[phase_id].tools) == BASE_COMMIT
             continue
         assert list(cfg.phases[phase_id].tools) == [
             "read",

@@ -237,7 +237,7 @@ def test_off_by_default(monkeypatch):
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         # the baseline matrix (config.toml): plan read+search, work full+
-        # search, review toolless, legacy emergency four
+        # search, review read-only read+search, legacy emergency four
         if phase_id == "plan":
             assert list(cfg.phases[phase_id].tools) == [
                 "read",
@@ -256,7 +256,11 @@ def test_off_by_default(monkeypatch):
                 "file_outline",
             ]
         elif phase_id == "commit":
-            assert list(cfg.phases[phase_id].tools) == []
+            assert list(cfg.phases[phase_id].tools) == [
+                "read",
+                "code_search",
+                "file_outline",
+            ]
         else:
             assert list(cfg.phases[phase_id].tools) == BASE_TOOLS
         prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
@@ -273,8 +277,8 @@ def test_arm_env_enables_tool_and_prompt(monkeypatch):
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
         if phase_id == "commit":
-            # the toolless review is never augmented
-            assert names == []
+            # the read-only review is never augmented
+            assert names == ["read", "code_search", "file_outline"]
             assert "mitre_kb" not in _system_prompt(cfg, phase, TASK)
             continue
         base = (BASE_TOOLS if phase_id == "emergency"

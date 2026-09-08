@@ -28,8 +28,19 @@ class WorkPhase(Phase):
         }
         prev_parts: list[str] = []
         plan = state.results.get("plan")
-        if plan is not None and plan.output is not None:
-            prev_parts.append("plan phase result:\n" + plan.summary)
+        if plan is not None:
+            if plan.output is not None:
+                prev_parts.append("plan phase result:\n" + plan.summary)
+            elif plan.error:
+                # The plan phase ended without a plan (time cap / error):
+                # say so explicitly, otherwise work.md's "execute the plan
+                # and do not invent new approaches" has no plan to point at.
+                prev_parts.append(
+                    "plan phase did not produce a plan (" + plan.error + "): "
+                    "there is no plan for this cycle. Derive the minimum "
+                    "work directly from the task instruction and proceed; "
+                    "do not pretend a plan exists."
+                )
         prev_work = state.results.get("work")
         if prev_work is not None:
             if prev_work.output is not None:

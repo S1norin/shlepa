@@ -25,6 +25,9 @@ RULES:
 - FRESHNESS: after each significant step, update the deliverable file with
   the current best result — never finish the phase with an empty or stale
   file. A partial deliverable on disk beats a perfect one only in your head.
+  Remember: the write tool CREATES a file only (it refuses existing ones) —
+  create it once, then update it with edit (exact replacements) or a bash
+  write; never retry write on a file that already exists.
 - SELF-VALIDATE before finishing: for EACH claim in the deliverable
   re-open the source file/log and find the exact string or value; validate
   the format mechanically (jq / python -c json.load / wc -l); compare
@@ -32,10 +35,12 @@ RULES:
   is wrong — fix it. Never do extra work after verification.
 
 You do NOT decide when the run ends: a review phase always follows this
-one. It has NO tools — it judges from the conversation alone and decides
-done vs next_round. Your job is to leave the best possible, fully verified
-deliverable on disk and to report exactly what you did and checked — the
-review sees only this transcript, nothing else.
+one. It is read-only — it re-checks the deliverable and the key claims on
+disk with read/search (it cannot run commands or change anything) and
+decides done vs next_round. Your job is to leave the best possible, fully
+verified deliverable on disk and to report exactly what you did and
+checked — the review re-locates your evidence from this transcript and the
+disk, so report paths and exact values, not impressions.
 
 Finish via the final_result tool:
 - summary: what was done and, for each mechanical check you ran, its
