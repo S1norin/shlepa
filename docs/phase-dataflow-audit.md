@@ -224,6 +224,12 @@ not deleted.
 - **A1**: `work.py` renders an explicit fallback when the plan produced
   no typed result: "No plan was produced ... derive the minimum work
   yourself" replaces the "execute the plan ... do not invent" wording.
+  Refined in the same branch: a plan timeout no longer skips straight to
+  the review — the one-shot `final_ask` now asks the plan to leave its
+  plan as plain text (goal/findings/steps/risks), the reply is stored on
+  `PhaseResult.note`, and the pipeline continues with **work** executing
+  that salvaged plan (work flags it as possibly incomplete); the
+  derive-from-task fallback stays for a final_ask that produced nothing.
 - **A2 / B6**: `FINAL_ASK_MESSAGE` split into reason-specific heads
   (`_final_ask(..., reason="time" | "context")`): the time variant keeps
   the "hard time limit" framing, the context variant says the context

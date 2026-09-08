@@ -47,6 +47,9 @@ def save_state(state: RunState) -> None:
                     "summary": (res.summary or "")[:4000],
                     "deliverable": res.deliverable,
                     "error": res.error,
+                    # the final_ask text left by a cut phase (e.g. the
+                    # salvaged plan the work phase executed)
+                    "note": (res.note or "")[:4000] or None,
                 }
                 for phase_id, res in state.results.items()
             },

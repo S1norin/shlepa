@@ -84,11 +84,18 @@ Routing rules (runner):
   external bound.
 - **Phase hard timeouts** (`plan`/`work` cap expiry) and phase errors are
   hand-offs, not crashes: on a timeout the runner issues **one** toolless
-  `final_ask` request on the same conversation — "limit reached (time or
-  context, whichever breached): name the deliverable path and say what is
-  complete/missing, no tools" — capped at 30s, then hands off to the
-  review phase (the request prefix is byte-identical to the phase's last
-  request, so the local LLM server reuses its KV cache).
+  `final_ask` request on the same conversation (capped at 30s; the request
+  prefix is byte-identical to the phase's last request, so the local LLM
+  server reuses its KV cache) and then the pipeline continues:
+  - `plan` timeout — "limit reached (time or context): leave your plan as
+    plain text (goal / findings / steps / risks)" — the reply is stored on
+    the plan `PhaseResult.note` and **work runs next**, executing the
+    salvaged plan (flagged as possibly incomplete); if the final_ask
+    produced nothing, work falls back to deriving the minimum work from the
+    task instruction;
+  - `work` timeout — "limit reached (time or context): name the deliverable
+    path and say what is complete/missing" — then hands off to the review
+    phase.
 - **The emergency phase** (v4 terminal rescue) is UNUSED: routing to it is
   hard-off, the class and config section are kept for compatibility.
 - **Step guard** (`agent.max_steps` > 0, dev knob, off by default): once

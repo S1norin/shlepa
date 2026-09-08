@@ -22,9 +22,11 @@ kept for compatibility.
 Rules:
 - A phase time cap (or a context-limit / persistent model error) is a
   NORMAL hand-off, never a retryable error: it triggers ONE extra toolless
-  ``final_ask`` request on the same conversation ("name the deliverable
-  path and say what is complete/missing"), then hands off to the review
-  phase (terminal).
+  ``final_ask`` request on the same conversation, and then the pipeline
+  continues. The plan phase's final_ask leaves the plan as plain text
+  (the work phase executes it, salvaged-plan fallback included); the work
+  phase's final_ask names the deliverable path, then the review phase
+  (terminal) judges.
 - A phase ERROR (any other exception) in plan/work is retried up to the
   phase's ``max_retries`` (fresh run per attempt), then routes to the
   review phase. The review phase is never retried.
@@ -82,7 +84,7 @@ _FINAL_ASK_HEAD_CONTEXT = (
     "\u26a0\ufe0f CONTEXT LIMIT REACHED for this phase: the conversation ran "
     "out of room."
 )
-_FINAL_ASK_TAIL = (
+_FINAL_ASK_WORK_TAIL = (
     " You have no tools now: if the deliverable file is already on disk, "
     "reply with one short line naming its path and stating what in it is "
     "complete or missing. If it is not complete, still name the path and "
@@ -90,18 +92,34 @@ _FINAL_ASK_TAIL = (
     "re-check the file on disk with its read tools. Reply now with plain "
     "text only; do not call any tools."
 )
+_FINAL_ASK_PLAN_BODY = (
+    " You have no tools now: you cannot gather anything more. Leave your "
+    "plan as plain text in your reply, structured exactly as the plan "
+    "format: goal (the exact deliverable spec), findings (key facts tagged "
+    "[OBSERVED] / [INFERRED] / [ASSUMED]), steps (ordered concrete actions "
+    "for the work phase), risks (what is unverified or incomplete). Be "
+    "concrete — the work phase will execute exactly this text. Reply now "
+    "with plain text only; do not call any tools."
+)
 
 
-def _final_ask_message(reason: str = "time") -> str:
-    """Compose the final_ask user message for the breach reason."""
+def _final_ask_message(phase_id: str = "work", reason: str = "time") -> str:
+    """Compose the final_ask user message for the breach reason and phase.
+
+    The plan phase is asked to leave its plan as text (the work phase then
+    executes it); every other phase is asked for the deliverable path and
+    what is complete/missing.
+    """
     head = (
         _FINAL_ASK_HEAD_TIME if reason == "time" else _FINAL_ASK_HEAD_CONTEXT
     )
-    return head + _FINAL_ASK_TAIL
+    body = _FINAL_ASK_PLAN_BODY if phase_id == "plan" else _FINAL_ASK_WORK_TAIL
+    return head + body
 
 
-# Backward-compatible alias (the time-cap wording; see _final_ask_message).
-FINAL_ASK_MESSAGE = _final_ask_message("time")
+# Backward-compatible alias (the time-cap work wording; see
+# _final_ask_message).
+FINAL_ASK_MESSAGE = _final_ask_message("work", "time")
 
 
 # ---------------------------------------------------------------------------
@@ -377,16 +395,18 @@ async def _run_phase_with_retries(
 
 async def _final_ask(
     state: RunState, phase: Phase, reason: str = "time"
-) -> None:
+) -> str | None:
     """One extra toolless request after a phase breach.
 
     ``reason`` is ``"time"`` (phase time cap) or ``"context"`` (context-
     limit / persistent model error); the message head names the actual
     breach (a full conversation is not a time limit). Appends a single
     user message to the SAME conversation (byte-identical prompt prefix ->
-    KV-cache reuse on the local server) and asks the model to name the
-    deliverable path and state what is complete/missing, without tools.
-    Its outcome does not change routing: plan/work -> review.
+    KV-cache reuse on the local server). The plan phase is asked to leave
+    its plan as text; every other phase is asked to name the deliverable
+    path and state what is complete/missing. Returns the reply text (None
+    when nothing usable came back) — the caller stores it on the plan
+    PhaseResult (``note``) so the work phase can execute it.
     """
     cfg = state.cfg
     model = state.model
@@ -405,16 +425,19 @@ async def _final_ask(
         history_messages=len(history or []),
         elapsed_s=round(model.elapsed(), 1),
     )
+    reply: str | None = None
     try:
         async with asyncio.timeout(cap):
             async with agent.run_stream_events(
-                _final_ask_message(reason),
+                _final_ask_message(phase.id, reason),
                 deps=state.deps,
                 model_settings=_model_settings(cfg),
                 message_history=history,
             ) as events:
                 async for event in events:
-                    _log_stream_event(event)
+                    out = _log_stream_event(event)
+                    if out is not None:
+                        reply = out
         model.log_pending_usage()
         _log_event("final_ask", phase=phase.id, ok=True, elapsed_s=round(model.elapsed(), 1))
     except (TimeoutError, asyncio.TimeoutError):
@@ -434,6 +457,9 @@ async def _final_ask(
             ok=False,
             error=f"{type(e).__name__}: {str(e)[:200]}",
         )
+    if isinstance(reply, str):
+        reply = reply.strip() or None
+    return reply
 
 
 # ---------------------------------------------------------------------------
@@ -535,14 +561,19 @@ async def _pipeline(
                 output,
             )
         if result.status == "timeout":
-            # Time cap / context-limit breach: one toolless final_ask on the
-            # same conversation, then hand off to the terminal review.
+            # Time cap / context-limit breach: one toolless final_ask on
+            # the same conversation, then the pipeline continues. The plan
+            # phase salvages its plan as text in the final_ask reply (stored
+            # on its PhaseResult as ``note``) and work executes it; any
+            # other phase (work) hands off straight to the terminal review.
             # The breach reason comes from the error text ("... time cap
             # reached" is set by _run_phase for the wall-cap path).
             reason = "time" if "time cap" in (result.error or "") else "context"
-            await _final_ask(state, phase, reason=reason)
+            note = await _final_ask(state, phase, reason=reason)
+            if phase.id == "plan" and note:
+                state.results["plan"].note = note
             final_status = "timeout"
-            phase_id = "commit"
+            phase_id = "work" if phase.id == "plan" else "commit"
             continue
         if result.status == "error":
             final_status = "error"

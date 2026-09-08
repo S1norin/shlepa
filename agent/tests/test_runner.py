@@ -373,17 +373,25 @@ def test_commit_time_cap_reports_timeout(
     assert _status(events) == "timeout"
 
 
-def test_plan_time_cap_triggers_final_ask_then_review(
+def test_plan_time_cap_final_ask_salvages_plan_then_work(
     monkeypatch, stub_openai, tmp_path, events
 ):
+    # v5: a plan breach does NOT skip to the review — the one-shot
+    # final_ask asks the plan to leave its plan as text, and the pipeline
+    # continues with work (which executes the salvaged plan) and the
+    # terminal review.
     stub_state["script"] = [
         {"delay": 2.5, "final": "too slow — plan timed out"},
-        {"final": "FINAL-ASK: wrote hello.txt"},
-        _review_step(),  # v5: a plan breach hands off straight to the review
+        {"final": "SALVAGED-PLAN goal: write /app/hello.txt; steps: create it"},
+        _work_step(),
+        _review_step(),
     ]
     cfg = _cfg(tmp_path, plan_time=1.0, work_time=30.0)
     _run(monkeypatch, stub_openai, tmp_path, agent_cfg=cfg)
-    assert _status(events) == "timeout"  # plan was cut by its cap
+    # the breach is recovered (salvaged plan -> work -> review "done"), so
+    # the run ends "done"; the plan cap breach itself is still visible in
+    # the budget event below
+    assert _status(events) == "done"
     # the test config has send_temp on: every request (incl. final_ask) sends it
     assert all(b.get("temperature") == 0.6 for b in stub_state["bodies"])
     # plan was cut by its hard cap (budget), NOT retried
@@ -391,22 +399,32 @@ def test_plan_time_cap_triggers_final_ask_then_review(
         e.get("event") == "budget" and "plan time cap" in (e.get("reason") or "") for e in events
     )
     assert not [e for e in events if e.get("event") == "phase_retry" and e.get("phase") == "plan"]
-    # one toolless final_ask on the plan conversation, then the terminal review
+    # one toolless final_ask on the plan conversation, then work and the
+    # terminal review
     asks = [e for e in events if e.get("event") == "final_ask" and e.get("phase") == "plan"]
     assert asks[0].get("start") is True
     assert asks[-1].get("ok") is True
-    assert not _phase_starts(events, "work")
+    assert _phase_starts(events, "work")
     assert _phase_starts(events, "commit")
-    assert len(stub_state["bodies"]) == 3
-    # KV-cache reuse: the final_ask request prefix is byte-identical to the
-    # plan phase's last request (same system message, same history prefix).
-    bodies = stub_state["bodies"]
+    assert len(stub_state["bodies"]) == 4
+    # the final_ask asks the plan to leave a text plan, and the work
+    # request carries the salvaged plan in its previous-results block
     fa = next(
         b
-        for b in bodies
+        for b in stub_state["bodies"]
         if any("HARD TIME LIMIT REACHED" in str(m.get("content") or "") for m in b["messages"])
     )
-    plan = bodies[0]
+    assert any(
+        "Leave your plan as plain text" in str(m.get("content") or "")
+        for m in fa["messages"]
+    )
+    work_body = stub_state["bodies"][2]
+    assert any(
+        "SALVAGED-PLAN" in str(m.get("content") or "") for m in work_body["messages"]
+    )
+    # KV-cache reuse: the final_ask request prefix is byte-identical to the
+    # plan phase's last request (same system message, same history prefix).
+    plan = stub_state["bodies"][0]
     assert fa["messages"][0] == plan["messages"][0]  # system: byte-identical
     assert fa["messages"][:-1] == plan["messages"][:-1]  # history prefix
 

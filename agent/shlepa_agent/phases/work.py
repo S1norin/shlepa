@@ -31,6 +31,17 @@ class WorkPhase(Phase):
         if plan is not None:
             if plan.output is not None:
                 prev_parts.append("plan phase result:\n" + plan.summary)
+            elif plan.note:
+                # The plan phase was cut by its cap but left a text plan in
+                # its one-shot final_ask message; work executes it.
+                prev_parts.append(
+                    "plan phase hit its time cap and left this plan in its "
+                    "final message (plain text, may be incomplete):\n"
+                    + plan.note
+                    + "\nTreat it as the plan for this cycle; where it is "
+                    "incomplete, make the smallest sensible decision "
+                    "yourself."
+                )
             elif plan.error:
                 # The plan phase ended without a plan (time cap / error):
                 # say so explicitly, otherwise work.md's "execute the plan

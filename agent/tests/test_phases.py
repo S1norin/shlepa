@@ -302,6 +302,34 @@ def test_work_prompt_carries_plan_result():
     assert "120s" in prompt  # fixed regime hard cap
 
 
+def test_work_prompt_on_plan_timeout_carries_salvaged_plan():
+    # the plan was cut by its cap, but its one-shot final_ask left a text
+    # plan: work executes that plan (flagged as possibly incomplete)
+    state = _state()
+    state.results["plan"] = PhaseResult(
+        status="timeout",
+        error="plan time cap reached",
+        note="SALVAGED: goal write /app/out.txt; steps create it",
+    )
+    prompt = WorkPhase().prompt(state)
+    assert "hit its time cap" in prompt
+    assert "SALVAGED: goal write /app/out.txt; steps create it" in prompt
+    assert "may be incomplete" in prompt
+
+
+def test_work_prompt_on_plan_timeout_without_note_falls_back_to_task():
+    # no typed plan AND no salvaged text (final_ask produced nothing): work
+    # derives the minimum work from the task instruction
+    state = _state()
+    state.results["plan"] = PhaseResult(
+        status="timeout", error="plan time cap reached"
+    )
+    prompt = WorkPhase().prompt(state)
+    assert "did not produce a plan" in prompt
+    assert "plan time cap reached" in prompt
+    assert "Derive the minimum work directly from the task instruction" in prompt
+
+
 def test_work_prompt_on_retry_carries_previous_attempt_error():
     state = _state()
     plan = PlanResult(goal="g", steps=["s"], decision="work")

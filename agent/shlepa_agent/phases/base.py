@@ -43,6 +43,9 @@ class PhaseResult(BaseModel):
     output: Any | None = None
     error: str | None = None
     iteration: int | None = None
+    #: Plain text left by the one-shot final_ask after a timeout (e.g. the
+    #: plan phase's salvaged plan, which the work phase then executes).
+    note: str | None = None
 
 
 @dataclass(frozen=True)
