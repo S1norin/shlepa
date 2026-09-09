@@ -407,7 +407,10 @@ def log_task_to_mlflow(
     endpoint_class: str = "main",
     batch_id: str | None = None,
     batch_started_ms: int | None = None,
-    trace_wait_sec: float = 15.0,
+    # 90s, not 15s: the collector exports trace spans with a lag, and a
+    # short wait misses the tag on slow batches (observed in 24h window
+    # analysis, reports/analysis_20260909_24h_traces.md).
+    trace_wait_sec: float = 90.0,
     experiment_name: str | None = None,
     arm: str | None = None,
     run_id: str | None = None,
