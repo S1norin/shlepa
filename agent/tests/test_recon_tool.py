@@ -1,200 +1,143 @@
-"""Tests for the recon tool (``shlepa_agent/tools/recon.py``).
+"""Tests for the recon tool (wrapper around tools/recon.py).
 
-The engine is covered in tests/test_recon.py (CLI parity, goldens, the
-web deadline). Here the tool layer: registration (on by default in the
-baseline plan/work phases, never in the toolless review), output parity
-with the engine in data mode, the 30s per-call wall against a hanging
-engine (issue #107), the max_output cap and the SHLEPA_RECON_* env
-overrides.
+The real script is exercised only in read-only --data mode on a small
+fixture tree (fast, deterministic, no network); mode wiring, the wall
+cap, and truncation use a fake script so the tests stay fast and hermetic.
 """
 
 import asyncio
-import json
 import time
-from types import SimpleNamespace
 
-from shlepa_agent import recon as engine
 from shlepa_agent.config import load_config
-from shlepa_agent.phases import get_phase
-from shlepa_agent.tools import get_tools
+from shlepa_agent.tools import ALL_TOOLS
+from shlepa_agent.tools import recon_tool
 from shlepa_agent.tools.base import AgentDeps
-import shlepa_agent.tools.recon as recon_tool
 
-PHASES = ("plan", "work", "commit", "emergency")
-BASE_TOOLS = ["read", "write", "edit", "bash"]
+import pytest
 
 
-def _ctx(tmp_path, cfg=None):
+def _ctx(tmp_path, cfg=None, clock=None):
+    from types import SimpleNamespace
+
     cfg = cfg if cfg is not None else load_config()
-    deps = AgentDeps(workdir=tmp_path, cfg=cfg, clock=lambda: 0.0)
+    deps = AgentDeps(workdir=tmp_path, cfg=cfg, clock=clock or (lambda: 0.0))
     return SimpleNamespace(deps=deps)
 
 
-def _untrusted_body(out: str) -> str:
-    """The body between the UNTRUSTED TEXT markers (the tool output)."""
-    lines = out.splitlines()
-    start = lines.index("UNTRUSTED TEXT ---------------")
-    end = lines.index("END OF UNTRUSTED TEXT-----------")
-    return "\n".join(lines[start + 1:end])
-
-
-# ---------------------------------------------------------------------------
-# registration
-# ---------------------------------------------------------------------------
-
-
-def test_present_by_default_in_tooled_phases(monkeypatch):
-    monkeypatch.delenv("AGENT_TOOLSET", raising=False)
-    monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
-    cfg = load_config()
-    assert cfg.tools.recon.enabled is True
-    for phase_id in PHASES:
-        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
-        if phase_id in ("plan", "work"):
-            assert "recon" in names  # the baseline ships recon
-        else:
-            assert "recon" not in names  # toolless review, legacy emergency
-
-
-def test_included_when_enabled():
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    tools = get_tools(cfg, BASE_TOOLS + ["recon"])
-    assert [t.name for t in tools] == BASE_TOOLS + ["recon"]
-    assert tools[-1].run is recon_tool.recon
-
-
-# ---------------------------------------------------------------------------
-# data-mode parity with the engine
-# ---------------------------------------------------------------------------
-
-
-def test_data_mode_parity_with_engine(tmp_path):
-    """The tool body is the engine render, UNTRUSTED-wrapped, nothing else."""
-    ev = tmp_path / "evidence"
-    ev.mkdir()
-    (ev / "notes.txt").write_text("case_id=IR-1\nflag{deadbeef}\n")
-    lines = [
-        json.dumps({"ts": f"2026-05-01T10:00:{i:02d}Z",
-                    "event": "upload" if i % 2 else "login"})
-        for i in range(10)
-    ]
-    (ev / "app.jsonl").write_text("\n".join(lines) + "\n")
-
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    out = asyncio.run(
-        recon_tool.recon(_ctx(tmp_path, cfg), mode="data", target="evidence"))
-    body = _untrusted_body(out)
-    got = json.loads(body)
-
-    want = json.loads(engine.render(engine.recon_data(ev)))
-    got.pop("stats")  # volatile wall-clock stat, same convention as test_recon
-    want.pop("stats")
-    assert got == want
-    # instrumented header + environment data markers
-    assert out.splitlines()[0] == "[tool] recon(mode='data', target='evidence')"
-
-
-# ---------------------------------------------------------------------------
-# per-call wall
-# ---------------------------------------------------------------------------
-
-
-def test_hanging_target_hits_default_wall(tmp_path, monkeypatch):
-    """AC: a hanging engine returns a timeout result in ~30s, never raising."""
-
-    def slow(*args, **kwargs):
-        time.sleep(31.0)
-        return {}
-
-    monkeypatch.setattr(engine, "recon_code", slow)
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    assert cfg.tools.recon.timeout == 30.0  # the default wall
-
-    async def call():
-        # measure inside the coroutine: asyncio.run joins the worker
-        # thread at teardown, which is not part of the tool's wall
-        t0 = time.monotonic()
-        out = await recon_tool.recon(_ctx(tmp_path, cfg), mode="code", target="x")
-        return out, time.monotonic() - t0
-
-    out, wall = asyncio.run(call())
-    assert "timed out after 30s" in out
-    assert 29 <= wall < 32  # the wall actually bound, not an early exit
-
-
-def test_wall_respects_config_timeout(tmp_path, monkeypatch):
-    def slow(*args, **kwargs):
-        time.sleep(2.0)
-        return {}
-
-    monkeypatch.setattr(engine, "recon_code", slow)
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    cfg.tools.recon.timeout = 0.3
-
-    async def call():
-        t0 = time.monotonic()
-        out = await recon_tool.recon(_ctx(tmp_path, cfg), mode="code", target="x")
-        return out, time.monotonic() - t0
-
-    out, wall = asyncio.run(call())
-    assert "timed out after 0.3s" in out
-    assert wall < 1.0  # the shortened wall fired, not the 2s sleep
-
-
-# ---------------------------------------------------------------------------
-# output cap + env overrides
-# ---------------------------------------------------------------------------
-
-
-def test_max_output_cap(tmp_path, monkeypatch):
-    # render() itself caps at 8192 bytes; a lower max_output caps harder
-    monkeypatch.setattr(
-        engine, "recon_data", lambda root: {"errors": ["e" * 2000] * 10})
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    cfg.tools.recon.max_output = 1000
-
-    out = asyncio.run(
-        recon_tool.recon(_ctx(tmp_path, cfg), mode="data", target="."))
-    assert len(_untrusted_body(out)) <= 1000
-    assert any("truncated to 1000 chars (tools.recon.max_output)" in ln
-               for ln in out.splitlines())
-
-
-def test_env_overrides(monkeypatch):
-    monkeypatch.setenv("SHLEPA_RECON_TIMEOUT", "12.5")
-    monkeypatch.setenv("SHLEPA_RECON_MAX_OUTPUT", "1234")
-    cfg = load_config()
-    assert cfg.tools.recon.timeout == 12.5
-    assert cfg.tools.recon.max_output == 1234
-    monkeypatch.setenv("SHLEPA_RECON_TIMEOUT", "not-a-number")
-    assert load_config().tools.recon.timeout == 30.0  # invalid: ignored
-
-
-# ---------------------------------------------------------------------------
-# regression: pydantic-ai resolves the tool signature
-# ---------------------------------------------------------------------------
-
-
-def test_build_phase_agent_exposes_recon_tool():
-    """The Literal mode arg must survive pydantic-ai signature resolution
-    (mirrors the mitre_kb wiring regression test)."""
-    from pydantic_ai.providers.openai import OpenAIProvider
-
-    from shlepa_agent.model import TrackedModel
-    from shlepa_agent.runner import build_phase_agent
-
-    cfg = load_config()
-    cfg.tools.recon.enabled = True
-    for phase in cfg.phases.values():
-        if "recon" not in phase.tools:
-            phase.tools.append("recon")
-    model = TrackedModel(
-        "m", OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"), cfg
+def _write_fake_script(tmp_path, body: str, name="fake_recon.py") -> "object":
+    p = tmp_path / name
+    p.write_text(
+        "import sys, json\n"
+        "print(json.dumps({'argv': sys.argv[1:]}))\n"
+        if body == "argv"
+        else f"import sys\nsys.stdout.write({body!r})\n"
     )
-    agent = build_phase_agent(model, cfg, get_phase("work"), "TASK")
-    assert "recon" in set(agent._function_toolset.tools)
+    return p
+
+
+def test_recon_registered():
+    assert "recon" in ALL_TOOLS
+    assert ALL_TOOLS["recon"].name == "recon"
+
+
+def test_recon_mode_wiring_url(tmp_path, monkeypatch):
+    script = _write_fake_script(tmp_path, "argv")
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: script)
+    ctx = _ctx(tmp_path)
+    out = asyncio.run(recon_tool.recon(ctx, mode="url", target="http://127.0.0.1/x"))
+    assert '"argv": ["http://127.0.0.1/x"]' in out
+
+
+def test_recon_mode_wiring_code_and_data(tmp_path, monkeypatch):
+    script = _write_fake_script(tmp_path, "argv")
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: script)
+    ctx = _ctx(tmp_path)
+    out_code = asyncio.run(recon_tool.recon(ctx, mode="code", target="src"))
+    assert '"argv": ["--code", "src"]' in out_code
+    out_data = asyncio.run(recon_tool.recon(ctx, mode="data", target="evidence"))
+    assert '"argv": ["--data", "evidence"]' in out_data
+
+
+def test_recon_unknown_mode_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: tmp_path / "x.py")
+    out = asyncio.run(recon_tool.recon(_ctx(tmp_path), mode="warp", target="x"))
+    assert "FAILED" in out
+    assert "unknown recon mode" in out
+
+
+def test_recon_missing_script_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: None)
+    out = asyncio.run(recon_tool.recon(_ctx(tmp_path), mode="code", target="src"))
+    assert "FAILED" in out
+    assert "not found" in out
+
+
+def test_recon_hard_cap_kills_slow_script(tmp_path, monkeypatch):
+    script = tmp_path / "slow.py"
+    script.write_text("import time\ntime.sleep(30)\n")
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: script)
+    monkeypatch.setattr(recon_tool, "RECON_TIMEOUT_S", 1.0)
+    t0 = time.monotonic()
+    out = asyncio.run(recon_tool.recon(_ctx(tmp_path), mode="code", target="src"))
+    elapsed = time.monotonic() - t0
+    assert "FAILED" in out
+    assert "timed out after 1s" in out
+    assert elapsed < 10  # the cap, not the script, ended the call
+
+
+def test_recon_output_capped_with_marker(tmp_path, monkeypatch):
+    big = "x" * 20000
+    script = _write_fake_script(tmp_path, big)
+    monkeypatch.setattr(recon_tool, "find_recon_script", lambda: script)
+    ctx = _ctx(tmp_path)
+    out = asyncio.run(recon_tool.recon(ctx, mode="data", target="d"))
+    # body itself is at most the 8 KB cap (plus the tool-result scaffolding)
+    assert "UNTRUSTED TEXT" in out
+    start = out.index("UNTRUSTED TEXT ---------------\n")
+    end = out.index("\nEND OF UNTRUSTED TEXT-----------")
+    body = out[start + len("UNTRUSTED TEXT ---------------\n"):end]
+    assert len(body) <= recon_tool.DEFAULT_MAX_OUTPUT
+    assert len(body) == recon_tool.DEFAULT_MAX_OUTPUT  # capped exactly
+
+
+def test_recon_data_mode_read_only_on_fixture_tree(tmp_path):
+    """The real script in --data mode maps a small tree and must not
+    create, modify, or delete anything in it."""
+    fixture = tmp_path / "evidence"
+    (fixture / "sub").mkdir(parents=True)
+    (fixture / "a.txt").write_text("flag{abc}\n")
+    (fixture / "sub" / "b.txt").write_text("noise\n")
+    before = {
+        p.relative_to(fixture).as_posix(): p.read_bytes()
+        for p in fixture.rglob("*") if p.is_file()
+    }
+    script = recon_tool.find_recon_script()
+    if script is None:
+        pytest.skip("tools/recon.py not resolvable in this environment")
+    ctx = _ctx(tmp_path)
+    out = asyncio.run(
+        recon_tool.recon(ctx, mode="data", target=str(fixture))
+    )
+    assert "FAILED" not in out
+    assert "UNTRUSTED TEXT" in out
+    after = {
+        p.relative_to(fixture).as_posix(): p.read_bytes()
+        for p in fixture.rglob("*") if p.is_file()
+    }
+    assert before == after  # read-only by construction
+
+
+def test_recon_routed_to_plan_work_only_in_baseline():
+    # Merged baseline: the packaged config routes recon to plan/work; the
+    # toolless review relay, the disabled commit verifier and legacy
+    # emergency never get it.
+    from shlepa_agent.phases import get_phase
+    from shlepa_agent.tools import get_tools
+
+    cfg = load_config()
+    for phase_id in ("plan", "work"):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "recon" in names
+    for phase_id in ("review", "commit", "emergency"):
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
+        assert "recon" not in names

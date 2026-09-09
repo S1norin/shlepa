@@ -20,7 +20,7 @@ from pydantic_ai.messages import (
 )
 
 from shlepa_agent.config import load_config
-from shlepa_agent.outputs import PlanResult, ReviewResult, WorkResult
+from shlepa_agent.outputs import ArtifactSpec, PlanResult, ReviewResult, WorkResult
 from shlepa_agent.phases import (
     CommitPhase,
     EmergencyPhase,
@@ -34,10 +34,14 @@ from shlepa_agent.phases import (
 from shlepa_agent.tools import AgentDeps
 
 
-def _state(task="Create hello.txt with the exact content hello", last_messages=None):
+def _state(
+    task="Create hello.txt with the exact content hello",
+    last_messages=None,
+    workdir=None,
+):
     cfg = load_config()
     deps = AgentDeps(
-        workdir=Path("/tmp"),
+        workdir=workdir if workdir is not None else Path("/tmp"),
         cfg=cfg,
         clock=lambda: 0.0,
     )
@@ -60,12 +64,25 @@ def test_phase_result_json_roundtrip():
 
 
 def test_phase_result_carries_typed_output():
-    plan = PlanResult(goal="write /app/out.txt", steps=["echo hi"], decision="work")
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo hi"])
     result = PhaseResult(status="done", summary=plan.model_dump_json(), output=plan)
-    assert result.output.decision == "work"
+    assert result.output.goal == "write /app/out.txt"
     # output is Any-typed: the JSON roundtrip keeps the data (as a dict)
     restored = PhaseResult.model_validate(json.loads(result.model_dump_json()))
-    assert restored.output["decision"] == "work"
+    assert restored.output["steps"] == ["echo hi"]
+
+
+def test_plan_result_has_no_routing_decision():
+    # v6: strictly linear pipeline — PlanResult carries no work|commit
+    # decision, and the plan prompt has no decision instructions.
+    assert "decision" not in PlanResult.model_fields
+    assert "artifact_spec" in PlanResult.model_fields  # v6 spec field is present
+    from shlepa_agent.phases.plan import PlanPhase
+
+    state = _state()
+    prompt = PlanPhase().prompt(state)
+    assert "decision" not in prompt
+    assert '"commit"' not in prompt  # no commit-shortcut instructions
 
 
 def test_run_state_holds_one_result_per_phase_and_cycles():
@@ -141,14 +158,31 @@ def test_trim_history_drops_dangling_tool_call_response():
     assert out == msgs[:2]
 
 
-def test_commit_and_emergency_continue_the_last_conversation():
+def test_commit_is_fresh_by_default_emergency_continues(monkeypatch):
+    # v6 (w2-4): VERIFY runs on a fresh conversation (harness packet); the
+    # emergency phase still continues the last conversation.
+    monkeypatch.delenv("SHLEPA_REVIEW_CTX", raising=False)
+    msgs = [
+        ModelRequest(parts=[TextPart("hi")]),
+        ModelResponse(parts=[TextPart("ok")]),
+    ]
+    state = _state(last_messages=msgs)
+    assert CommitPhase().history(state) is None
+    assert EmergencyPhase().history(state) == msgs
+
+
+def test_review_ctx_full_resumes_the_last_conversation(monkeypatch):
+    # A/B arm: SHLEPA_REVIEW_CTX=full restores the v5 resumed transcript.
+    monkeypatch.setenv("SHLEPA_REVIEW_CTX", "full")
     msgs = [
         ModelRequest(parts=[TextPart("hi")]),
         ModelResponse(parts=[TextPart("ok")]),
     ]
     state = _state(last_messages=msgs)
     assert CommitPhase().history(state) == msgs
-    assert EmergencyPhase().history(state) == msgs
+    # the packet itself is not rendered in full mode (the commit.md text
+    # may mention the packet, so match the packet header instead)
+    assert "VERIFY PACKET (assembled" not in CommitPhase().prompt(state)
 
 
 def test_plan_and_work_are_fresh_runs():
@@ -159,31 +193,138 @@ def test_plan_and_work_are_fresh_runs():
 
 # -- config-driven toolsets and limits -----------------------------------------
 def test_phase_toolsets_from_config():
-    # the baseline tool policy: plan maps (no bash/writes), work executes
-    # (the only bash phase), review is read-only (read + search),
-    # emergency stays legacy.
+    # the baseline tool policy (2026-09-07 slim-down): recon is the only
+    # custom tool — plan maps (no bash/writes), work executes (the only
+    # bash phase), review is toolless, emergency stays legacy. The research
+    # tool families live on as dev arms (toolsets.py).
     cfg = load_config()
-    assert PlanPhase().tools(cfg) == ["read", "recon", "code_search", "file_outline"]
+    # the plan phase is read-only (no bash/write/edit); work is the
+    # standard set + recon. VERIFY (w2-4) is read-only: no bash/write/edit —
+    # repair is a separate bounded phase.
+    assert PlanPhase().tools(cfg) == ["read", "recon"]
     assert WorkPhase().tools(cfg) == [
-        "read",
-        "write",
-        "edit",
-        "bash",
-        "recon",
-        "code_search",
-        "file_outline",
+        "read", "write", "edit", "bash", "recon",
     ]
-    assert CommitPhase().tools(cfg) == ["read", "code_search", "file_outline"]
-    # read-only review: read + search, no bash, no writes
+    assert set(CommitPhase().tools(cfg)) == {"read", "search"}
     assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
+
+
+# -- v6 VERIFY packet (w2-4) ---------------------------------------------------
+def _verify_state(tmp_path, deliverable_present: bool = True, last_messages=None):
+    if deliverable_present:
+        (tmp_path / "out.json").write_text('{"answer": 42}', encoding="utf-8")
+    state = _state(workdir=tmp_path, last_messages=last_messages)
+    state.deliverable_spec = {
+        "kind": "file",
+        "path": "out.json",
+        "format": "json",
+        "keys": ["answer"],
+        "expected_content": None,
+    }
+    state.deliverable_check = {
+        "exists": deliverable_present,
+        "non_empty": deliverable_present,
+        "parse_ok": deliverable_present,
+        "keys_ok": deliverable_present,
+        "valid": deliverable_present,
+        "reason": "ok" if deliverable_present else "missing",
+    }
+    state.results["work"] = PhaseResult(
+        status="done",
+        summary="wrote out.json",
+        deliverable="out.json",
+        output=WorkResult(summary="wrote out.json", findings="used jq to validate"),
+    )
+    state.results["plan"] = PhaseResult(
+        status="done",
+        summary="",
+        output=PlanResult(
+            goal="write out.json with the answer",
+            findings="",
+            steps=["write the file"],
+        ),
+    )
+    return state
+
+
+def test_verify_packet_preloads_artifact_and_check(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path)
+    packet = build_verify_packet(state)
+    assert 'path=\'out.json\'' in packet
+    assert '\"answer\": 42' in packet  # preloaded artifact content
+    assert '"valid": true' in packet  # mechanical check result
+    assert "WORK summary: wrote out.json" in packet
+    assert "PLAN goal: write out.json with the answer" in packet
+
+
+def test_verify_packet_missing_artifact_says_so(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path, deliverable_present=False)
+    packet = build_verify_packet(state)
+    assert "MISSING OR EMPTY" in packet
+
+
+def test_verify_packet_summary_truncation(tmp_path):
+    from shlepa_agent.phases.commit import build_verify_packet
+
+    state = _verify_state(tmp_path)
+    state.results["work"] = PhaseResult(
+        status="done",
+        output=WorkResult(summary="x" * 5000, findings=""),
+    )
+    packet = build_verify_packet(state)
+    assert "[...TRUNCATED...]" in packet
+    assert len(packet) < 5000
+
+
+def test_verify_prompt_is_fresh_not_transcript(monkeypatch, tmp_path):
+    # AC: the first user message is the harness packet, not the work
+    # transcript.
+    monkeypatch.delenv("SHLEPA_REVIEW_CTX", raising=False)
+    work_msg = ModelRequest(parts=[TextPart("secret work transcript content")])
+    state = _verify_state(tmp_path, last_messages=[work_msg])
+    _ = work_msg  # kept for clarity: the transcript is NOT in the request
+    phase = CommitPhase()
+    assert phase.history(state) is None
+    prompt = phase.prompt(state)
+    assert "VERIFY PACKET" in prompt
+    assert "secret work transcript content" not in prompt
+
+
+def test_plan_prompt_addresses_named_problems():
+    # w2-8: the fresh PLAN is instructed to address the problems named by
+    # the previous review relay first.
+    from shlepa_agent.template import load_prompt
+
+    prompt = load_prompt("plan.md")
+    assert "address each named problem" in prompt
+    assert "FIRST — it is the reason the run came back" in prompt
+
+
+def test_commit_prompt_binary_framing():
+    # w2-7: the REVIEW prompt carries the binary 1/0 scoring framing and
+    # the named-check requirement; the old soft "partial is better than
+    # nothing" framing is gone.
+    from shlepa_agent.template import load_prompt
+
+    prompt = load_prompt("commit.md")
+    assert "SCORING IS BINARY" in prompt
+    assert "exactly 1" in prompt and "exactly 0" in prompt
+    assert "NAME the specific check" in prompt
+    assert "repair_scope" in prompt
+    assert "partial deliverable scores better" not in prompt.lower()
+    assert "best effort if partial" not in prompt
 
 
 def test_phase_limits_from_config():
     cfg = load_config()
     plan = PlanPhase().limits(cfg)
     assert plan.requests == 25
-    assert plan.time is None  # cap = regime constant (budget.py)
-    assert plan.soft_time == 60.0
+    assert plan.time is None  # cap = regime constant (budget.py, 30s)
+    assert plan.soft_time == 25.0  # advisory, under the 30s cap
     assert plan.soft_tokens == 15000
     assert plan.reasoning_effort is None
 
@@ -195,10 +336,10 @@ def test_phase_limits_from_config():
 
     commit = CommitPhase().limits(cfg)
     assert commit.requests == 20
-    assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 45.0  # advisory, under the 60s cap
+    assert commit.time == 15.0  # VERIFY subcap (w2-6)
+    assert commit.soft_time == 10.0  # advisory, under the 15s subcap
     assert commit.soft_tokens == 20000
-    assert commit.reasoning_effort is None  # endpoint default, not "low"
+    assert commit.reasoning_effort == "low"
 
     emergency = EmergencyPhase().limits(cfg)
     assert emergency.requests == 20
@@ -209,16 +350,16 @@ def test_phase_limits_from_config():
 def test_limits_note_rendered_regime_caps():
     state = _state()
     plan_note = PlanPhase().limits_note(state)
-    # fixed regime caps (plan 80s) + advisory soft values
-    assert "hard-capped at 80s" in plan_note
-    assert "60s" in plan_note
+    # fixed regime caps (plan 30s in v6) + advisory soft values
+    assert "hard-capped at 30s" in plan_note
+    assert "25s" in plan_note
     assert "15000" in plan_note
     work_note = WorkPhase().limits_note(state)
     assert "hard-capped at 120s" in work_note
     assert "cycle 1" in work_note  # state.cycles == 0 -> "this is cycle 1"
     commit_note = CommitPhase().limits_note(state)
-    # the review (commit) phase gets its fixed regime cap (60s)
-    assert "hard-capped at 60s" in commit_note
+    # the review (commit) phase gets its fixed regime cap (45s)
+    assert "hard-capped at 15s" in commit_note  # VERIFY subcap (w2-6)
 
 
 def test_limits_note_time_override():
@@ -247,13 +388,58 @@ def test_plan_prompt_carries_instructions_schema_and_limits():
     assert "PHASE INSTRUCTIONS" in prompt
     assert "PLAN PHASE" in prompt
     assert "final_result" in prompt  # output schema block
-    assert "decision" in prompt
-    assert "60s" in prompt  # advisory limits
+    assert "30s" in prompt  # advisory limits (v6 plan cap)
+    # v6: the plan must emit the structured deliverable spec (w2-2)
+    assert "artifact_spec" in prompt
+    assert "QUOTED VERBATIM" in prompt  # expected_content verbatim-quote rule
+    assert "test_command" in prompt  # the three kinds are enumerated
     # the task text lives in the system message, not the user prompt
     assert "Create hello.txt with the exact content hello" not in prompt
     # fresh first pass: no previous results block (the plan instructions
     # mention the block name in prose — check header + content instead)
     assert "RESULTS OF PREVIOUS PHASES\nwork phase" not in prompt
+
+
+# -- artifact_spec (w2-2) ------------------------------------------------------------
+def test_plan_result_validates_with_default_artifact_spec():
+    plan = PlanResult(goal="write /app/out.txt", steps=["write it"])
+    assert plan.artifact_spec.kind == "file"
+    assert plan.artifact_spec.path == ""
+    assert plan.artifact_spec.keys == []
+    assert plan.artifact_spec.expected_content is None
+
+
+def test_plan_result_with_full_artifact_spec():
+    plan = PlanResult(
+        goal="write /app/out.json",
+        steps=["write it"],
+        artifact_spec={
+            "kind": "file",
+            "path": "/app/out.json",
+            "format": "json",
+            "keys": ["a", "b"],
+            "expected_content": None,
+        },
+    )
+    assert plan.artifact_spec.keys == ["a", "b"]
+    assert plan.artifact_spec.format == "json"
+
+
+def test_artifact_spec_kind_is_constrained():
+    import pytest as _pytest
+
+    from pydantic import ValidationError
+
+    with _pytest.raises(ValidationError):
+        ArtifactSpec(kind="bogus")
+    for kind in ("file", "test_command", "answer"):
+        assert ArtifactSpec(kind=kind).kind == kind
+
+
+def test_artifact_spec_keys_coerce_scalar_and_none():
+    assert ArtifactSpec(keys="solo").keys == ["solo"]
+    assert ArtifactSpec(keys=None).keys == []
+    assert ArtifactSpec().keys == []
 
 
 def test_plan_prompt_on_replan_carries_previous_work_result():
@@ -267,30 +453,68 @@ def test_plan_prompt_on_replan_carries_previous_work_result():
     assert "tried" in prompt
 
 
-def test_plan_prompt_on_replan_carries_review_hints():
+def test_plan_prompt_on_replan_carries_review_relay():
     state = _state()
     work = WorkResult(summary="tried")
     state.results["work"] = PhaseResult(
         status="done", summary=work.model_dump_json(), output=work,
     )
-    review = ReviewResult(
-        status="partial",
-        verdict="next_round",
-        artifact="/app/out.json",
-        hints=["ip_addresses must be sorted descending", "add the port field"],
+    relay = ReviewResult(
+        summary="wrote /app/out.json with 3 of 5 keys",
+        done=False,
+        problems=["ip_addresses must be sorted descending"],
+        hints_next=["add the port field"],
     )
-    state.results["commit"] = PhaseResult(
-        status="done", summary=review.model_dump_json(), output=review,
+    state.results["review"] = PhaseResult(
+        status="done", summary=relay.model_dump_json(), output=relay,
     )
     prompt = PlanPhase().prompt(state)
-    assert "review phase verdict (previous cycle): next_round" in prompt
+    assert "review relay (previous cycle)" in prompt
     assert "ip_addresses must be sorted descending" in prompt
     assert "add the port field" in prompt
 
 
+def test_work_prompt_carries_review_relay():
+    # v6-rewrite: WORK of cycle i >= 2 receives the previous relay.
+    from shlepa_agent.phases.work import WorkPhase
+
+    state = _state()
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo"])
+    state.results["plan"] = PhaseResult(
+        status="done", summary=plan.model_dump_json(), output=plan,
+    )
+    relay = ReviewResult(
+        summary="wrote /app/out.txt, content unverified",
+        done=False,
+        problems=["content check never ran"],
+        hints_next=["verify the file content"],
+    )
+    state.results["review"] = PhaseResult(
+        status="done", summary=relay.model_dump_json(), output=relay,
+    )
+    prompt = WorkPhase().prompt(state)
+    assert "review relay (previous cycle)" in prompt
+    assert "content check never ran" in prompt
+    assert "verify the file content" in prompt
+
+
+def test_review_relay_resumes_the_work_transcript():
+    # v6-rewrite: the relay rides on the work conversation (trimmed),
+    # never on a fresh packet.
+    from shlepa_agent.phases.review import ReviewPhase
+
+    state = _state()
+    phase = ReviewPhase()
+    assert phase.output_type is ReviewResult
+    state.model.last_messages = []
+    assert phase.history(state) is None
+    state.model.last_messages = [object()]
+    assert phase.history(state) == state.model.last_messages
+
+
 def test_work_prompt_carries_plan_result():
     state = _state()
-    plan = PlanResult(goal="write /app/out.txt", steps=["echo"], decision="work")
+    plan = PlanResult(goal="write /app/out.txt", steps=["echo"])
     state.results["plan"] = PhaseResult(
         status="done", summary=plan.model_dump_json(), output=plan,
     )
@@ -302,37 +526,9 @@ def test_work_prompt_carries_plan_result():
     assert "120s" in prompt  # fixed regime hard cap
 
 
-def test_work_prompt_on_plan_timeout_carries_salvaged_plan():
-    # the plan was cut by its cap, but its one-shot final_ask left a text
-    # plan: work executes that plan (flagged as possibly incomplete)
-    state = _state()
-    state.results["plan"] = PhaseResult(
-        status="timeout",
-        error="plan time cap reached",
-        note="SALVAGED: goal write /app/out.txt; steps create it",
-    )
-    prompt = WorkPhase().prompt(state)
-    assert "hit its time cap" in prompt
-    assert "SALVAGED: goal write /app/out.txt; steps create it" in prompt
-    assert "may be incomplete" in prompt
-
-
-def test_work_prompt_on_plan_timeout_without_note_falls_back_to_task():
-    # no typed plan AND no salvaged text (final_ask produced nothing): work
-    # derives the minimum work from the task instruction
-    state = _state()
-    state.results["plan"] = PhaseResult(
-        status="timeout", error="plan time cap reached"
-    )
-    prompt = WorkPhase().prompt(state)
-    assert "did not produce a plan" in prompt
-    assert "plan time cap reached" in prompt
-    assert "Derive the minimum work directly from the task instruction" in prompt
-
-
 def test_work_prompt_on_retry_carries_previous_attempt_error():
     state = _state()
-    plan = PlanResult(goal="g", steps=["s"], decision="work")
+    plan = PlanResult(goal="g", steps=["s"])
     state.results["plan"] = PhaseResult(
         status="done", summary=plan.model_dump_json(), output=plan,
     )

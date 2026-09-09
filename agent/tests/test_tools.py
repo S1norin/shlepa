@@ -20,42 +20,30 @@ def _ctx(tmp_path, cfg=None, clock=None):
 
 def test_registry_has_all_tools():
     assert set(ALL_TOOLS) == {
-        "read",
-        "write",
-        "edit",
-        "bash",
-        # code-search tools: on in the baseline (rg), see
-        # test_code_search_tools.py
-        "code_search",
-        "file_outline",
-        # forensics tools: off by default (+forensics arm), see
-        # test_toolsets.py / test_log_triage.py
-        "log_triage",
+        "read", "write", "edit", "bash", "recon", "search",
+        "code_search", "file_outline", "log_triage",
         # MITRE KB tool: off by default (+mitre-kb arm), see test_mitre_kb.py
         "mitre_kb",
-        # recon tool: on in the baseline plan/work, see test_recon_tool.py
-        "recon",
     }
 
 
-def test_registry_default_config_search_tools_in_tooled_phases(monkeypatch):
-    # baseline behavior: with AGENT_CODE_SEARCH unset the packaged config
-    # names the code-search tools in plan/work and the read-only review;
-    # the legacy emergency phase never registers them.
+def test_registry_slim_baseline_has_no_code_search_tools(monkeypatch):
+    # 2026-09-07 slim-down: the packaged baseline no longer ships the
+    # code_search/file_outline pair (batch 388fde: never adopted; context
+    # bloat) — recon is the only custom tool. The legacy AGENT_CODE_SEARCH
+    # switch re-adds the pair on the given engine (test_code_search_tools).
     from shlepa_agent.phases import get_phase
 
     monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
     monkeypatch.delenv("AGENT_TOOLSET", raising=False)
     cfg = _cfg()
-    for phase_id in ("plan", "work"):
-        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
-        assert "code_search" in names
-        assert "file_outline" in names
-    for phase_id in ("commit",):
-        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
-        assert "code_search" in names
-        assert "file_outline" in names
-    for phase_id in ("emergency",):
+    assert [t.name for t in get_tools(cfg, get_phase("plan").tools(cfg))] == [
+        "read", "recon"
+    ]
+    assert [t.name for t in get_tools(cfg, get_phase("work").tools(cfg))] == [
+        "read", "write", "edit", "bash", "recon"
+    ]
+    for phase_id in ("plan", "work", "commit", "emergency"):
         names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
         assert "code_search" not in names
         assert "file_outline" not in names

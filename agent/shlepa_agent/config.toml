@@ -5,17 +5,19 @@
 # here; see docs/agent-config.md for the full mapping.
 
 [agent]
-# Pipeline: plan -> work -> review (commit), in cycles. Entry phase, total
-# step guard, temperature.
-#
-# v5: there is NO task time limit T and NO cycle cap — the agent cycles
-# plan -> work -> review until the review verdict is "done" (a "next_round"
-# verdict starts a new round). The container itself is killed at the
-# task's own limit; the emergency phase name is UNUSED (kept for compat).
+# Pipeline (v6-rewrite): HARD cycle regime — exactly max_cycles plan -> work
+# cycles, with a review RELAY (distillation) after every cycle except the
+# last. There is NO task time limit T: the container is killed at the
+# task's own limit. Emergency is disabled (kept for compat).
 entry = ""
 emergency = "emergency"
-# Total phase-run guard (dev knob). 0 = off — the run cycles until done.
+# Total phase-run guard (dev knob). 0 = off.
 max_steps = 0
+# Hard cycle count (env: SHLEPA_MAX_CYCLES). The run executes exactly this
+# many plan -> work cycles; cycle N >= 2 receives the previous work result
+# and the previous review relay in its PLAN, and the review relay in its
+# WORK.
+max_cycles = 2
 temp = 0.6
 # Send `temp` to the LLM endpoint. Default: off — the endpoint picks its
 # own temperature (some endpoints reject or ignore an explicit value).
@@ -23,7 +25,9 @@ send_temp = false
 
 [budget]
 # Per-request caps. The phase caps are the FIXED regime constants in
-# budget.py (plan 80 / work 120 / review 60 / bash 30 / llm wall 180).
+# budget.py (plan 30 / work 120 / review 45 / bash 30 / llm wall 180;
+# plus the w3-2 finalization reserve — last 15 s of a phase cap disable
+# bash/search/recon, override: SHLEPA_FINALIZE_RESERVE, 0 = off).
 # There is NO task time limit T, NO global hard stop, NO request-start
 # gate, NO global token budget and NO request-count limit: token usage is
 # logged per request for analysis only.
@@ -32,6 +36,11 @@ send_temp = false
 max_tokens = 16384
 # Per-request open timeout (up to the first bytes).
 request_timeout = 180.0
+# w3-5: consecutive terminal endpoint failures (429/402/5xx storm) that
+# trigger endpoint_finalized — stop issuing requests, persist the best
+# deliverable, tag the run and exit 0 (the only observable proxy for the
+# invisible external token cap).
+endpoint_fail_limit = 3
 
 [tools.bash]
 # Per-call timeout in seconds: default 30, hard cap 30 (the fixed regime
@@ -63,44 +72,90 @@ enabled = true
 max_file_mb = 100.0
 
 [tools.recon]
-# Attack-surface recon (deterministic JSON, no LLM): ON in the baseline —
-# plan/work get it (see [phases.*].tools). The per-call timeout is the
-# v5-regime bash cap; the web engine has its own 25s internal deadline.
-# The engine render is hard-capped at 8192 bytes.
+# Deterministic read-only surface map wrapping tools/recon.py (zero-dep,
+# no LLM). Hard 25 s per-call cap inside the tool; max_output caps the
+# result text (the script self-caps to 8192 bytes).
 enabled = true
-timeout = 30.0
+max_output = 8192
+
+[tools.search]
+# Stdlib-only read-only search (grep/glob/ls) over the task dir. No
+# ripgrep dependency; large dirs are scanned for at most 10 s.
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: the model
+# worked with read + bash, the extra tool list bloated every request);
+# a dev config can re-enable it.
+enabled = false
 max_output = 8192
 
 [tools.code_search]
-# Code search (rg | sifs engines, see [code_search]): ON in the baseline.
-# The per-call timeout bounds an oversized scan.
-enabled = true
+# SIFS BM25-offline retrieval over the code tree (bundled tools/bin/sifs,
+# see [code_search]). Per-call wall 30 s (the regime bash cap); result
+# size is capped in tokens inside the engine (default 1500).
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: 0/649 calls
+# in 17 tasks); the +smart-grep/+sifs dev arms re-enable it (toolsets.py).
+enabled = false
 timeout = 30.0
-max_output = 16000
 
 [tools.file_outline]
-# Symbol outline of one file (def/class/func + line ranges): ON in the
-# baseline, paired with code_search.
-enabled = true
-max_output = 8000
+# Symbol outline of one file (same engine as code_search). Per-call wall
+# 30 s. OFF in the baseline (2026-09-07 slim-down); re-enabled together
+# with code_search by the search dev arms.
+enabled = false
+timeout = 30.0
+
+[tools.log_triage]
+# Deterministic read-only triage of log/evidence files (record counts,
+# time ranges, top entities, IOC candidates). Per-call wall 30 s.
+# OFF in the baseline (2026-09-07 slim-down — batch 388fde: 4 calls, the
+# two forensics tasks it ran on still failed); the +forensics dev arm
+# re-enables it.
+enabled = false
+max_output = 8192
+timeout = 30.0
 
 [code_search]
-# Default search engine for the baseline: ripgrep (preinstalled in the
-# submission image). AGENT_CODE_SEARCH / the +smart-grep / +sifs arms can
-# switch the engine at load time.
-engine = "rg"
+# Engine for code_search/file_outline (the dev arms that re-add the pair):
+# "sifs" (bundled binary, BM25 offline) or "rg" (preinstalled ripgrep).
+# A missing/broken sifs binary degrades to rg/regex inside the engine
+# (never crash). The slim baseline does not ship the pair, so this only
+# matters for the +smart-grep/+sifs arms and the AGENT_CODE_SEARCH switch.
+engine = "sifs"
+
+[tool_policy]
+# SINGLE SOURCE of tool availability: the phase x iteration matrix
+# (v6-rewrite decision). Per-iteration overrides use "<phase>_c<N>" keys
+# (N >= 1); a missing phase falls back to the legacy [phases.<id>].tools.
+# Phases listed in `disabled` exist in code/config but are NEVER routed:
+# their files and [phases.*] sections stay on disk for a later re-enable.
+disabled = ["commit", "repair", "salvage", "emergency"]
+
+[tool_policy.phases]
+# PLAN: read-only orientation (no bash/write/edit). recon is the ONLY
+# custom tool in the baseline (2026-09-07 slim-down: batch 388fde — the
+# other orientation tools were never adopted, code_search 0/649 calls;
+# research/notes/batch-388fde-v6-baseline-analysis.md). The dev arms
+# (toolsets.py) re-add search/code_search/file_outline/log_triage on top.
+plan = ["read", "recon"]
+# WORK: the standard set + recon.
+work = ["read", "write", "edit", "bash", "recon"]
+# REVIEW relay: NO tools — a pure distillation on the resumed work
+# transcript (the relay's job is summarizing, not exploring).
+review = []
+# Disabled phases (unrouted; files kept):
+commit = ["read", "search"]
+repair = ["read", "search", "edit"]
+salvage = ["write"]
+emergency = ["read", "write", "edit", "bash"]
 
 [phases.plan]
 # Understand the task and the environment, do NOT start working, return a
-# structured plan. Hard cap is the fixed regime constant (plan = 80s,
-# budget.py). An explicit `time` value would override the cap (dev knob;
-# omitted here). Soft values are advisory (rendered into the prompt).
-# Tool policy (baseline): read + recon + search only — NO bash, NO writes;
-# planning never mutates the environment.
-tools = ["read", "recon", "code_search", "file_outline"]
-# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
+# structured plan. Hard cap is the fixed regime constant (plan = 30s,
+# budget.py; env-overridable via SHLEPA_PLAN_TIME). An explicit `time`
+# value would override the cap (dev knob; omitted here). Soft values are
+# advisory (rendered into the prompt).
+# Tools: see [tool_policy].
 requests = 25
-soft_time = 60.0
+soft_time = 25.0
 soft_tokens = 15000
 max_retries = 1
 
@@ -110,37 +165,58 @@ max_retries = 1
 # (work = 120s, budget.py; an explicit `time` would override it). The soft
 # time is advisory and stays under the hard cap; there is NO soft_tokens for
 # work (the "keep the output lean" note applies to plan/review only).
-# Tool policy (baseline): the FULL set — file tools + bash (the only phase
-# with bash) + recon + search.
-tools = ["read", "write", "edit", "bash", "recon", "code_search", "file_outline"]
-# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
+# Tools: see [tool_policy].
 requests = 100
 soft_time = 105.0
 max_retries = 1
 
-[phases.commit]
-# Terminal REVIEW phase: the read-only verification judge. It resumes the
-# work transcript and decides done|next_round; it can RE-CHECK the disk
-# (read + search, no bash, no writes) but cannot repair anything — a broken
-# deliverable is fixed by the next plan/work cycle it routes to.
-# Hard cap is the fixed regime constant (review = 60s, budget.py; the cap
-# covers a few targeted read/search verification round trips). The soft time
-# stays UNDER the hard cap.
-# NO explicit reasoning_effort: the endpoint default applies (same as
-# plan/work) — the done/next_round verdict is the most consequential
-# decision of the run and must not run with degraded reasoning.
-tools = ["read", "code_search", "file_outline"]
-# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
+[phases.review]
+# REVIEW relay (v6-rewrite): a toolless distillation that resumes the
+# just-finished WORK transcript and emits the typed ReviewResult
+# (summary / done / problems / hints_next) consumed by the next cycle's
+# PLAN and WORK. Hard cap is the fixed regime constant (review = 45 s,
+# budget.py; env-overridable via SHLEPA_REVIEW_TIME). Never retried.
 requests = 20
-soft_time = 45.0
 soft_tokens = 20000
+reasoning_effort = "low"
+max_retries = 0
+
+[phases.commit]
+# DISABLED (v6-rewrite): the v6 VERIFY verifier — replaced by the review
+# relay. The phase file, prompt and config stay for a later re-enable; the
+# runner never routes to it. Legacy A/B knobs (SHLEPA_REVIEW_SUBCAPS /
+# SHLEPA_REVIEW_CTX) still read its explicit `time` (the 15 s VERIFY
+# subcap).
+tools = ["read", "search"]
+requests = 20
+time = 15.0
+soft_time = 10.0
+soft_tokens = 20000
+reasoning_effort = "low"
+max_retries = 0
+
+[phases.repair]
+# DISABLED (v6-rewrite): v6 (w2-5) bounded artifact-only repair. The
+# runner no longer routes verdicts to it; files/config stay for a later
+# re-enable. 20 s explicit cap (the regime has no repair constant).
+tools = ["read", "search", "edit"]
+requests = 3
+time = 20.0
+max_retries = 0
+
+[phases.salvage]
+# DISABLED (v6-rewrite): v6 (w2-3) write-only rescue after a WORK that
+# left the deliverable missing/empty. The runner no longer routes to it;
+# files/config stay for a later re-enable. Kill-switch: SHLEPA_SALVAGE=0.
+tools = ["write"]
+requests = 5
+time = 30.0
 max_retries = 0
 
 [phases.emergency]
-# UNUSED in v5 (kept for compatibility): the v4 terminal rescue. The runner
+# DISABLED (kept for compatibility): the v4 terminal rescue. The runner
 # never routes to it.
 tools = ["read", "write", "edit", "bash"]
-# requests: UNUSED in v5 (no request-count limit; kept for compatibility)
 requests = 20
 soft_tokens = 20000
 reasoning_effort = "low"

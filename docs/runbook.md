@@ -86,6 +86,8 @@ All commands run from the repo root via `uv run --project cli shlepa ...`.
 | `doctor` | Hard checks: endpoint, model name, MLflow, MLflow OTLP ingestion (when `SLEPA_OTEL_ENABLED=1`), docker | `shlepa doctor` |
 | `doctor --probe` | Additionally one chat completion, prints the self-reported model | `shlepa doctor --probe` |
 | `zip` | Build `dist/submission-<sha>.zip` (<= 10 MB, no telemetry) | `shlepa zip` |
+| `compliance` | Verify the built archive against public contest requirements | `shlepa compliance` |
+| `compliance --harbor` | Also run the unzipped archive through Harbor on the hello task | `shlepa compliance --harbor` |
 | `zip --register` | Also register the submission as a new version of the `shlepa` MLflow model | `shlepa zip --register` |
 | `trace-export --batch <id>` | Export the batch's agent traces from MLflow: manifest + JSON + digests + summary | `shlepa trace-export --batch <id>` |
 | `search-bench` | Research: measure search engines (read-all, rg, sifs) on the annotated query set + generated 10k corpus; CSV + MD report under `research/code_search/analysis/` | `shlepa search-bench --families contest-sqli,ctf-c` |
@@ -178,3 +180,10 @@ Note: a hard `exec_timeout` kills the container; most spans are already
 flushed (batch processor), and every span now carries `shlepa.batch_id`
 so the trace still correlates by batch even if the `agent.run` root span
 never made it.
+
+## Agent metrics and batch comparisons
+
+See [Agent measurement schema v2](mlflow-metrics.md) for reward validity,
+resource counters, run statuses and artifact semantics. After collecting runs,
+`shlepa metrics-summary BATCH_ID` saves per-family/configuration summaries.
+Multiple batch IDs can be supplied for repeated attempts with compatible tasks.

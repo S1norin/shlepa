@@ -33,7 +33,17 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
                     "goal": "write hello.txt with the content hello",
                     "findings": "",
                     "steps": ["write the file"],
-                    "decision": "commit",
+                },
+            }
+        },
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "summary": "wrote hello.txt",
+                    "findings": "",
+                    "deliverable": "hello.txt",
+                    "confidence": 1.0,
                 },
             }
         },
@@ -42,6 +52,7 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
                 "name": "final_result",
                 "arguments": {
                     "status": "ok",
+                    "verdict": "done",
                     "artifact": "hello.txt",
                     "checks": ["re-read -> matches"],
                     "notes": "wrote hello.txt",
@@ -58,7 +69,8 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "expert autonomous cybersecurity agent" in system
     assert "FORMAT DISCIPLINE" in system
     assert "AVAILABLE TOOLS" in system
-    for tool in ("read", "write", "edit", "bash"):
+    # v6: the plan surface is read-only — recon/search instead of bash/write
+    for tool in ("read", "recon", "search"):
         assert tool in system, tool
     # the task text renders into the system message (constant for the run)
     assert "Create hello.txt with the exact content hello" in system
@@ -75,7 +87,12 @@ def test_plan_request_uses_template(monkeypatch, stub_openai, tmp_path):
     assert "RESULTS OF PREVIOUS PHASES\nwork phase" not in user
 
 
-def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai, tmp_path):
+def test_review_relay_request_carries_relay_text_and_work_history(
+    monkeypatch, stub_openai, tmp_path
+):
+    """The relay request (v6-rewrite) carries the relay prompt (review.md)
+    plus the resumed WORK transcript: the work user message and the work
+    final_result call are part of the relay conversation."""
     from stub_server import reset_stub_state
 
     reset_stub_state()
@@ -86,13 +103,12 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
                 "arguments": {
                     "goal": "write /app/hello.txt",
                     "steps": ["echo hello > /app/hello.txt"],
-                    "decision": "work",
                 },
             }
         },
         {"tool_call": {"name": "bash", "arguments": {"command": "echo ok"}}},  # work req 1
         {
-            "tool_call": {  # work req 2 (typed WorkResult; no decision in v5)
+            "tool_call": {  # work req 2 (typed WorkResult)
                 "name": "final_result",
                 "arguments": {
                     "summary": "wrote hello.txt",
@@ -103,31 +119,53 @@ def test_commit_request_carries_commit_text_and_history(monkeypatch, stub_openai
             }
         },
         {
-            "tool_call": {  # the review request (typed ReviewResult)
+            "tool_call": {  # the relay request (typed ReviewResult)
                 "name": "final_result",
                 "arguments": {
-                    "status": "ok",
-                    "verdict": "done",
-                    "artifact": "/app/hello.txt",
-                    "checks": ["re-read -> matches"],
-                    "notes": "wrote hello.txt",
+                    "summary": "wrote hello.txt",
+                    "done": True,
+                    "problems": [],
+                    "hints_next": [],
+                },
+            }
+        },
+        # cycle 2: the relay ends the run's interesting part; these steps
+        # replay a clean second cycle so the run exits "done".
+        {
+            "tool_call": {  # plan cycle 2
+                "name": "final_result",
+                "arguments": {
+                    "goal": "write /app/hello.txt",
+                    "steps": ["echo hello > /app/hello.txt"],
+                },
+            }
+        },
+        {
+            "tool_call": {  # work cycle 2 (typed WorkResult)
+                "name": "final_result",
+                "arguments": {
+                    "summary": "wrote hello.txt",
+                    "findings": "",
+                    "deliverable": "/app/hello.txt",
+                    "confidence": 1.0,
                 },
             }
         },
     ]
-    # v5: phases are bounded by time, not by request counts — the plan phase
+    # phases are bounded by time, not by request counts — the plan phase
     # ends with its typed PlanResult. The work phase makes a tool call first
     # so its conversation (prompt + tool call) survives trim_history into the
-    # review request.
+    # relay request.
     _run(monkeypatch, stub_openai, tmp_path)
     bodies = stub_state["bodies"]
-    assert len(bodies) == 4, (
-        f"expected plan + work x2 + review, got {len(bodies)}"
+    assert len(bodies) == 6, (
+        f"expected plan + work x2 + relay + plan + work, got {len(bodies)}"
     )
-    messages = bodies[-1]["messages"]
+    # the relay is the 4th request (0-based index 3)
+    messages = bodies[3]["messages"]
     last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
-    # review text (commit.md) in the final user message
-    assert "REVIEW PHASE" in last_user
+    # relay text (review.md) in the relay's last user message
+    assert "REVIEW PHASE (relay)" in last_user
     assert "PHASE INSTRUCTIONS" in last_user
     # resumed history: the work user message is still in the request
     assert any(

@@ -140,9 +140,7 @@ def run(
 
 @app.command("trace-export")
 def trace_export(
-    batch: str = typer.Option(
-        ..., "--batch", help="SLEPA batch id (printed by 'shlepa run')"
-    ),
+    batch: str = typer.Option(..., "--batch", help="SLEPA batch id (printed by 'shlepa run')"),
     out: Path = typer.Option(
         None,
         "--out",
@@ -151,7 +149,23 @@ def trace_export(
     experiment: str = typer.Option(
         None,
         "--experiment",
-        help="Trace experiment name/id (default from settings)",
+        help="Restrict export to one experiment name/id (default: discover from batch runs)",
+    ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Only export traces started at/after this ISO 8601 time "
+            "(UTC when no zone is given)."
+        ),
+    ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help=(
+            "Only export traces started at/before this ISO 8601 time "
+            "(UTC when no zone is given)."
+        ),
     ),
 ) -> None:
     """Export the agent traces of one batch as JSON + digests + manifest."""
@@ -168,14 +182,21 @@ def trace_export(
     out_dir = out or settings.repo_root / "tmp" / "trace-export" / batch
     try:
         summary = trace_export_module.export_batch(
-            client, settings, batch, out_dir, experiment
+            client,
+            settings,
+            batch,
+            out_dir,
+            experiment,
+            since=since,
+            until=until,
         )
+    except ValueError as exc:
+        typer.echo(f"trace-export: {exc}", err=True)
+        raise typer.Exit(code=1)
     except trace_export_module.TraceBatchNotFound as exc:
         typer.echo(f"trace-export: {exc}", err=True)
         raise typer.Exit(code=1)
-    typer.echo(
-        f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}"
-    )
+    typer.echo(f"exported {summary['traces']} trace(s) for batch {batch} -> {out_dir}")
 
 
 @app.command("search-bench")
@@ -271,8 +292,7 @@ def doctor(
     passed = sum(1 for r in results if r.ok)
     typer.echo(f"doctor: {passed}/{len(results)} checks passed")
     model_mismatch = any(
-        r.name == "llm_model" and not r.ok and r.model_actual is not None
-        for r in results
+        r.name == "llm_model" and not r.ok and r.model_actual is not None for r in results
     )
     if model_mismatch:
         raise typer.Exit(code=2)
@@ -282,12 +302,8 @@ def doctor(
 
 @app.command("submit-test")
 def submit_test(
-    tasks: list[str] = typer.Argument(
-        None, help="Task slugs (default: all discoverable tasks)."
-    ),
-    ci: bool = typer.Option(
-        False, "--ci", help="CI mode (CI endpoint, endpoint_class=ci)."
-    ),
+    tasks: list[str] = typer.Argument(None, help="Task slugs (default: all discoverable tasks)."),
+    ci: bool = typer.Option(False, "--ci", help="CI mode (CI endpoint, endpoint_class=ci)."),
 ) -> None:
     """Strict contest-faithful test via Harbor inside the acp container."""
     from shlepa_cli import submit_test as submit_test_module
@@ -313,6 +329,41 @@ def submit_test(
 
 
 @app.command()
+def compliance(
+    harbor: bool = typer.Option(
+        False,
+        "--harbor",
+        help="Also run the unzipped archive through Harbor on contest-hello-file.",
+    ),
+    ci: bool = typer.Option(False, "--ci", help="Use CI endpoint settings for --harbor."),
+) -> None:
+    """Check the built artifact against the public contest contract."""
+    from shlepa_cli import compliance as compliance_module
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.zip_build import ZipBuildError, build_submission_zip
+
+    settings = get_settings()
+    try:
+        zip_path = build_submission_zip(settings.repo_root)
+    except ZipBuildError as exc:
+        typer.echo(f"compliance: {exc}", err=True)
+        raise typer.Exit(code=1)
+    checks = compliance_module.check_submission(zip_path)
+    for check in checks:
+        typer.echo(f"{'PASS' if check.ok else 'FAIL'}  {check.name}: {check.detail}")
+    ok = compliance_module.passed(checks)
+    if harbor and ok:
+        from shlepa_cli import submit_test as submit_test_module
+
+        typer.echo("Harbor validation: contest-hello-file")
+        ok = submit_test_module.run_submit_test(
+            settings, ["contest-hello-file"], ci=ci, out=typer.echo
+        )
+    typer.echo(f"compliance: {'PASS' if ok else 'FAIL'}")
+    raise typer.Exit(code=0 if ok else 1)
+
+
+@app.command()
 def zip(register: bool = typer.Option(False, help="Register in the MLflow model registry")) -> None:
     """Build the submission zip (telemetry stripped)."""
     from shlepa_cli.config import get_settings
@@ -334,20 +385,35 @@ def clean(
     days: int = typer.Option(
         7, "--days", min=1, help="Max age in days (default 7)."
     ),
+    reconcile: bool = typer.Option(
+        False,
+        "--reconcile",
+        help="Also close dev-run MLflow runs stuck in PENDING/RUNNING.",
+    ),
 ) -> None:
-    """Remove tmp/ workspaces older than the given number of days."""
+    """Remove tmp/ workspaces older than the given number of days.
+
+    With --reconcile, also close dev-run task runs left in PENDING/RUNNING
+    (orphaned by a killed batch process) across all non-CI experiments.
+    """
     from shlepa_cli import clean as clean_module
     from shlepa_cli.config import get_settings
 
     settings = get_settings()
-    removed = clean_module.clean(
-        settings.repo_root / "tmp", max_age_days=days
-    )
+    removed = clean_module.clean(settings.repo_root / "tmp", max_age_days=days)
     if not removed:
         typer.echo("clean: nothing to remove")
-        return
     for path in removed:
         typer.echo(f"removed: {path}")
+    if reconcile:
+        from shlepa_cli.mlflow_client import get_mlflow_client
+
+        client = get_mlflow_client(settings)
+        closed = clean_module.reconcile_orphan_runs(client)
+        if not closed:
+            typer.echo("reconcile: no orphaned runs found")
+        for run_id in closed:
+            typer.echo(f"reconcile: closed orphaned run {run_id}")
 
 
 @app.command("help")
@@ -394,3 +460,21 @@ app.add_typer(task_app, name="task")
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("metrics-summary")
+def metrics_summary(
+    batch_ids: list[str] = typer.Argument(..., help="Batch IDs to compare as repeated trials"),
+) -> None:
+    """Save per-family/configuration summary runs from existing MLflow trials."""
+    from shlepa_cli.config import get_settings
+    from shlepa_cli.evaluation import summarize_batches
+    from shlepa_cli.mlflow_client import get_mlflow_client
+
+    try:
+        run_ids = summarize_batches(get_mlflow_client(get_settings()), batch_ids)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    for run_id in run_ids:
+        typer.echo(f"summary run: {run_id}")

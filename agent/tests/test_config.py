@@ -45,30 +45,35 @@ def test_unknown_tool_raises():
         cfg.tools.get("nope")
 
 
-def test_phase_values_4_phase_pipeline():
+def test_phase_values_pipeline():
     cfg = load_config()
-    assert set(cfg.phases) == {"plan", "work", "commit", "emergency"}
+    assert set(cfg.phases) == {
+        "plan",
+        "work",
+        "review",  # v6-rewrite relay
+        # disabled (files kept for re-enable):
+        "salvage",
+        "commit",
+        "repair",
+        "emergency",
+    }
 
     plan = cfg.phases["plan"]
-    # baseline tool policy: plan reads and maps only — no bash, no writes
-    assert set(plan.tools) == {"read", "recon", "code_search", "file_outline"}
+    # v6-rewrite: the tool matrix lives in [tool_policy]; the phase section
+    # keeps only limits.
+    assert plan.tools == []  # no legacy fallback in the shipped config
+    assert cfg.tool_policy.tools_for("plan") == ["read", "recon"]
     assert plan.requests == 25
-    assert plan.time is None  # cap = regime constant (budget.py)
-    assert plan.soft_time == 60.0  # advisory
+    assert plan.time is None  # cap = regime constant (budget.py, 30s)
+    assert plan.soft_time == 25.0  # advisory, under the 30s cap
     assert plan.soft_tokens == 15000  # advisory
     assert plan.max_retries == 1
 
     work = cfg.phases["work"]
-    # the full set: the only phase with bash, plus recon + search
-    assert set(work.tools) == {
-        "read",
-        "write",
-        "edit",
-        "bash",
-        "recon",
-        "code_search",
-        "file_outline",
-    }
+    assert work.tools == []  # matrix in [tool_policy]
+    assert cfg.tool_policy.tools_for("work") == [
+        "read", "write", "edit", "bash", "recon",
+    ]
     assert work.requests == 100
     assert work.time is None  # cap = regime constant (budget.py)
     assert work.soft_time == 105.0  # advisory, under the 120s cap
@@ -76,15 +81,13 @@ def test_phase_values_4_phase_pipeline():
     assert work.max_retries == 1
 
     commit = cfg.phases["commit"]
-    # the review phase is read-only: it re-checks the disk, it cannot act
-    assert set(commit.tools) == {"read", "code_search", "file_outline"}
+    # v6 (w2-4): VERIFY is read-only (repair is a separate phase, w2-5).
+    assert set(commit.tools) == {"read", "search"}
     assert commit.requests == 20
-    assert commit.time is None  # cap = regime constant (budget.py)
-    assert commit.soft_time == 45.0  # advisory, under the 60s cap
+    assert commit.time == 15.0  # VERIFY subcap (w2-6)
+    assert commit.soft_time == 10.0  # advisory, under the 15s subcap
     assert commit.soft_tokens == 20000
-    # no explicit reasoning_effort: the endpoint default applies (the judge
-    # must not run with degraded reasoning)
-    assert commit.reasoning_effort is None
+    assert commit.reasoning_effort == "low"
     assert commit.max_retries == 0
 
     emergency = cfg.phases["emergency"]
@@ -93,6 +96,41 @@ def test_phase_values_4_phase_pipeline():
     assert emergency.time is None
     assert emergency.reasoning_effort == "low"
     assert emergency.max_retries == 0
+
+
+def test_review_relay_phase_config():
+    # v6-rewrite: the relay is toolless, capped by the regime constant
+    # (45 s), never retried.
+    cfg = load_config()
+    assert cfg.tool_policy.tools_for("review") == []
+    review = cfg.phases["review"]
+    assert review.tools == []
+    assert review.requests == 20
+    assert review.time is None  # cap = REVIEW_CAP (budget.py)
+    assert review.soft_tokens == 20000
+    assert review.reasoning_effort == "low"
+    assert review.max_retries == 0
+
+
+def test_salvage_phase_config():
+    # v6 (w2-3): write-only rescue, explicit 30 s cap, never retried.
+    cfg = load_config()
+    salvage = cfg.phases["salvage"]
+    assert set(salvage.tools) == {"write"}
+    assert salvage.requests == 5
+    assert salvage.time == 30.0
+    assert salvage.max_retries == 0
+
+
+def test_repair_phase_config():
+    # v6 (w2-5): artifact-only repair, one mutation, 20 s explicit cap,
+    # never retried.
+    cfg = load_config()
+    repair = cfg.phases["repair"]
+    assert set(repair.tools) == {"read", "search", "edit"}
+    assert repair.requests == 3
+    assert repair.time == 20.0
+    assert repair.max_retries == 0
 
 
 def test_template_blocks():
@@ -138,6 +176,57 @@ def test_invalid_env_override_ignored(monkeypatch):
     monkeypatch.setenv("SHLEPA_BUDGET_MAX_TOKENS", "not-a-number")
     cfg = load_config()
     assert cfg.budget.max_tokens == 16384
+
+
+def test_plan_cap_env_override(monkeypatch):
+    # v6 knob: the plan cap defaults to the regime constant (30s) and is
+    # env-overridable via SHLEPA_PLAN_TIME (an explicit phases.plan.time).
+    assert load_config().phases["plan"].time is None
+    monkeypatch.setenv("SHLEPA_PLAN_TIME", "45")
+    cfg = load_config()
+    assert cfg.phases["plan"].time == 45.0
+    monkeypatch.setenv("SHLEPA_PLAN_TIME", "not-a-number")
+    assert load_config().phases["plan"].time is None  # invalid: ignored
+
+
+def test_search_tool_env_toggle(monkeypatch):
+    # OFF in the slim baseline (2026-09-07); the env toggle still works
+    assert load_config().tools.search.enabled is False
+    monkeypatch.setenv("SHLEPA_SEARCH", "0")
+    assert load_config().tools.search.enabled is False
+    monkeypatch.setenv("SHLEPA_SEARCH", "1")
+    assert load_config().tools.search.enabled is True
+    monkeypatch.setenv("SHLEPA_SEARCH", "garbage")
+    assert load_config().tools.search.enabled is False  # invalid: file value
+
+
+def test_v6_rewrite_knobs(monkeypatch):
+    # v6-rewrite knobs: SHLEPA_MAX_CYCLES (hard cycle count) and
+    # SHLEPA_REVIEW_TIME (relay cap override) — each appears in
+    # ENV_OVERRIDES with a type, ships with its default, overrides cleanly,
+    # and an invalid value is ignored.
+    from shlepa_agent.config import ENV_OVERRIDES, _env_bool
+
+    assert ENV_OVERRIDES["SHLEPA_MAX_CYCLES"] == ("agent.max_cycles", int)
+    assert ENV_OVERRIDES["SHLEPA_REVIEW_TIME"] == ("phases.review.time", float)
+    assert ENV_OVERRIDES["SHLEPA_PLAN_TIME"] == ("phases.plan.time", float)
+    assert ENV_OVERRIDES["SHLEPA_SEARCH"] == ("tools.search.enabled", _env_bool)
+    # the v6 A/B knobs are gone
+    assert "SHLEPA_ROUTE_PLAN_TIMEOUT" not in ENV_OVERRIDES
+    assert "SHLEPA_HANDOFF" not in ENV_OVERRIDES
+
+    cfg = load_config()  # shipped defaults
+    assert cfg.agent.max_cycles == 2
+
+    monkeypatch.setenv("SHLEPA_MAX_CYCLES", "3")
+    monkeypatch.setenv("SHLEPA_REVIEW_TIME", "60")
+    cfg = load_config()
+    assert cfg.agent.max_cycles == 3
+    assert cfg.phases["review"].time == 60.0
+
+    monkeypatch.setenv("SHLEPA_MAX_CYCLES", "garbage")
+    cfg = load_config()
+    assert cfg.agent.max_cycles == 2  # invalid: file value kept
 
 
 def test_custom_path(tmp_path):

@@ -16,7 +16,8 @@ from shlepa_agent.tools.edit import EDIT_TOOL
 from shlepa_agent.tools.log_triage import LOG_TRIAGE_TOOL
 from shlepa_agent.tools.mitre_kb import MITRE_KB_TOOL
 from shlepa_agent.tools.read import READ_TOOL
-from shlepa_agent.tools.recon import RECON_TOOL
+from shlepa_agent.tools.recon_tool import RECON_TOOL
+from shlepa_agent.tools.search_tool import SEARCH_TOOL
 from shlepa_agent.tools.write import WRITE_TOOL
 
 ALL_TOOLS: dict[str, Tool] = {
@@ -26,20 +27,14 @@ ALL_TOOLS: dict[str, Tool] = {
         WRITE_TOOL,
         EDIT_TOOL,
         BASH_TOOL,
-        # Off by default: registered only when AGENT_CODE_SEARCH is set
-        # (the config layer enables them and appends the names to the
-        # phase tool lists; get_tools skips disabled tools).
+        RECON_TOOL,
+        SEARCH_TOOL,
         CODE_SEARCH_TOOL,
         FILE_OUTLINE_TOOL,
-        # Off by default: enabled by the +forensics toolset arm
-        # (config._enable_forensics_tools).
         LOG_TRIAGE_TOOL,
-        # Off by default: enabled by the +mitre-kb toolset arm
-        # (config._enable_mitre_kb_tools).
+        # Off by default (the v6 baseline [tool_policy] does not route it;
+        # the +mitre-kb dev arm enables it — see toolsets.py).
         MITRE_KB_TOOL,
-        # Off by default: enabled by the +recon toolset arm
-        # (config._enable_recon_tools).
-        RECON_TOOL,
     )
 }
 

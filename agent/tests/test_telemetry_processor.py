@@ -134,6 +134,52 @@ def test_no_env_no_attrs_no_crash(monkeypatch):
     assert "shlepa.batch_id" not in children[0].attributes
 
 
+def test_cache_tokens_accumulated_on_root():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("llm call 1") as child:
+                child.set_attribute("gen_ai.usage.input_tokens", 100)
+                child.set_attribute(
+                    "gen_ai.usage.cache_read.input_tokens", 80
+                )
+            with tracer.start_as_current_span("llm call 2") as child:
+                child.set_attribute("gen_ai.usage.input_tokens", 50)
+                child.set_attribute(
+                    "gen_ai.usage.details.cache_read_tokens", 50
+                )
+                child.set_attribute(
+                    "gen_ai.usage.cache_write.input_tokens", 5
+                )
+    finally:
+        provider.shutdown()
+
+    roots = _root_spans(exporter)
+    assert roots, "no agent.run root span"
+    attrs = roots[0].attributes
+    assert attrs.get("shlepa.llm.cumulative_cache_read_tokens") == 130
+    assert attrs.get("shlepa.llm.cumulative_cache_write_tokens") == 5
+
+
+def test_no_cache_attrs_when_endpoint_reports_none():
+    exporter = InMemorySpanExporter()
+    provider = telemetry.configure(exporter=exporter)
+    try:
+        with telemetry.root_span(provider, task="t"):
+            tracer = provider.get_tracer("t")
+            with tracer.start_as_current_span("llm call 1") as child:
+                child.set_attribute("gen_ai.usage.input_tokens", 100)
+    finally:
+        provider.shutdown()
+
+    roots = _root_spans(exporter)
+    attrs = roots[0].attributes
+    assert "shlepa.llm.cumulative_cache_read_tokens" not in attrs
+    assert "shlepa.llm.cumulative_cache_write_tokens" not in attrs
+
+
 def test_non_llm_span_does_not_stamp_root():
     exporter = InMemorySpanExporter()
     provider = telemetry.configure(exporter=exporter)

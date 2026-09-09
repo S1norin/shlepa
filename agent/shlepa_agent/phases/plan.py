@@ -1,16 +1,22 @@
 """Plan phase: understand the task and the environment, produce a plan.
 
 No real work is done here — at most a few cheap reads to confirm
-assumptions. Every plan run is fresh (no history); on a replan cycle the
-previous work result arrives in the ``previous_results`` user-message
-block. Ends with a structured ``PlanResult`` (pydantic output tool).
+assumptions. Every plan run is fresh (no history). Cycle 1 sees the
+instruction only; cycle i >= 2 (re-plan) sees, in the ``previous_results``
+user-message block, the previous work result and the previous REVIEW relay
+(summary / done / problems / hints_next). Ends with a structured
+``PlanResult`` (pydantic output tool).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from shlepa_agent.outputs import PlanResult, output_schema_note
+from shlepa_agent.outputs import (
+    PlanResult,
+    output_schema_note,
+    render_review_relay,
+)
 from shlepa_agent.phases.base import Phase, RunState
 from shlepa_agent.template import load_prompt, render_user
 
@@ -36,25 +42,13 @@ class PlanPhase(Phase):
                 parts.append(
                     "work phase (previous cycle) failed with:\n" + prev.error
                 )
-        review = state.results.get("commit")
-        if review is not None and review.output is not None:
-            hints = list(getattr(review.output, "hints", None) or [])
-            if hints:
-                parts.append(
-                    "review phase verdict (previous cycle): next_round — "
-                    "follow these hints in the new plan:\n"
-                    + "\n".join(f"- {h}" for h in hints)
-                )
-            else:
-                # Legal but useless otherwise: a next_round without hints
-                # still starts a replan, and the plan phase must know it is
-                # a replan (and target the previous work result above).
-                parts.append(
-                    "review phase verdict (previous cycle): next_round — "
-                    "the review gave no specific hints: re-read the "
-                    "previous work result above and target its weakest or "
-                    "unchecked claims."
-                )
+        relay = state.results.get("review")
+        if relay is not None and relay.output is not None:
+            parts.append(
+                "review relay (previous cycle) — distillation of the "
+                "previous work cycle, produced by the harness relay phase:\n"
+                + render_review_relay(relay.output)
+            )
         if parts:
             contents["previous_results"] = "\n\n".join(parts)
         return render_user(cfg, self.id, contents)

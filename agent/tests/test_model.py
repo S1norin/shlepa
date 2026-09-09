@@ -9,9 +9,35 @@ import asyncio
 import json
 import logging
 
+import pytest
+
 from stub_server import FINAL_ANSWER, reset_stub_state, stub_state
 
 REASONING = "THINK-" * 4000  # 20000 chars > MAX_LOG_VALUE_CHARS (16000)
+
+
+@pytest.fixture
+def events():
+    from shlepa_agent.log import LOGGER
+
+    records: list[dict] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                records.append(json.loads(record.getMessage()))
+            except (TypeError, ValueError):
+                pass
+
+    handler = _Collector()
+    old_level = LOGGER.level
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    try:
+        yield records
+    finally:
+        LOGGER.removeHandler(handler)
+        LOGGER.setLevel(old_level)
 
 
 def _write_cfg(tmp_path) -> None:
@@ -198,7 +224,6 @@ def test_llm_thinking_event_carries_full_text(monkeypatch, stub_openai, tmp_path
                     "goal": "write hello.txt with the content hello",
                     "findings": "",
                     "steps": ["write the file"],
-                    "decision": "commit",
                 },
             },
             "reasoning": REASONING,
@@ -242,6 +267,103 @@ def test_llm_thinking_event_carries_full_text(monkeypatch, stub_openai, tmp_path
     assert "... [output truncated" not in events[0]["content"]
 
 
+# -- w3-5: endpoint failures (429/402/5xx storm) ---------------------------
+
+def test_endpoint_failure_counter_and_stall(tmp_path):
+    model = _make_model(tmp_path)
+    assert model.cfg.endpoint_fail_limit == 3  # default
+    assert not model.endpoint_stalled
+    model.note_endpoint_failure(429)
+    model.note_endpoint_failure(402)
+    model.note_endpoint_failure(400)  # non-terminal: ignored
+    assert model.endpoint_failure_count == 2
+    assert not model.endpoint_stalled
+    model.note_endpoint_failure(503)
+    assert model.endpoint_stalled
+    model.note_endpoint_success()
+    assert model.endpoint_failure_count == 0
+    assert not model.endpoint_stalled
+
+
+def test_endpoint_stall_limit_from_config(tmp_path):
+    toml_path = tmp_path / "cfg1.toml"
+    toml_path.write_text(
+        """
+[agent]
+temp = 0.1
+
+[budget]
+endpoint_fail_limit = 1
+
+[phases.plan]
+tools = ["bash"]
+requests = 5
+""",
+        encoding="utf-8",
+    )
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+
+    model = TrackedModel(
+        "stub-model",
+        OpenAIProvider(base_url="http://localhost:1/v1", api_key="k"),
+        load_config(toml_path),
+    )
+    model.note_endpoint_failure(429)
+    assert model.endpoint_stalled
+
+
+def test_endpoint_storm_finalizes_run(monkeypatch, stub_openai, tmp_path, events):
+    """AC: consecutive 429s -> endpoint_finalized, no further requests,
+    the deliverable stays on disk, the run ends "done" (exit 0)."""
+    from stub_server import reset_stub_state
+
+    reset_stub_state()
+    stub_state["script"] = [
+        {
+            "tool_call": {
+                "name": "final_result",
+                "arguments": {
+                    "goal": "write out.json with the answer",
+                    "findings": "",
+                    "steps": ["write the file"],
+                },
+            }
+        },
+        {
+            "tool_call": {
+                "name": "write",
+                "arguments": {"path": "out.json", "text": '{"answer": 42}'},
+            }
+        },
+        {"error": 429},  # work (2nd request of the phase) -> #1
+        {"error": 429},  # work-timeout final_ask -> #2
+        {"error": 429},  # review relay -> #3 -> stalled -> finalize
+    ]
+    out = _run(monkeypatch, stub_openai, tmp_path)
+
+    # the deliverable is on disk and the run ends normally
+    assert (tmp_path / "out.json").read_text() == '{"answer": 42}'
+    assert isinstance(out, str)
+
+    ev = {(e.get("event"), e.get("phase")): e for e in events if isinstance(e, dict)}
+    errors = [e for e in events if e.get("event") == "endpoint_error"]
+    assert [e["consecutive"] for e in errors] == [1, 2, 3]
+    assert all(e["status"] == 429 for e in errors)
+
+    assert ev.get(("endpoint_stalled", "review"), {}).get("failures") == 3
+    fin = [e for e in events if e.get("event") == "endpoint_finalized"]
+    assert fin and fin[0]["failures"] == 3
+
+    done = [e for e in events if e.get("event") == "agent_done"]
+    assert done and done[-1]["status"] == "done"
+
+    # exactly one count per AGENT request (the openai SDK retries each 429
+    # a few times on the wire, so raw bodies > agent requests):
+    assert len(stub_state["bodies"]) >= 5
+
 # -- per-phase usage tagging (issue #73) ------------------------------------
 
 
@@ -282,3 +404,34 @@ def test_usage_event_without_phase_has_no_phase_field(tmp_path):
     _pending(model, RequestUsage(input_tokens=42, output_tokens=7))
     event = _capture_events(model)
     assert "phase" not in event
+
+
+def test_nonstream_retry_usage_is_counted_once(tmp_path, monkeypatch):
+    """Failed attempts stay visible without duplicating the successful response usage."""
+    from types import SimpleNamespace
+    from pydantic_ai.usage import RequestUsage
+    import shlepa_agent.model as model_mod
+
+    model = _make_model(tmp_path)
+    calls = 0
+    events = []
+
+    async def fake_super(self, messages, ms, params):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("request timed out")
+        return SimpleNamespace(usage=RequestUsage(input_tokens=10, output_tokens=7,
+                                                  details={"reasoning_tokens": 0}))
+
+    monkeypatch.setattr(model_mod.OpenAIChatModel, "request", fake_super)
+    monkeypatch.setattr(model_mod, "_log_event", lambda event, **data: events.append((event, data)))
+    asyncio.run(model.request([], {}, None))
+    model.log_pending_usage()
+    names = [name for name, _ in events]
+    assert names.count("llm_request") == 2
+    assert names.count("llm_error") == names.count("llm_retry") == 1
+    assert names.count("usage") == 1
+    usage = next(data for name, data in events if name == "usage")
+    assert usage["cumulative_input"] == 10 and usage["cumulative_output"] == 7
+    assert usage["reasoning_tokens"] == 0

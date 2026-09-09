@@ -1,24 +1,21 @@
-"""code_search + file_outline tools (AGENT_CODE_SEARCH, OFF by default).
+"""code_search + file_outline tools (baseline, SIFS BM25-offline).
 
-Tool records over the engine module (``shlepa_agent.code_search``). Off by
-default: the ``AGENT_CODE_SEARCH`` env var (values: rg | sifs) enables them
-via the config layer (``config._apply_code_search_env``) — with it unset
-the agent is byte-identical to the baseline (see
-``tests/test_code_search_tools.py``, golden fixture
-``tests/fixtures/default_prompt.txt``).
+Tool records over the engine module (``shlepa_agent.code_search``).
+Baseline in the v6-rewrite: the ``[tool_policy]`` phase matrix routes them
+to the read-only PLAN phase and the WORK phase alike (disable for A/B with
+``SHLEPA_CODE_SEARCH=0``; switch engines with
+``SHLEPA_CODE_SEARCH_ENGINE=rg|sifs`` — the baseline engine is ``sifs``,
+see ``CodeSearchConfig``).
 
 Each call runs the (sync, subprocess-based) engine in a worker thread
 under a per-call wall from the config (``tools.code_search.timeout`` /
-``tools.file_outline.timeout``, default 30s — the v5 regime bash cap). The
+``tools.file_outline.timeout``, default 30s — the regime bash cap). The
 engine's own 60s rg wall is too high for a tool call and is superseded
 here; on the wall the tool reports a timeout (the worker thread may finish
-in the background, same contract as the file tools). Results are
-instrumented with ``format_tool_result`` and carry UNTRUSTED markers (the
-search output is environment data).
-
-Shaped for the later named toolset arms (#51): an arm is exactly a config
-mutation (engine + enabled flags + phase tool lists), applied once per run
-by ``config._apply_code_search_env``.
+in the background, same contract as the file tools). Inside the
+finalization reserve (w3-2) the calls are not executed (exploratory
+tools). Results are instrumented with ``format_tool_result`` and carry
+UNTRUSTED markers (the search output is environment data).
 """
 
 from __future__ import annotations
@@ -30,7 +27,12 @@ from pydantic_ai import RunContext
 
 from shlepa_agent import code_search as engine
 from shlepa_agent.log import _log_event
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    finalizing_result,
+    format_tool_result,
+)
 
 #: Per-call wall fallback when the config does not provide one (the v5
 #: regime bash cap).
@@ -75,15 +77,22 @@ async def code_search(
     Returns ranked ``file:line-range`` windows with a few context lines —
     use it to LOCATE code instead of grep/read round trips. ``path`` is the
     directory to search (default: the whole working directory). ``mode``:
-    "bm25" (keyword search) or "hybrid" (natural language; needs the
-    embedding model, dev only — falls back to bm25 when the model is
-    absent; ignored by the rg engine). ``limit`` caps the files/chunks
-    shown; ``max_tokens`` caps the result size in tokens.
+    "bm25" (default; ranks keyword AND natural-language queries) or
+    "hybrid" (dev-only, needs the embedding model — degrades to bm25).
+    ``limit`` caps the files/chunks shown; ``max_tokens`` caps the result
+    size in tokens.
     """
     cfg = ctx.deps.cfg
     workdir = ctx.deps.workdir
     wall = cfg.tools.code_search.timeout or DEFAULT_WALL_S
-    eng = (cfg.code_search.engine or "auto").strip().lower()
+    # w3-2: inside the finalization reserve the call is not executed.
+    t0 = time.monotonic()
+    blocked = finalizing_result(
+        ctx, "code_search", t0, args={"query": query, "path": path}
+    )
+    if blocked is not None:
+        return blocked
+    eng = (cfg.code_search.engine or "sifs").strip().lower()
 
     # Engine mapping: rg -> the ripgrep scan; sifs -> bm25, or hybrid when
     # the model asks for it (hybrid without the model degrades inside the
@@ -134,7 +143,12 @@ async def file_outline(
     cfg = ctx.deps.cfg
     workdir = ctx.deps.workdir
     wall = cfg.tools.file_outline.timeout or DEFAULT_WALL_S
-    eng = (cfg.code_search.engine or "auto").strip().lower()
+    # w3-2: inside the finalization reserve the call is not executed.
+    t0 = time.monotonic()
+    blocked = finalizing_result(ctx, "file_outline", t0, args={"path": path})
+    if blocked is not None:
+        return blocked
+    eng = (cfg.code_search.engine or "sifs").strip().lower()
 
     def body() -> str:
         if eng == "rg":

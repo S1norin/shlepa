@@ -19,8 +19,12 @@ from shlepa_agent.tools import get_tools
 from shlepa_agent.tools.base import AgentDeps
 from shlepa_agent.toolsets import ARM_MITRE_KB
 
-PHASES = ("plan", "work", "commit", "emergency")
+# Active phases (plan/work/review) + the disabled legacy emergency (its
+# prompt still renders, but arms never touch its list).
+PHASES = ("plan", "work", "review", "emergency")
 TASK = "TASK"
+BASE_PLAN = ["read", "recon"]
+BASE_WORK = ["read", "write", "edit", "bash", "recon"]
 BASE_TOOLS = ["read", "write", "edit", "bash"]
 
 
@@ -236,33 +240,18 @@ def test_off_by_default(monkeypatch):
     cfg = load_config()
     assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
-        # the baseline matrix (config.toml): plan read+search, work full+
-        # search, review read-only read+search, legacy emergency four
+        # the effective baseline matrix (config.toml [tool_policy]): plan
+        # read+recon, work standard set + recon (the 2026-09-07 slim
+        # baseline), review toolless, legacy emergency four
+        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
         if phase_id == "plan":
-            assert list(cfg.phases[phase_id].tools) == [
-                "read",
-                "recon",
-                "code_search",
-                "file_outline",
-            ]
+            assert names == BASE_PLAN
         elif phase_id == "work":
-            assert list(cfg.phases[phase_id].tools) == [
-                "read",
-                "write",
-                "edit",
-                "bash",
-                "recon",
-                "code_search",
-                "file_outline",
-            ]
-        elif phase_id == "commit":
-            assert list(cfg.phases[phase_id].tools) == [
-                "read",
-                "code_search",
-                "file_outline",
-            ]
+            assert names == BASE_WORK
+        elif phase_id == "review":
+            assert names == []
         else:
-            assert list(cfg.phases[phase_id].tools) == BASE_TOOLS
+            assert names == BASE_TOOLS
         prompt = _system_prompt(cfg, get_phase(phase_id), TASK)
         assert "MITRE ATT&CK knowledge base" not in prompt
         assert "mitre_kb" not in prompt
@@ -276,19 +265,25 @@ def test_arm_env_enables_tool_and_prompt(monkeypatch):
     for phase_id in PHASES:
         phase = get_phase(phase_id)
         names = [t.name for t in get_tools(cfg, phase.tools(cfg))]
-        if phase_id == "commit":
-            # the read-only review is never augmented
-            assert names == ["read", "code_search", "file_outline"]
+        if phase_id == "review":
+            # the toolless relay is never augmented: no tool, no prefix
+            assert names == []
             assert "mitre_kb" not in _system_prompt(cfg, phase, TASK)
             continue
-        base = (BASE_TOOLS if phase_id == "emergency"
-                else ["read", "recon", "code_search", "file_outline"] if phase_id == "plan"
-                else ["read", "write", "edit", "bash", "recon", "code_search", "file_outline"])
-        assert names == base + ["mitre_kb"]
-        prompt = _system_prompt(cfg, phase, TASK)
-        assert "mitre_kb: search the pinned MITRE ATT&CK" in prompt
-        assert "MITRE ATT&CK knowledge base" in prompt
-        assert "T1003.003 NTDS" in prompt
+        if phase_id in ("plan", "work"):
+            base = BASE_PLAN if phase_id == "plan" else BASE_WORK
+            assert names == base + ["mitre_kb"]
+            prompt = _system_prompt(cfg, phase, TASK)
+            assert "mitre_kb: search the pinned MITRE ATT&CK" in prompt
+            assert "MITRE ATT&CK knowledge base" in prompt
+            assert "T1003.003 NTDS" in prompt
+        else:
+            # the disabled emergency keeps its baseline list (arms never
+            # augment disabled phases) and gets no prefix
+            assert names == BASE_TOOLS
+            assert "MITRE ATT&CK knowledge base" not in _system_prompt(
+                cfg, phase, TASK
+            )
 
 
 def test_max_output_env_override(monkeypatch):

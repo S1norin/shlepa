@@ -328,7 +328,9 @@ def test_main_mlflow_wait_retries_until_trace_lands(monkeypatch, capsys):
         check_trace, "fetch_latest_mlflow_trace", fake_fetch
     )
 
-    rc = check_trace.main(["--backend", "mlflow", "--wait", "60"])
+    rc = check_trace.main(
+        ["--backend", "mlflow", "--experiment", "contest", "--wait", "60"]
+    )
     out = capsys.readouterr().out
     assert rc == 0
     assert calls["n"] == 3
@@ -345,7 +347,9 @@ def test_main_mlflow_wait_gives_up_at_deadline(monkeypatch, capsys):
         check_trace, "fetch_latest_mlflow_trace", lambda *a, **k: stale
     )
 
-    rc = check_trace.main(["--backend", "mlflow", "--wait", "15"])
+    rc = check_trace.main(
+        ["--backend", "mlflow", "--experiment", "contest", "--wait", "15"]
+    )
     out = capsys.readouterr().out
     assert rc == 1
     assert "tr-stale" in out
@@ -366,9 +370,19 @@ def test_main_mlflow_no_wait_by_default(monkeypatch, capsys):
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://ml.example")
     monkeypatch.setattr(check_trace, "fetch_latest_mlflow_trace", fake_fetch)
 
-    rc = check_trace.main(["--backend", "mlflow"])
+    rc = check_trace.main(["--backend", "mlflow", "--experiment", "contest"])
     assert rc == 1
     assert calls["n"] == 1
+
+
+def test_main_mlflow_requires_family_experiment(monkeypatch, capsys):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://ml.example")
+    monkeypatch.delenv("SLEPA_TRACE_EXPERIMENT", raising=False)
+
+    rc = check_trace.main(["--backend", "mlflow"])
+
+    assert rc == 1
+    assert "--experiment is required" in capsys.readouterr().out
 
 
 def test_fetch_latest_mlflow_trace_no_experiment(monkeypatch):

@@ -10,6 +10,9 @@ because the telemetry package is absent from the zip.
 from __future__ import annotations
 
 import json
+import math
+import secrets
+import tempfile
 import os
 import stat
 import subprocess
@@ -76,7 +79,11 @@ def _trial_from_dict(raw: dict) -> HarborTrial:
     reward: float | None = None
     if isinstance(rewards, dict):
         value = rewards.get("reward")
-        reward = float(value) if isinstance(value, (int, float)) else None
+        reward = (
+            float(value)
+            if isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1
+            else None
+        )
 
     if status is None:
         status = "solved" if reward == 1 else "unsolved"
@@ -118,16 +125,16 @@ def find_job_dir(jobs_dir: Path, job_name: str) -> Path:
     exact = jobs_dir / job_name
     if exact.is_dir():
         return exact
-    candidates = [
-        p for p in jobs_dir.iterdir()
-        if p.is_dir() and (p / "result.json").is_file()
-    ] if jobs_dir.is_dir() else []
+    candidates = (
+        [p for p in jobs_dir.iterdir() if p.is_dir() and (p / "result.json").is_file()]
+        if jobs_dir.is_dir()
+        else []
+    )
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
         raise JobDirNotFound(
-            f"multiple job directories in {jobs_dir}; "
-            f"expected job name {job_name!r}"
+            f"multiple job directories in {jobs_dir}; expected job name {job_name!r}"
         )
     raise JobDirNotFound(f"job directory not found: {exact}")
 
@@ -151,9 +158,7 @@ def parse_job_dir(job_dir: Path) -> list[HarborTrial]:
         for trial_dir in sorted(job_dir.iterdir()):
             trial_result = trial_dir / "result.json"
             if trial_dir.is_dir() and trial_result.is_file():
-                trials.append(
-                    _trial_from_dict(json.loads(trial_result.read_text()))
-                )
+                trials.append(_trial_from_dict(json.loads(trial_result.read_text())))
     return trials
 
 
@@ -173,9 +178,7 @@ def unzip_submission(zip_path: Path, dest_dir: Path) -> Path:
         for member in zf.infolist():
             target = (dest_dir / member.filename).resolve()
             if not target.is_relative_to(dest_dir.resolve()):
-                raise UnzipError(
-                    f"unsafe path in zip: {member.filename}"
-                )
+                raise UnzipError(f"unsafe path in zip: {member.filename}")
         zf.extractall(dest_dir)
 
     agent_py = dest_dir / "agent.py"
@@ -301,7 +304,18 @@ def log_trials_to_mlflow(
         experiment_id = exp.experiment_id
     run_ids: dict[str, str] = {}
     for trial in trials:
+        valid = trial.reward is not None and math.isfinite(trial.reward) and 0 <= trial.reward <= 1
         tags = {
+            "metrics_schema_version": "2",
+            "run_kind": "trial",
+            "task": trial.task_name,
+            "execution_id": secrets.token_hex(16),
+            "grader_status": "scored" if valid else "unavailable",
+            "termination_reason": trial.status,
+            "usage_status": "reported"
+            if trial.tokens_in is not None and trial.tokens_out is not None
+            else "unknown",
+            "cache_usage_status": "unknown",
             "endpoint_class": endpoint_class,
             "model": model or "env",
             "harbor_status": trial.status,
@@ -315,7 +329,8 @@ def log_trials_to_mlflow(
             )
         run_id = run.info.run_id
         client.log_metric(run_id, "solved", 1.0 if trial.status == "solved" else 0.0)
-        if trial.reward is not None:
+        client.log_metric(run_id, "evaluation_valid", float(valid))
+        if valid:
             client.log_metric(run_id, "reward", trial.reward)
         if trial.tokens_in is not None:
             client.log_metric(run_id, "tokens_in", trial.tokens_in)
@@ -323,9 +338,14 @@ def log_trials_to_mlflow(
             client.log_metric(run_id, "tokens_out", trial.tokens_out)
         if trial.duration_sec is not None:
             client.log_metric(run_id, "duration_sec", trial.duration_sec)
-        if trial.error:
-            client.log_param(run_id, "error", trial.error[:2000])
-        client.set_terminated(run_id, status="FINISHED")
+        if trial.tokens_in is not None and trial.tokens_out is not None:
+            client.log_metric(run_id, "tokens_total", trial.tokens_in + trial.tokens_out)
+        with tempfile.TemporaryDirectory(prefix="shlepa-trial-") as directory:
+            error_path = Path(directory) / "error.txt"
+            error_path.write_text(trial.error or "")
+            client.log_artifact(run_id, str(error_path), artifact_path="data")
+        failed = trial.status == "error" or not valid
+        client.set_terminated(run_id, status="FAILED" if failed else "FINISHED")
         run_ids[trial.task_name] = run_id
     return run_ids
 
@@ -361,14 +381,9 @@ def run_submit_test(
     from shlepa_cli import tasks as tasks_module
     from shlepa_cli.zip_build import build_submission_zip, ZipBuildError
 
-    base_url, api_key, model, endpoint_class, experiment = resolve_endpoint(
-        settings, ci=ci
-    )
+    base_url, api_key, model, endpoint_class, experiment = resolve_endpoint(settings, ci=ci)
     if not model:
-        out(
-            "submit-test: no model configured "
-            "(set LOCAL_AGENT_MODEL, or CI_MODEL for --ci)"
-        )
+        out("submit-test: no model configured (set LOCAL_AGENT_MODEL, or CI_MODEL for --ci)")
         return False
 
     try:
@@ -425,7 +440,12 @@ def run_submit_test(
             out(_tail(stderr or stdout))
             all_trials.append(
                 HarborTrial(
-                    task.slug, "error", None, None, None, None,
+                    task.slug,
+                    "error",
+                    None,
+                    None,
+                    None,
+                    None,
                     f"harbor exited with code {returncode}",
                 )
             )
@@ -435,22 +455,14 @@ def run_submit_test(
             trials = parse_job_dir(job_dir)
         except JobDirNotFound as exc:
             out(f"job directory not found: {exc}")
-            all_trials.append(
-                HarborTrial(task.slug, "error", None, None, None, None, str(exc))
-            )
+            all_trials.append(HarborTrial(task.slug, "error", None, None, None, None, str(exc)))
             continue
         if not trials:
             out("no trials found in job directory")
-            all_trials.append(
-                HarborTrial(
-                    task.slug, "error", None, None, None, None, "no trials"
-                )
-            )
+            all_trials.append(HarborTrial(task.slug, "error", None, None, None, None, "no trials"))
             continue
         for trial in trials:
-            duration = (
-                f", {trial.duration_sec:.0f}s" if trial.duration_sec is not None else ""
-            )
+            duration = f", {trial.duration_sec:.0f}s" if trial.duration_sec is not None else ""
             out(f"{trial.status}: {trial.task_name} (reward={trial.reward}{duration})")
         all_trials.extend(trials)
 

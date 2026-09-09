@@ -1,15 +1,14 @@
-"""log_triage tool (OFF by default; the +forensics toolset arm enables it).
+"""log_triage tool (baseline, read-only).
 
-Tool record over the engine module (``shlepa_agent.log_triage``). Off by
-default: the ``AGENT_TOOLSET=+forensics`` arm enables it via
-``config._enable_forensics_tools`` (the same mutation shape as
-``_enable_search_tools``) — with no arm set the agent stays
-byte-identical to the baseline (golden fixture
-``tests/fixtures/default_prompt.txt``).
+Tool record over the engine module (``shlepa_agent.log_triage``). Baseline
+in the v6-rewrite: the ``[tool_policy]`` phase matrix routes it to the
+read-only PLAN phase and the WORK phase alike (disable for A/B with
+``SHLEPA_LOG_TRIAGE=0``).
 
 Read-only by construction: the engine only opens files in read mode (see
-``shlepa_agent.log_triage``). The per-call wall defaults to 30s (the v5
-regime bash cap; ``tools.log_triage.timeout`` in config). Results carry
+``shlepa_agent.log_triage``). The per-call wall defaults to 30s (the regime
+bash cap; ``tools.log_triage.timeout`` in config). Inside the finalization
+reserve (w3-2) the call is not executed (exploratory tool). Results carry
 UNTRUSTED markers (file content is environment data).
 """
 
@@ -22,7 +21,12 @@ from pydantic_ai import RunContext
 
 from shlepa_agent import log_triage as engine
 from shlepa_agent.log import _log_event
-from shlepa_agent.tools.base import AgentDeps, Tool, format_tool_result
+from shlepa_agent.tools.base import (
+    AgentDeps,
+    Tool,
+    finalizing_result,
+    format_tool_result,
+)
 
 #: Per-call wall fallback when the config does not provide one (the v5
 #: regime bash cap).
@@ -47,6 +51,10 @@ async def log_triage(
     wall = cfg.tools.log_triage.timeout or DEFAULT_WALL_S
     args = {"path": path}
     t0 = time.monotonic()
+    # w3-2: inside the finalization reserve the call is not executed.
+    blocked = finalizing_result(ctx, "log_triage", t0, args=args)
+    if blocked is not None:
+        return blocked
     _log_event("tool_call", tool="log_triage", **args)
 
     def body() -> str:

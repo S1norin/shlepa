@@ -83,62 +83,9 @@ METRICS_MARKER = "SLEPA_AGENT_METRICS_JSON="
 _TERMINATION = {"done": "ok", "budget": "budget", "error": "error"}
 
 
-class _MetricsCapture(logging.Handler):
-    """Collect run metrics from the agent's JSON event log.
+# METRICS_CAPTURE_SOURCE
 
-    The runner logs a ``usage`` event with cumulative tokens after each
-    model request, a ``llm_tool_call`` event per tool invocation, and a
-    final ``agent_done`` carrying the run status.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.tokens_in = 0
-        self.tokens_out = 0
-        self.cache_read = 0
-        self.cache_write = 0
-        self.tool_calls = 0
-        self.status: str | None = None
-        # Per-phase deltas derived from the phase-tagged CUMULATIVE usage
-        # events: phase -> {"in", "out", "cache_read"}. Usage events carry
-        # run-wide cumulative counters (one shared model), so each event's
-        # delta vs. the previous event is attributed to the phase of that
-        # event. Legacy events (no phase) produce no buckets. Issue #73.
-        self.phase_tokens: dict = {}
-        self._last_in = 0
-        self._last_out = 0
-        self._last_cache_read = 0
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            data = json.loads(record.getMessage())
-        except (TypeError, ValueError):
-            return
-        event = data.get("event")
-        if event == "usage":
-            ci = int(data.get("cumulative_input") or 0)
-            co = int(data.get("cumulative_output") or 0)
-            cr = int(data.get("cumulative_cache_read") or 0)
-            self.tokens_in = ci
-            self.tokens_out = co
-            self.cache_read = cr
-            self.cache_write = int(data.get("cumulative_cache_write") or 0)
-            phase = data.get("phase")
-            if phase:
-                bucket = self.phase_tokens.setdefault(
-                    phase, {"in": 0, "out": 0, "cache_read": 0}
-                )
-                bucket["in"] += max(0, ci - self._last_in)
-                bucket["out"] += max(0, co - self._last_out)
-                bucket["cache_read"] += max(0, cr - self._last_cache_read)
-            self._last_in = ci
-            self._last_out = co
-            self._last_cache_read = cr
-        elif event == "llm_tool_call":
-            self.tool_calls += 1
-        elif event == "agent_done":
-            self.status = data.get("status")
-
+_MetricsCapture = MetricsCapture
 
 def _run_agent(prompt: str, timeout, otel: bool) -> int:
     _configure_logging()
@@ -171,6 +118,7 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
                     "tokens_cache_write": capture.cache_write,
                     "tool_calls": capture.tool_calls,
                     "phase_tokens": capture.phase_tokens,
+                    **capture.snapshot(),
                     "termination": "timeout",
                 }
             ),
@@ -197,7 +145,8 @@ def _run_agent(prompt: str, timeout, otel: bool) -> int:
         "tokens_cache_write": capture.cache_write,
         "tool_calls": capture.tool_calls,
         "phase_tokens": capture.phase_tokens,
-        "termination": _TERMINATION.get(capture.status, "ok"),
+        **capture.snapshot(),
+        "termination": _TERMINATION.get(capture.status, capture.status or "ok"),
     }
     if output:
         print(output)
@@ -237,6 +186,10 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
+DEV_RUN_SOURCE = DEV_RUN_SOURCE.replace(
+    "# METRICS_CAPTURE_SOURCE",
+    Path(__file__).with_name("metrics_capture.py").read_text(),
+)
 
 
 def stage_agent(context_dir: Path, agent_dir: Path) -> Path:
@@ -284,9 +237,7 @@ def read_agent_dependencies(agent_dir: Path) -> list[str]:
         project = tomllib.loads(raw).get("project", {})
         deps = [str(d) for d in project.get("dependencies", [])]
         telemetry = project.get("optional-dependencies", {}).get("telemetry", [])
-        deps.extend(
-            str(d) for d in telemetry if not str(d).startswith("openinference")
-        )
+        deps.extend(str(d) for d in telemetry if not str(d).startswith("openinference"))
         return deps
     except (OSError, tomllib.TOMLDecodeError):
         return []
@@ -303,53 +254,44 @@ def _dev_setup_shell(agent_deps: list[str]) -> str:
     lines WITHOUT newlines, so statement separation cannot rely on
     them.
     """
-    deps = " ".join(
-        shlex.quote(d) for d in [*agent_deps, TIKTOKEN_OLD_GLIBC_PIN]
-    )
+    deps = " ".join(shlex.quote(d) for d in [*agent_deps, TIKTOKEN_OLD_GLIBC_PIN])
     lines = [
-        'if command -v uv >/dev/null 2>&1; then',
+        "if command -v uv >/dev/null 2>&1; then",
         '    uv_bin="$(command -v uv)";',
-        f'elif [ -x {AGENT_VENV}/bin/uv ]; then',
+        f"elif [ -x {AGENT_VENV}/bin/uv ]; then",
         f'    uv_bin="{AGENT_VENV}/bin/uv";',
-        'else',
+        "else",
         '    uv_bin="/tmp/shlepa-uv/uv";',
-        '    mkdir -p /tmp/shlepa-uv;',
+        "    mkdir -p /tmp/shlepa-uv;",
         '    case "$(uname -m)" in',
         '        x86_64) uv_arch="x86_64";;',
         '        aarch64) uv_arch="aarch64";;',
-        '        *) echo "shlepa: unsupported arch for uv bootstrap: '
-        '$(uname -m)" >&2; exit 1;;',
-        '    esac;',
+        '        *) echo "shlepa: unsupported arch for uv bootstrap: $(uname -m)" >&2; exit 1;;',
+        "    esac;",
         '    uv_pkg="uv-${uv_arch}-unknown-linux-musl";',
         f'    uv_url="https://github.com/astral-sh/uv/releases/'
         f'download/{UV_BOOTSTRAP_VERSION}/${{uv_pkg}}.tar.gz";',
-        '    if command -v curl >/dev/null 2>&1; then',
+        "    if command -v curl >/dev/null 2>&1; then",
         '        curl -fsSL "$uv_url" -o /tmp/shlepa-uv/uv.tar.gz;',
-        '    elif command -v wget >/dev/null 2>&1; then',
+        "    elif command -v wget >/dev/null 2>&1; then",
         '        wget -q -O /tmp/shlepa-uv/uv.tar.gz "$uv_url";',
-        '    else',
+        "    else",
         "        python3 -c 'import sys, urllib.request; "
-        "urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' \"$uv_url\" "
+        'urllib.request.urlretrieve(sys.argv[1], sys.argv[2])\' "$uv_url" '
         "/tmp/shlepa-uv/uv.tar.gz;",
-        '    fi;',
-        '    tar xzf /tmp/shlepa-uv/uv.tar.gz -C /tmp/shlepa-uv '
+        "    fi;",
+        "    tar xzf /tmp/shlepa-uv/uv.tar.gz -C /tmp/shlepa-uv "
         '--strip-components=1 "${uv_pkg}/uv";',
         '    chmod +x "$uv_bin";',
-        'fi;',
-        f'if [ ! -x {AGENT_VENV}/bin/python ]; then',
+        "fi;",
+        f"if [ ! -x {AGENT_VENV}/bin/python ]; then",
         f'    "$uv_bin" python install {AGENT_VENV_PYTHON};',
         f'    "$uv_bin" venv {AGENT_VENV} --python {AGENT_VENV_PYTHON};',
     ]
     if deps:
-        lines.append(
-            f'    "$uv_bin" pip install --python {AGENT_VENV}/bin/python '
-            f"{deps};"
-        )
+        lines.append(f'    "$uv_bin" pip install --python {AGENT_VENV}/bin/python {deps};')
     lines.append("fi;")
-    lines.append(
-        f'"$uv_bin" pip install --python {AGENT_VENV}/bin/python '
-        f"{OPENINFEERENCE_PIN}"
-    )
+    lines.append(f'"$uv_bin" pip install --python {AGENT_VENV}/bin/python {OPENINFEERENCE_PIN}')
     return "set -eux; " + " \\\n".join(lines)
 
 
@@ -394,18 +336,13 @@ def build_dev_image(
         shutil.rmtree(context)
     context.mkdir(parents=True, exist_ok=True)
     stage_agent(context, agent_dir)
-    write_dev_dockerfile(
-        context, env_image, read_agent_dependencies(agent_dir)
-    )
+    write_dev_dockerfile(context, env_image, read_agent_dependencies(agent_dir))
     docker.build(dev_image, context)
     return dev_image
 
 
 def _has_metrics_marker(stderr: str) -> bool:
-    return any(
-        line.strip().startswith(METRICS_MARKER)
-        for line in (stderr or "").splitlines()
-    )
+    return any(line.strip().startswith(METRICS_MARKER) for line in (stderr or "").splitlines())
 
 
 class AgentCrashError(RuntimeError):
@@ -454,11 +391,15 @@ def run_agent_in_container(
         final_output=metrics["final_output"] or (proc.stdout or "").strip(),
         tokens_in=metrics["tokens_in"],
         tokens_out=metrics["tokens_out"],
-        tokens_cache_read=metrics["tokens_cache_read"],
-        tokens_cache_write=metrics["tokens_cache_write"],
+        tokens_cache_read=metrics.get("tokens_cache_read", 0),
+        tokens_cache_write=metrics.get("tokens_cache_write", 0),
         tool_calls=metrics["tool_calls"],
         phase_tokens=metrics["phase_tokens"],
         termination=metrics["termination"],
+        measurements=metrics["measurements"],
+        configuration=metrics["configuration"],
+        usage_status=metrics["usage_status"],
+        cache_usage_status=metrics["cache_usage_status"],
     )
 
 
@@ -473,6 +414,10 @@ def _default_metrics() -> dict:
         "tool_calls": 0,
         "phase_tokens": {},
         "termination": "ok",
+        "measurements": {},
+        "configuration": {},
+        "usage_status": "unknown",
+        "cache_usage_status": "unknown",
     }
 
 

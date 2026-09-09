@@ -6,54 +6,59 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 FINAL_ANSWER = "Done: the file was created."
 
-# The v5 pipeline: plan -> work -> commit (the review phase); the plan's
-# decision field is legacy/ignored and work always runs. The stub is
-# pipeline-aware: the commit/review request ("REVIEW PHASE" in a user
-# message) gets a typed final_result(ReviewResult) with notes=FINAL_ANSWER;
-# the plan request ("PLAN PHASE") gets a typed final_result(PlanResult);
-# the work request ("WORK PHASE") gets a typed final_result(WorkResult);
-# anything else (emergency) gets the plain FINAL_ANSWER text. Phase checks
-# are order-sensitive: a commit request carries the whole work history
-# (so "WORK PHASE" is present too) — commit must win over work.
+# The v6 hard-cycle pipeline: plan -> work -> review (relay) -> plan -> work
+# (exactly max_cycles plan/work cycles; the relay runs between cycles only).
+# The stub is pipeline-aware on the user-message phase headers: the plan
+# request ("PLAN PHASE") gets a typed final_result(PlanResult), the work
+# request ("WORK PHASE") a typed final_result(WorkResult) with
+# summary=FINAL_ANSWER, and the review relay request ("REVIEW PHASE") a typed
+# final_result(ReviewResult) in the v6 relay shape. Matching order matters:
+# review is checked BEFORE work because the relay request resumes the work
+# transcript and carries its "WORK PHASE" user message in the history.
+# Everything else (emergency) gets the plain FINAL_ANSWER text.
 PLAN_RESULT_ARGS = {
     "goal": "write the requested file",
     "findings": "",
     "steps": ["write the file"],
-    "decision": "work",
 }
 
 WORK_RESULT_ARGS = {
-    "summary": "wrote the requested file",
+    "summary": FINAL_ANSWER,
     "findings": "",
     "deliverable": "hello.txt",
-    "confidence": 1.0,
+    "confidence": 0.9,
 }
 
-COMMIT_RESULT_ARGS = {
-    "status": "ok",
-    "verdict": "done",
-    "artifact": "hello.txt",
-    "checks": ["re-read the file -> content matches"],
-    "notes": FINAL_ANSWER,
+REVIEW_RESULT_ARGS = {
+    "summary": "Wrote hello.txt with the requested content.",
+    "done": True,
+    "problems": [],
+    "hints_next": [],
 }
 
 
-def _is_plan_request(body: dict) -> bool:
+def _has_phase_header(body: dict, header: str) -> bool:
     for m in body.get("messages", []):
-        if m.get("role") == "user" and "PLAN PHASE" in (m.get("content") or ""):
+        if m.get("role") == "user" and header in (m.get("content") or ""):
             return True
     return False
+
+
+def _result_args(body: dict) -> dict | None:
+    """Typed final_result args for the request's phase, or None for a plain
+    text answer."""
+    if _has_phase_header(body, "PLAN PHASE"):
+        return PLAN_RESULT_ARGS
+    if _has_phase_header(body, "REVIEW PHASE"):
+        return REVIEW_RESULT_ARGS
+    if _has_phase_header(body, "WORK PHASE"):
+        return WORK_RESULT_ARGS
+    return None
 
 
 def _is_work_request(body: dict) -> bool:
     for m in body.get("messages", []):
         if m.get("role") == "user" and "WORK PHASE" in (m.get("content") or ""):
-            return True
-
-
-def _is_commit_request(body: dict) -> bool:
-    for m in body.get("messages", []):
-        if m.get("role") == "user" and "REVIEW PHASE" in (m.get("content") or ""):
             return True
     return False
 
@@ -71,19 +76,9 @@ class StreamStubHandler(BaseHTTPRequestHandler):
             "model": "stub-model",
         }
         usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        args = _result_args(body)
         if not body.get("stream"):
-            if _is_plan_request(body):
-                result_args = PLAN_RESULT_ARGS
-            elif _is_commit_request(body):
-                result_args = COMMIT_RESULT_ARGS
-            elif _is_work_request(body):
-                result_args = WORK_RESULT_ARGS
-            else:
-                result_args = None
-            if result_args is None:
-                message = {"role": "assistant", "content": FINAL_ANSWER}
-                finish = "stop"
-            else:
+            if args is not None:
                 message = {
                     "role": "assistant",
                     "content": None,
@@ -93,12 +88,15 @@ class StreamStubHandler(BaseHTTPRequestHandler):
                             "type": "function",
                             "function": {
                                 "name": "final_result",
-                                "arguments": json.dumps(result_args),
+                                "arguments": json.dumps(args),
                             },
                         }
                     ],
                 }
                 finish = "tool_calls"
+            else:
+                message = {"role": "assistant", "content": FINAL_ANSWER}
+                finish = "stop"
             payload = {
                 **base,
                 "object": "chat.completion",
@@ -134,14 +132,6 @@ class StreamStubHandler(BaseHTTPRequestHandler):
                 ],
             }
         ]
-        if _is_plan_request(body):
-            args = PLAN_RESULT_ARGS
-        elif _is_commit_request(body):
-            args = COMMIT_RESULT_ARGS
-        elif _is_work_request(body):
-            args = WORK_RESULT_ARGS
-        else:
-            args = None
         if args is not None:
             chunks.append(
                 {

@@ -3,16 +3,29 @@ receivers:
     protocols:
       http:
         endpoint: 0.0.0.0:4318
+        include_metadata: true
       grpc:
         endpoint: 0.0.0.0:4317
+        include_metadata: true
 
 processors:
-  batch: {}
+  # Keep experiment routing metadata while batching. The batch processor
+  # creates separate batches for distinct metadata values, so traces from
+  # concurrent family experiments cannot be mixed into one MLflow request.
+  batch:
+    metadata_keys: [x-mlflow-experiment-id]
 
 extensions:
   # Liveness endpoint for the engine's pre-flight warning (localhost only).
   health_check:
     endpoint: 0.0.0.0:13133
+  # Copy the per-request experiment id received from the agent into the
+  # outgoing MLflow request. Authorization remains collector-only.
+  headers_setter/mlflow:
+    headers:
+      - action: upsert
+        key: x-mlflow-experiment-id
+        from_context: x-mlflow-experiment-id
 
 exporters:
   # Traces go to stdout for quick inspection (docker logs otelcol).
@@ -31,10 +44,11 @@ exporters:
     compression: gzip
     headers:
       authorization: "Basic ${env:MLFLOW_BASIC_B64}"
-      x-mlflow-experiment-id: "${env:MLFLOW_TELEMETRY_EXPERIMENT_ID}"
+    auth:
+      authenticator: headers_setter/mlflow
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, headers_setter/mlflow]
   pipelines:
     traces:
       receivers: [otlp]

@@ -52,10 +52,11 @@ def test_run_agent_on_host_against_stub(monkeypatch, tmp_path):
         server.server_close()
 
     assert run.final_output == FINAL_ANSWER
-    # v5: plan (typed) + work (typed) + commit (typed) — three model
-    # requests; the plan's decision field is ignored and work always runs
-    assert run.tokens_in == 30
-    assert run.tokens_out == 15
+    # v6 hard-cycle regime (max_cycles=2): plan + work + relay + plan + work
+    # = five model requests, all typed final_result (the stub never calls
+    # real tools).
+    assert run.tokens_in == 50
+    assert run.tokens_out == 25
     assert run.tool_calls == 0
 
 
@@ -83,9 +84,10 @@ def test_run_task_end_to_end_stub_llm(monkeypatch, tmp_path):
     assert result.ok
     assert not result.solved
     assert result.final_output == FINAL_ANSWER
-    # v5: plan + work + commit — three typed model requests
-    assert result.tokens_in == 30
-    assert result.tokens_out == 15
+    # v6 hard-cycle regime (max_cycles=2): plan + work + relay + plan + work
+    # = five model requests (10 in / 5 out each).
+    assert result.tokens_in == 50
+    assert result.tokens_out == 25
     assert result.error is None
 
 
@@ -119,6 +121,8 @@ def test_run_agent_on_host_carries_phase_tokens(monkeypatch, tmp_path):
         server.shutdown()
         server.server_close()
 
-    # The stub flow runs the full v5 cycle: plan + work + commit.
-    assert set(run.phase_tokens) == {"plan", "work", "commit"}
+    # The stub flow runs the v6 hard-cycle regime (max_cycles=2): plan +
+    # work + relay between cycles + plan + work.
+    assert set(run.phase_tokens) == {"plan", "work", "review"}
+    assert run.phase_tokens["review"]["in"] == 10  # one relay
     assert sum(p["in"] for p in run.phase_tokens.values()) == run.tokens_in

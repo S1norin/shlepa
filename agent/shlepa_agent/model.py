@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from openai import APIConnectionError, APIStatusError
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -64,12 +64,23 @@ class _WallCappedStream:
     when it is exceeded, which hands the phase off to the review phase.
     """
 
-    def __init__(self, inner: Any, deadline: float, model_name: str, wall: float) -> None:
+    def __init__(
+        self,
+        inner: Any,
+        deadline: float,
+        model_name: str,
+        wall: float,
+        on_error: Any = None,
+    ) -> None:
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_deadline", deadline)
         object.__setattr__(self, "_model_name", model_name)
         object.__setattr__(self, "_wall", wall)
         object.__setattr__(self, "_iter", None)
+        # w3-5: streaming HTTP errors (429/5xx) surface here, not in
+        # _open_stream — the SDK sends the request lazily on the first
+        # chunk. on_error is TrackedModel.note_endpoint_failure.
+        object.__setattr__(self, "_on_error", on_error)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(object.__getattribute__(self, "_inner"), name)
@@ -94,6 +105,17 @@ class _WallCappedStream:
             )
         except asyncio.TimeoutError:
             raise ModelAPIError(self._model_name, msg) from None
+        except APIStatusError as e:
+            # w3-5: count the terminal failure (429/402/5xx) before it
+            # propagates to the phase (one count per request: the error
+            # ends the stream, so this fires once).
+            on_error = object.__getattribute__(self, "_on_error")
+            if on_error is not None:
+                try:
+                    on_error(e.status_code)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            raise
 
 
 class TrackedModel(OpenAIChatModel):
@@ -123,9 +145,51 @@ class TrackedModel(OpenAIChatModel):
         self._cum_output = 0
         self._cum_cache_read = 0
         self._cum_cache_write = 0
+        # w3-5: consecutive terminal endpoint failures (429/402/5xx storm)
+        # — the only observable proxy for the invisible external token cap.
+        self._endpoint_fails = 0
         #: Id of the phase currently running (set/rotated by the runner);
         #: usage events are tagged with it for per-phase token attribution.
         self.current_phase: str | None = None
+
+    #: Terminal endpoint failure codes (w3-5): 402 (token/payment cap),
+    #: 429 (rate limit) and any 5xx. 400/401/403/404 do not count.
+    TERMINAL_ENDPOINT_STATUSES = (402, 429)
+
+    # -- w3-5 endpoint-failure tracking -------------------------------------
+    def _is_terminal_endpoint_status(self, status_code: int) -> bool:
+        return (
+            status_code in self.TERMINAL_ENDPOINT_STATUSES or status_code >= 500
+        )
+
+    def note_endpoint_failure(self, status_code: int) -> None:
+        """Record one terminal endpoint failure (429/402/5xx); non-terminal
+        codes are ignored. One request counts at most once."""
+        if not self._is_terminal_endpoint_status(status_code):
+            return
+        self._endpoint_fails += 1
+        _log_event(
+            "endpoint_error",
+            status=status_code,
+            consecutive=self._endpoint_fails,
+            limit=self.cfg.endpoint_fail_limit,
+        )
+
+    def note_endpoint_success(self) -> None:
+        """A normally opened request breaks the failure streak."""
+        if self._endpoint_fails:
+            _log_event("endpoint_recovered", after=self._endpoint_fails)
+            self._endpoint_fails = 0
+
+    @property
+    def endpoint_failure_count(self) -> int:
+        return self._endpoint_fails
+
+    @property
+    def endpoint_stalled(self) -> bool:
+        """True once >= endpoint_fail_limit consecutive terminal endpoint
+        failures were observed (the runner finalizes the run then)."""
+        return self._endpoint_fails >= self.cfg.endpoint_fail_limit
 
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
@@ -153,6 +217,8 @@ class TrackedModel(OpenAIChatModel):
         self._request_no += 1
         inp = int(usage.input_tokens or 0)
         out = int(usage.output_tokens or 0)
+        # Prompt-cache accounting (0 when the endpoint does not report it):
+        # pydantic-ai Usage carries the counts, older shapes do not.
         cache_read = int(getattr(usage, "cache_read_tokens", 0) or 0)
         cache_write = int(getattr(usage, "cache_write_tokens", 0) or 0)
         details = getattr(usage, "details", None) or {}
@@ -176,7 +242,7 @@ class TrackedModel(OpenAIChatModel):
         # Reasoning tokens are only present when the endpoint reports them
         # (via completion_tokens_details.reasoning_tokens); absent otherwise.
         reasoning = details.get("reasoning_tokens")
-        if reasoning:
+        if reasoning is not None:
             fields["reasoning_tokens"] = int(reasoning)
         # Phase id (set by the runner before each phase run); absent when no
         # phase is set so legacy consumers see an unchanged event shape.
@@ -191,7 +257,9 @@ class TrackedModel(OpenAIChatModel):
         """
         cm: Any = None
         last_err: Exception | None = None
+        last_status: int | None = None
         for attempt in (1, 2):
+            _log_event("llm_request", attempt=attempt, phase=self.current_phase)
             try:
                 async with asyncio.timeout(self.request_timeout):
                     cm = super(TrackedModel, self).request_stream(
@@ -202,19 +270,39 @@ class TrackedModel(OpenAIChatModel):
             except BudgetExceeded:
                 raise
             except (TimeoutError, asyncio.TimeoutError) as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIConnectionError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
-            except APIStatusError as e:
+            except ModelHTTPError as e:
+                # pydantic-ai wraps provider HTTP errors; terminal codes
+                # (w3-5) are counted and never retried, non-terminal 4xx
+                # keep the one-retry behavior.
                 body = f"{e} {getattr(e, 'body', '')}"
                 if _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if e.status_code < 500:
+                if self._is_terminal_endpoint_status(e.status_code):
+                    self.note_endpoint_failure(e.status_code)
+                    raise ModelAPIError(
+                        self.model_name,
+                        f"model request failed ({e.status_code}): {str(e)[:300]}",
+                    )
+                last_err = e
+            except APIStatusError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
+                body = f"{e} {getattr(e, 'body', '')}"
+                if _looks_like_context_error(body):
+                    raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
+                if self._is_terminal_endpoint_status(e.status_code):
+                    self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name, f"model request failed ({e.status_code}): {str(e)[:300]}"
                     )
                 last_err = e
+                last_status = e.status_code
             except Exception as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
                 last_err = e
@@ -225,7 +313,10 @@ class TrackedModel(OpenAIChatModel):
                     pass
                 cm = None
             if attempt == 1:
+                _log_event("llm_retry", phase=self.current_phase)
                 await asyncio.sleep(1.0)
+        if last_status is not None:
+            self.note_endpoint_failure(last_status)
         raise ModelAPIError(
             self.model_name, f"model request failed after retry: {str(last_err)[:300]}"
         )
@@ -245,13 +336,19 @@ class TrackedModel(OpenAIChatModel):
         sr, cm = await self._open_stream(
             messages, model_settings, model_request_parameters, run_context
         )
+        self.note_endpoint_success()
         self._pending_stream = sr
         # Consumption happens in pydantic-ai's drain loop, outside any timeout
         # we set in _open_stream; enforce the request wall around the stream.
         wall = self.llm_wall
         wall_deadline = time.monotonic() + wall
         try:
-            yield _WallCappedStream(sr, wall_deadline, self.model_name, wall)
+            yield _WallCappedStream(
+                sr, wall_deadline, self.model_name, wall, on_error=self.note_endpoint_failure
+            )
+        except Exception as exc:
+            _log_event("llm_error", error_type=type(exc).__name__, phase=self.current_phase)
+            raise
         finally:
             try:
                 await cm.__aexit__(None, None, None)
@@ -268,33 +365,61 @@ class TrackedModel(OpenAIChatModel):
         self.last_messages = list(messages)
         model_settings = self._capped_settings(model_settings)
         last_err: Exception | None = None
+        last_status: int | None = None
         for attempt in (1, 2):
+            _log_event("llm_request", attempt=attempt, phase=self.current_phase)
             try:
                 async with asyncio.timeout(self.request_timeout):
-                    return await super(TrackedModel, self).request(
+                    response = await super(TrackedModel, self).request(
                         messages, model_settings, model_request_parameters
                     )
+                    self.note_endpoint_success()
+                    self._pending_stream = response
+                    self.log_pending_usage()
+                    return response
             except BudgetExceeded:
                 raise
             except (TimeoutError, asyncio.TimeoutError) as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
             except APIConnectionError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 last_err = e
-            except APIStatusError as e:
+            except ModelHTTPError as e:
+                # pydantic-ai wraps provider HTTP errors; terminal codes
+                # (w3-5) are counted and never retried.
                 body = f"{e} {getattr(e, 'body', '')}"
                 if _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if e.status_code < 500:
+                if self._is_terminal_endpoint_status(e.status_code):
+                    self.note_endpoint_failure(e.status_code)
+                    raise ModelAPIError(
+                        self.model_name,
+                        f"model request failed ({e.status_code}): {str(e)[:300]}",
+                    )
+                last_err = e
+            except APIStatusError as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
+                body = f"{e} {getattr(e, 'body', '')}"
+                if _looks_like_context_error(body):
+                    raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
+                if self._is_terminal_endpoint_status(e.status_code):
+                    self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name, f"model request failed ({e.status_code}): {str(e)[:300]}"
                     )
                 last_err = e
+                last_status = e.status_code
             except Exception as e:
+                _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
                 last_err = e
             if attempt == 1:
+                _log_event("llm_retry", phase=self.current_phase)
                 await asyncio.sleep(1.0)
+        if last_status is not None:
+            self.note_endpoint_failure(last_status)
         raise ModelAPIError(
             self.model_name, f"model request failed after retry: {str(last_err)[:300]}"
         )
