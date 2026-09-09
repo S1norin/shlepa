@@ -78,7 +78,11 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from shlepa_agent.budget import PLAN_CAP, REVIEW_CAP, WORK_CAP, regime
 from shlepa_agent.config import AgentConfig, load_config
-from shlepa_agent.deliverable_check import ArtifactSpec, check_deliverable
+from shlepa_agent.deliverable_check import (
+    ArtifactSpec,
+    SinkCheck,
+    check_deliverable,
+)
 from shlepa_agent.log import (
     _configure_logging,
     _log_event,
@@ -698,6 +702,27 @@ def _resolve_deliverable_spec(state: RunState) -> dict[str, Any] | None:
     }
 
 
+def _sink_check() -> SinkCheck | None:
+    """#128: per-task sink-keyword spec (SLEPA_SINK_CHECK, JSON) set by the
+    dev run engine from the task.toml [deliverable_check] table.
+    Unset / invalid -> None: tasks without a keyword map are unaffected.
+    """
+    raw = os.environ.get("SLEPA_SINK_CHECK")
+    if not raw:
+        return None
+    try:
+        sink = SinkCheck.from_any(json.loads(raw))
+    except Exception as e:  # pragma: no cover - defensive
+        _log_event(
+            "sink_check_skipped",
+            reason=f"SLEPA_SINK_CHECK is not valid JSON ({type(e).__name__})",
+        )
+        return None
+    if sink is None:
+        _log_event("sink_check_skipped", reason="no usable keywords")
+    return sink
+
+
 def _post_work_check(state: RunState) -> None:
     """Resolve the deliverable spec after WORK and run the mechanical check.
 
@@ -712,7 +737,7 @@ def _post_work_check(state: RunState) -> None:
             state.deliverable_check = None
             return
         state.deliverable_check = check_deliverable(
-            state.deps.workdir, spec
+            state.deps.workdir, spec, sink=_sink_check()
         ).to_dict()
         # v6-rewrite: best-at-exit snapshots are DISABLED (single source of
         # truth is the file after the last work). _maybe_snapshot_best /

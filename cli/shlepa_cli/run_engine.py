@@ -936,6 +936,10 @@ def _agent_env(
         env["SLEPA_AGENT_TIMEOUT"] = str(int(task.timeout_sec))
     if arm:
         env["AGENT_TOOLSET"] = arm
+    # #128: per-task sink-keyword spec (task.toml [deliverable_check])
+    # -> SLEPA_SINK_CHECK (JSON); the agent skips it when unset.
+    if task.deliverable_check:
+        env["SLEPA_SINK_CHECK"] = json.dumps(task.deliverable_check)
     if settings.shlepa_otel_enabled:
         env["SLEPA_OTEL_ENABLED"] = "1"
         env["OTEL_EXPORTER_OTLP_ENDPOINT"] = (

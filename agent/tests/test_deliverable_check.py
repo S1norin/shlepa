@@ -205,3 +205,182 @@ def test_kind_does_not_change_file_semantics(workdir: Path):
     (workdir / "o.txt").write_text("42")
     for kind in ("file", "test_command", "answer"):
         assert _check(workdir, kind=kind, path="o.txt").valid
+
+
+# ---------------------------------------------------------------- sink keyword check (#128)
+
+TASKS_DIR = Path(__file__).resolve().parents[2] / "tasks"
+
+
+def _copy_rel(src_root: Path, dst_root: Path, rel: str) -> None:
+    """Copy one file from a task's environment/app tree into workdir,
+    preserving the path relative to the app root (== /app inside the env)."""
+    target = dst_root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes((src_root / rel).read_bytes())
+
+
+def _write_report(workdir: Path, critical_operation: object) -> None:
+    report = {
+        "vulnerability_found": True,
+        "vulnerability_type": "test",
+        "severity": "high",
+        "entry_point": {"file": "f.py", "line": 1},
+        "critical_operation": critical_operation,
+        "data_flow": [],
+        "root_cause": "r",
+        "impact": "i",
+        "recommendation": "rec",
+    }
+    (workdir / "report.json").write_text(json.dumps(report))
+
+
+AIRFLOW_REL = "airflow-core/src/airflow/example_dags/example_xcom.py"
+MUSTACHE_REL = "libs/core/langchain_core/utils/mustache.py"
+STRING_REL = "libs/core/langchain_core/prompts/string.py"
+
+
+def _airflow_workdir(workdir: Path) -> Path:
+    src = TASKS_DIR / "bench-vulngym-airflow-xcom-shell-injection" / "environment" / "app"
+    if not (src / AIRFLOW_REL).is_file():
+        pytest.skip("airflow task source not present")
+    _copy_rel(src, workdir, AIRFLOW_REL)
+    return workdir
+
+
+def _langchain_workdir(workdir: Path) -> Path:
+    src = TASKS_DIR / "bench-vulngym-langchain-template-injection" / "environment" / "app"
+    if not (src / MUSTACHE_REL).is_file() or not (src / STRING_REL).is_file():
+        pytest.skip("langchain task source not present")
+    _copy_rel(src, workdir, MUSTACHE_REL)
+    _copy_rel(src, workdir, STRING_REL)
+    return workdir
+
+
+def test_sink_wrong_line_rejected(workdir: Path):
+    """A report pointing at a line whose window has no sink keywords is
+    invalid, with the #128 hint in the reason."""
+    (workdir / "src.py").write_text(
+        "def produce():\n"
+        "    return value\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "def sink():\n"
+        "    subprocess.run(cmd)\n"
+    )
+    # line 1 (produce): window 1-7 has no keywords; line 9 has the sink
+    _write_report(workdir, {"file": "src.py", "line": 1})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    assert not r.valid and not r.sink_ok
+    assert r.exists and r.non_empty and r.parse_ok
+    assert "sink" in r.reason
+    assert "source side" in r.reason
+    # the correct coordinate passes
+    _write_report(workdir, {"file": "src.py", "line": 9})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    assert r.valid and r.sink_ok
+
+
+def test_sink_reference_line_passes_airflow(workdir: Path):
+    """The reference report's coordinate (80-87, the BashOperator window)
+    must pass."""
+    _airflow_workdir(workdir)
+    _write_report(workdir, {"file": AIRFLOW_REL, "line": "80-87"})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    assert r.valid and r.sink_ok and r.reason == ""
+
+
+def test_sink_reference_line_passes_langchain(workdir: Path):
+    """mustache.py:382 (getattr fallback) and string.py:111 (formatter
+    entry) both carry sink keywords under the tolerance window."""
+    _langchain_workdir(workdir)
+    _write_report(workdir, {"file": MUSTACHE_REL, "line": 382})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    assert r.valid and r.sink_ok
+    _write_report(workdir, {"file": STRING_REL, "line": 111})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    assert r.valid and r.sink_ok
+
+
+def test_sink_wrong_line_rejected_langchain(workdir: Path):
+    _langchain_workdir(workdir)
+    # mustache.py line 1 has no sink keywords in its window
+    _write_report(workdir, {"file": MUSTACHE_REL, "line": 1})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    assert not r.valid and not r.sink_ok
+    assert "source side" in r.reason
+
+
+def test_sink_missing_field(workdir: Path):
+    _airflow_workdir(workdir)
+    _write_report(workdir, {"file": AIRFLOW_REL})  # no line
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    assert not r.valid and not r.sink_ok
+    assert "critical_operation" in r.reason
+
+
+def test_sink_missing_field_entirely(workdir: Path):
+    (workdir / "out.json").write_text(json.dumps({"a": 1}))
+    r = check_deliverable(
+        workdir, {"path": "out.json", "format": "json"},
+        sink={"keywords": "bash"}, log=False,
+    )
+    assert not r.valid and not r.sink_ok
+    assert "critical_operation" in r.reason
+
+
+def test_sink_reported_file_not_found(workdir: Path):
+    (workdir / "report.json").write_text(json.dumps(
+        {"critical_operation": {"file": "nope.py", "line": 5}}
+    ))
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash"}, log=False)
+    assert not r.valid and not r.sink_ok
+    assert "not found" in r.reason
+
+
+def test_sink_no_config_is_noop(workdir: Path):
+    """Tasks without a keyword map are unaffected."""
+    (workdir / "out.json").write_text(json.dumps({"critical_operation": {}}))
+    r = _check(workdir, path="out.json", format="json")
+    assert r.valid and r.sink_ok
+
+
+def test_sink_invalid_pattern_skips_check(workdir: Path):
+    """A broken pattern in task metadata must never block a run."""
+    (workdir / "out.json").write_text(json.dumps(
+        {"critical_operation": {"file": "x.py", "line": 1}}
+    ))
+    (workdir / "x.py").write_text("pass\n")
+    r = check_deliverable(
+        workdir, {"path": "out.json", "format": "json"},
+        sink={"keywords": "([unclosed"}, log=False,
+    )
+    assert r.valid and r.sink_ok
+
+
+def test_sink_tolerance_expands_window(workdir: Path):
+    """tolerance=5 pulls a keyword 5 lines away into the window."""
+    (workdir / "src.py").write_text("x = 1\n" * 9 + "subprocess.run('ls')\n")
+    _write_report(workdir, {"file": "src.py", "line": 1})
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "subprocess", "tolerance": 5}, log=False)
+    assert not r.sink_ok
+    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "subprocess", "tolerance": 9}, log=False)
+    assert r.valid and r.sink_ok
+
+
+def test_sink_from_any_variants():
+    from shlepa_agent.deliverable_check import SinkCheck
+
+    assert SinkCheck.from_any(None) is None
+    assert SinkCheck.from_any({}) is None
+    assert SinkCheck.from_any(5) is None
+    assert SinkCheck.from_any("bash|sh") == SinkCheck(keywords="bash|sh")
+    s = SinkCheck.from_any({"keywords": "x", "field": "op", "tolerance": "3"})
+    assert (s.keywords, s.field, s.tolerance) == ("x", "op", 3)
+    s = SinkCheck.from_any({"keywords": "x", "tolerance": "bogus"})
+    assert s.tolerance == 2
+    assert SinkCheck.from_any({"keywords": "  "}) is None

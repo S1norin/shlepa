@@ -1,5 +1,7 @@
 """Task discovery tests (fixture tree)."""
 
+from pathlib import Path
+
 import pytest
 
 from shlepa_cli import tasks
@@ -87,10 +89,58 @@ def test_discover_verifier_sections_optional(tmp_path):
     assert found[0].verifier_timeout_sec is None
 
 
+def test_discover_parses_deliverable_check(tmp_path):
+    """#128: the optional [deliverable_check] table is parsed as-is."""
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "contest-hello-file" / "task.toml",
+        """
+schema_version = "1.2"
+name = "Hello File"
+
+[deliverable_check]
+keywords = "bash|subprocess|xcom_pull"
+""",
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert found[0].deliverable_check == {
+        "keywords": "bash|subprocess|xcom_pull"
+    }
+
+
+def test_discover_deliverable_check_optional(tmp_path):
+    """#128: tasks without the table are unaffected (None)."""
+    root = tmp_path / "repo"
+    _write(
+        root / "tasks" / "contest-bye-file" / "task.toml",
+        'schema_version = "1.2"\nname = "Bye File"\n',
+    )
+
+    found = tasks.discover_tasks(root / "tasks")
+
+    assert found[0].deliverable_check is None
+
+
 def test_discover_empty_dir(tmp_path):
     tasks_dir = tmp_path / "tasks"
     tasks_dir.mkdir()
     assert tasks.discover_tasks(tasks_dir) == []
+
+
+def test_repo_vulngym_tasks_carry_deliverable_check():
+    """#128 integration: the two vulngym audit tasks ship keyword maps,
+    and they survive discovery of the real tasks/ tree."""
+    repo_tasks = Path(__file__).resolve().parents[2] / "tasks"
+    if not repo_tasks.is_dir():
+        pytest.skip("tasks/ tree not present")
+    found = {t.slug: t for t in tasks.discover_tasks(repo_tasks)}
+    airflow = found.get("bench-vulngym-airflow-xcom-shell-injection")
+    langchain = found.get("bench-vulngym-langchain-template-injection")
+    assert airflow and langchain, "vulngym tasks missing from tasks/"
+    assert "bash" in airflow.deliverable_check["keywords"]
+    assert "getattr" in langchain.deliverable_check["keywords"]
 
 
 def test_discover_missing_dir_raises(tmp_path):
