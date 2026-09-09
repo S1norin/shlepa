@@ -832,15 +832,15 @@ def _model_endpoint_stalled(state: RunState) -> bool:
 
 def _commit_fallback_hints(state: RunState, check: dict | None) -> None:
     """w2-6: on a deterministic VERIFY fallback, make sure the next plan
-    sees the recorded failed checks as hints (the plan prompt renders
-    ``state.results['commit'].output.hints``)."""
+    sees the recorded failed checks (the plan prompt renders
+    ``state.results['commit'].output.problems``)."""
     prev = state.results.get("commit")
     own = None
     if prev is not None and prev.output is not None:
-        own = getattr(prev.output, "hints", None) or []
-    hints = list(own or [])
+        own = getattr(prev.output, "problems", None) or []
+    problems = list(own or [])
     if check is not None:
-        hints.append(
+        problems.append(
             "mechanical deliverable check (harness) FAILED: "
             + json.dumps(check)
             + " — fix the named failures"
@@ -850,13 +850,15 @@ def _commit_fallback_hints(state: RunState, check: dict | None) -> None:
         status=status,
         summary="VERIFY ended without a verdict (harness fallback)",
         output=ReviewResult(
-            status="partial",
-            verdict="next_round",
-            artifact=(state.deliverable_spec or {}).get("path", ""),
-            checks=[],
-            hints=hints,
+            summary="VERIFY ended without a verdict (harness fallback)",
+            done=False,
+            problems=problems,
         ),
     )
+    # #127: a verify/commit pass that ended without a verdict is a
+    # first-class termination reason (dead under the hard-cycle regime;
+    # stamped for the phase re-enable).
+    _telemetry_call("mark_termination", "no_verdict")
 
 
 def _salvage_needed(state: RunState) -> bool:
@@ -944,6 +946,8 @@ async def _pipeline(
                 reason="max_steps",
                 detail=f"step guard {max_steps} exhausted",
             )
+            # #127: the budget abort is a first-class termination reason.
+            _telemetry_call("mark_termination", "budget")
             return "timeout", output
         steps += 1
         state.cycles = cycle - 1
@@ -1044,6 +1048,11 @@ async def _pipeline(
                 check=state.deliverable_check,
                 elapsed_s=round(state.model.elapsed(), 1),
             )
+            # #127: a final-cycle timeout or error (incl. LLM-error
+            # exhaustion surfacing as a phase error) is a first-class
+            # termination reason; a clean "done" carries no reason.
+            if final_status in ("timeout", "error"):
+                _telemetry_call("mark_termination", final_status)
             return final_status, output
 
         # ---- REVIEW_c relay (only between cycles) ------------------------
