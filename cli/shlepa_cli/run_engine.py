@@ -271,7 +271,14 @@ def _find_batch_trace_inner(
     since_ms: int | None,
     max_results: int,
 ) -> str | None:
-    paged = compat.search_experiment_traces(client, exp_id, max_results)
+    # The unfiltered search on the remote server takes minutes, so bound
+    # the candidate set to the batch window; the server returns
+    # newest-first, so the just-finished trace is on the first page.
+    filter_string = f"timestamp_ms >= {since_ms}" if since_ms is not None else None
+    paged = compat.search_experiment_traces(
+        client, exp_id, max_results,
+        filter_string=filter_string, include_spans=False,
+    )
     for trace in paged:  # PagedList is list-like; fakes may be plain lists
         info = trace.info
         tags = getattr(info, "tags", None) or {}
@@ -302,7 +309,7 @@ def record_trace_tag(
     batch_id: str,
     task_slug: str,
     batch_started_ms: int | None = None,
-    timeout_sec: float = 15.0,
+    timeout_sec: float = 90.0,
 ) -> str | None:
     """Retry the batch trace lookup (the collector exports with a lag)
     and store the trace id in the run tag ``mlflow_trace_id``, then

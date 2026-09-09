@@ -107,7 +107,10 @@ def _find_batch_traces_inner(
     limit: int,
 ) -> list:
     found: list = []
-    paged = compat.search_experiment_traces(client, exp_id, limit)
+    filter_string = f"timestamp_ms >= {since_ms}" if since_ms is not None else None
+    paged = compat.search_experiment_traces(
+        client, exp_id, limit, filter_string=filter_string
+    )
     for trace in paged:
         info = trace.info
         tags = getattr(info, "tags", None) or {}
