@@ -95,4 +95,6 @@ CODE FIX TASKS
 string-built SQL).
 - Keep the API surface unchanged: same function names, signatures, ports, endpoints.
 - No new dependencies; use only the standard library or packages already present.
+- Guard downcasts with instanceof before casting — never assume the API
+returns the subtype; the code must not throw on other objects.
 - Run the provided tests until green. Do not modify tests unless the task explicitly says to.
