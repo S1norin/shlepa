@@ -144,6 +144,7 @@ def _install_exit_flush_hooks() -> None:
     except Exception:  # pragma: no cover - non-main thread / odd envs
         pass
 
+
 # The pipeline phase currently being executed (F4: per-span phase labels).
 # Set by the runner around each phase execution (and its final_ask); the
 # span processor copies it onto every span started inside the phase so

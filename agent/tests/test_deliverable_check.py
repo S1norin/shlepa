@@ -274,14 +274,20 @@ def test_sink_wrong_line_rejected(workdir: Path):
     )
     # line 1 (produce): window 1-7 has no keywords; line 9 has the sink
     _write_report(workdir, {"file": "src.py", "line": 1})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "bash|subprocess|xcom_pull"}, log=False,
+    )
     assert not r.valid and not r.sink_ok
     assert r.exists and r.non_empty and r.parse_ok
     assert "sink" in r.reason
     assert "source side" in r.reason
     # the correct coordinate passes
     _write_report(workdir, {"file": "src.py", "line": 9})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "bash|subprocess|xcom_pull"}, log=False,
+    )
     assert r.valid and r.sink_ok
 
 
@@ -290,7 +296,10 @@ def test_sink_reference_line_passes_airflow(workdir: Path):
     must pass."""
     _airflow_workdir(workdir)
     _write_report(workdir, {"file": AIRFLOW_REL, "line": "80-87"})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "bash|subprocess|xcom_pull"}, log=False,
+    )
     assert r.valid and r.sink_ok and r.reason == ""
 
 
@@ -299,10 +308,16 @@ def test_sink_reference_line_passes_langchain(workdir: Path):
     entry) both carry sink keywords under the tolerance window."""
     _langchain_workdir(workdir)
     _write_report(workdir, {"file": MUSTACHE_REL, "line": 382})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "getattr|__getitem__|format|render"}, log=False,
+    )
     assert r.valid and r.sink_ok
     _write_report(workdir, {"file": STRING_REL, "line": 111})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "getattr|__getitem__|format|render"}, log=False,
+    )
     assert r.valid and r.sink_ok
 
 
@@ -310,7 +325,10 @@ def test_sink_wrong_line_rejected_langchain(workdir: Path):
     _langchain_workdir(workdir)
     # mustache.py line 1 has no sink keywords in its window
     _write_report(workdir, {"file": MUSTACHE_REL, "line": 1})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "getattr|__getitem__|format|render"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "getattr|__getitem__|format|render"}, log=False,
+    )
     assert not r.valid and not r.sink_ok
     assert "source side" in r.reason
 
@@ -318,7 +336,10 @@ def test_sink_wrong_line_rejected_langchain(workdir: Path):
 def test_sink_missing_field(workdir: Path):
     _airflow_workdir(workdir)
     _write_report(workdir, {"file": AIRFLOW_REL})  # no line
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash|subprocess|xcom_pull"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "bash|subprocess|xcom_pull"}, log=False,
+    )
     assert not r.valid and not r.sink_ok
     assert "critical_operation" in r.reason
 
@@ -337,7 +358,10 @@ def test_sink_reported_file_not_found(workdir: Path):
     (workdir / "report.json").write_text(json.dumps(
         {"critical_operation": {"file": "nope.py", "line": 5}}
     ))
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "bash"}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "bash"}, log=False,
+    )
     assert not r.valid and not r.sink_ok
     assert "not found" in r.reason
 
@@ -366,9 +390,15 @@ def test_sink_tolerance_expands_window(workdir: Path):
     """tolerance=5 pulls a keyword 5 lines away into the window."""
     (workdir / "src.py").write_text("x = 1\n" * 9 + "subprocess.run('ls')\n")
     _write_report(workdir, {"file": "src.py", "line": 1})
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "subprocess", "tolerance": 5}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "subprocess", "tolerance": 5}, log=False,
+    )
     assert not r.sink_ok
-    r = check_deliverable(workdir, {"path": "report.json", "format": "json"}, sink={"keywords": "subprocess", "tolerance": 9}, log=False)
+    r = check_deliverable(
+        workdir, {"path": "report.json", "format": "json"},
+        sink={"keywords": "subprocess", "tolerance": 9}, log=False,
+    )
     assert r.valid and r.sink_ok
 
 

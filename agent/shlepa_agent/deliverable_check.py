@@ -255,7 +255,7 @@ def _sink_ok(parsed: Any, workdir: Path, sink: SinkCheck) -> tuple[bool, str]:
     if window is None:
         return False, f"'{sink.field}' line is not a line or a start-end span"
     start, end = window
-    segment = "\n".join(lines[start - 1 : end])
+    segment = "\n".join(lines[start - 1:end])
     if pattern.search(segment):
         return True, ""
     return (
