@@ -1,8 +1,0 @@
-{
-  "packages": [
-    "npm:@pedro_klein/pi-task",
-    "npm:@pedro_klein/pi-todo",
-    "npm:@pedro_klein/pi-ask",
-    "npm:@pedro_klein/pi-adhd"
-  ]
-}
