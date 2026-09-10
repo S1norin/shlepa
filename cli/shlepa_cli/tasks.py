@@ -26,6 +26,9 @@ class Task:
     env: dict[str, str] = field(default_factory=dict)
     verifier_env: dict[str, str] = field(default_factory=dict)
     verifier_timeout_sec: float | None = None
+    # #128: optional sink-keyword spec (task.toml [deliverable_check])
+    # forwarded to the agent as SLEPA_SINK_CHECK (JSON).
+    deliverable_check: dict[str, Any] | None = None
 
     @property
     def environment_dir(self) -> Path:
@@ -80,6 +83,9 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
         verifier = data.get("verifier", {}) or {}
         raw_env: dict[str, Any] = environment.get("env", {}) or {}
         raw_verifier_env: dict[str, Any] = verifier.get("env", {}) or {}
+        deliverable_check = data.get("deliverable_check")
+        if not isinstance(deliverable_check, dict):
+            deliverable_check = None
         # Contest schema 1.2 puts the display name in [task].name;
         # top-level 'name' is the legacy fallback, then the directory.
         task_section = data.get("task", {}) or {}
@@ -96,6 +102,7 @@ def discover_tasks(tasks_dir: Path) -> list[Task]:
                 env={str(k): str(v) for k, v in raw_env.items()},
                 verifier_env={str(k): str(v) for k, v in raw_verifier_env.items()},
                 verifier_timeout_sec=verifier.get("timeout_sec"),
+                deliverable_check=deliverable_check,
             )
         )
     return found

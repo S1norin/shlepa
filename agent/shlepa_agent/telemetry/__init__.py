@@ -86,6 +86,65 @@ def _span_attr_limit() -> int:
 # enough. None when no root span is open.
 _ROOT_SPAN_REF: "weakref.ref[Any] | None" = None
 
+# The configured TracerProvider (set by :func:`configure`), so exit paths
+# and the span processor can force_flush without the caller threading the
+# provider through. None in the baseline (no otel SDK) and in tests that
+# build their own provider without calling configure().
+_PROVIDER: TracerProvider | None = None
+
+#: Flush window (ms) after each finished LLM span: long enough for the
+#: local collector to receive it, short enough not to stall the run.
+_LLM_FLUSH_MILLIS = 1500
+
+#: Flush window (ms) on run exit paths: termination is the last fact
+#: about the run, give the flush the full default 5 s.
+_EXIT_FLUSH_MILLIS = 5000
+
+
+def flush_spans(timeout_millis: int = _EXIT_FLUSH_MILLIS) -> None:
+    """Best-effort ``force_flush`` of the configured provider.
+
+    Called after every finished LLM span (short window) and on every run
+    exit path (long window), so a hard docker exec timeout right after
+    the last LLM call — or a SIGTERM — loses at most one in-flight batch
+    (#126). No-op when no provider is configured. Never raises.
+    """
+    try:
+        provider = _PROVIDER
+        if provider is not None:
+            provider.force_flush(timeout_millis)
+    except Exception:  # pragma: no cover - defensive, must never raise
+        pass
+
+
+def _install_exit_flush_hooks() -> None:
+    """SIGTERM + atexit backstop for the span flush.
+
+    docker exec's hard timeout kills with SIGKILL (nothing is flushable
+    after that); SIGTERM and clean interpreter exit are flushable, so
+    cover them once per process instead of in every entrypoint. The
+    handler restores the default SIGTERM disposition and re-raises, so
+    death semantics stay unchanged. Never raises.
+    """
+    try:
+        import atexit
+
+        atexit.register(lambda: flush_spans(_EXIT_FLUSH_MILLIS))
+    except Exception:  # pragma: no cover - defensive
+        pass
+    try:
+        import signal
+
+        def _on_sigterm(signum: int, frame: Any) -> None:
+            flush_spans(_EXIT_FLUSH_MILLIS)
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except Exception:  # pragma: no cover - non-main thread / odd envs
+        pass
+
+
 # The pipeline phase currently being executed (F4: per-span phase labels).
 # Set by the runner around each phase execution (and its final_ask); the
 # span processor copies it onto every span started inside the phase so
@@ -177,7 +236,11 @@ class _ShlepaSpanProcessor(SpanProcessor):
 
     def on_end(self, span: Any) -> None:
         try:
-            self._accumulate_tokens(span)
+            if self._accumulate_tokens(span):
+                # #126: push the finished LLM span to the collector while
+                # the process is still alive; a kill right after the last
+                # LLM call then loses almost nothing.
+                flush_spans(_LLM_FLUSH_MILLIS)
         except Exception:  # pragma: no cover - defensive, must never raise
             pass
 
@@ -187,12 +250,17 @@ class _ShlepaSpanProcessor(SpanProcessor):
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
 
-    def _accumulate_tokens(self, span: Any) -> None:
+    def _accumulate_tokens(self, span: Any) -> bool:
+        """Accumulate LLM token usage and stamp the open root span.
+
+        Returns True when the span carried LLM usage (so the caller can
+        trigger a flush, #126).
+        """
         attrs = span.attributes or {}
         prompt = self._first_present(attrs, _PROMPT_TOKEN_KEYS)
         completion = self._first_present(attrs, _COMPLETION_TOKEN_KEYS)
         if prompt is None and completion is None:
-            return  # not an LLM span: nothing to count
+            return False  # not an LLM span: nothing to count
         cache_read = self._first_present(attrs, _CACHE_READ_KEYS)
         cache_write = self._first_present(attrs, _CACHE_WRITE_KEYS)
         if prompt is not None:
@@ -227,6 +295,7 @@ class _ShlepaSpanProcessor(SpanProcessor):
                     "shlepa.llm.cumulative_cache_write_tokens",
                     self._cache_write_tokens,
                 )
+        return True
 
     @staticmethod
     def _first_present(attrs: Any, keys: tuple[str, ...]) -> int | None:
@@ -391,6 +460,10 @@ def root_span(provider: TracerProvider, task: str | None = None):
             if not already:
                 span.set_attribute("shlepa.termination_reason", "crash")
             raise
+        finally:
+            # #126: flush on both exit paths. Entrypoints also flush via
+            # provider.shutdown() afterwards; a double flush is harmless.
+            flush_spans(_EXIT_FLUSH_MILLIS)
 
 
 def mark_termination(reason: str) -> None:
@@ -409,6 +482,9 @@ def mark_termination(reason: str) -> None:
         return
     span.set_attribute("shlepa.termination_reason", reason)
     span.set_status(Status(StatusCode.ERROR, reason))
+    # #126: the termination reason is the last fact about the run — make
+    # sure it leaves the process.
+    flush_spans(_EXIT_FLUSH_MILLIS)
 
 
 #: Cap for free-text values stamped onto spans (F4): the trace UI and the
@@ -502,8 +578,11 @@ def configure(exporter: Any | None = None) -> TracerProvider:
 
     ``exporter`` is injectable for tests (e.g. InMemorySpanExporter);
     by default an OTLP/HTTP exporter pointed at
-    OTEL_EXPORTER_OTLP_ENDPOINT is used.
+    OTEL_EXPORTER_OTLP_ENDPOINT is used. Also registers the exit flush
+    hooks (SIGTERM + atexit, #126) and stores the provider for
+    :func:`flush_spans`.
     """
+    global _PROVIDER
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import SpanLimits, TracerProvider
@@ -547,5 +626,7 @@ def configure(exporter: Any | None = None) -> TracerProvider:
 
     provider.add_span_processor(_ShlepaSpanProcessor())
 
+    _PROVIDER = provider
+    _install_exit_flush_hooks()
     trace.set_tracer_provider(provider)
     return provider

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,8 +68,58 @@ class ArtifactSpec:
 
 
 @dataclass(frozen=True)
+class SinkCheck:
+    """Per-task sink-keyword spec (#128), from task.toml [deliverable_check].
+
+    For coordinate-style audit reports: the reported coordinate (the
+    report's ``field`` — default ``critical_operation``, ``{file, line}``
+    with ``line`` an int or an inclusive ``start-end`` span) is expanded by
+    ``tolerance`` lines on each side, and that window must contain at least
+    one match of ``keywords`` (a regex pattern). Keyword maps live in task
+    metadata, never in agent code.
+    """
+
+    keywords: str  # regex pattern, case-insensitive
+    field: str = "critical_operation"  # report key holding {file, line}
+    tolerance: int = 2  # lines to expand on each side of the coordinate
+
+    @classmethod
+    def from_any(cls, value: Any) -> "SinkCheck | None":
+        """Build from a SinkCheck / dict / bare pattern string / None.
+
+        Returns None when no usable spec is present (unset, no keywords,
+        or an unrecognizable shape) — tasks without a keyword map are
+        unaffected.
+        """
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            value = {"keywords": value}
+        if not isinstance(value, dict):
+            return None
+        keywords = str(value.get("keywords") or "").strip()
+        if not keywords:
+            return None
+        try:
+            tolerance = int(value.get("tolerance", cls.tolerance))
+        except (TypeError, ValueError):
+            tolerance = cls.tolerance
+        return cls(
+            keywords=keywords,
+            field=str(value.get("field") or "critical_operation"),
+            tolerance=max(0, tolerance),
+        )
+
+
+@dataclass(frozen=True)
 class DeliverableCheck:
-    """Five booleans + a one-line reason (the reason names the first failed check)."""
+    """Five booleans + a one-line reason (the reason names the first failed check).
+
+    ``sink_ok`` is True when no sink spec is configured (task without a
+    keyword map) or the sink window matched (#128).
+    """
 
     exists: bool
     non_empty: bool
@@ -76,6 +127,7 @@ class DeliverableCheck:
     keys_ok: bool
     valid: bool
     reason: str = ""
+    sink_ok: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +137,7 @@ class DeliverableCheck:
             "keys_ok": self.keys_ok,
             "valid": self.valid,
             "reason": self.reason,
+            "sink_ok": self.sink_ok,
         }
 
 
@@ -144,7 +197,78 @@ def _content_ok(raw: str, expected_content: str | None) -> tuple[bool, str]:
     return False, "content does not match the expected_content quoted in the instruction"
 
 
-def _check(workdir: Path | str, s: ArtifactSpec) -> DeliverableCheck:
+def _line_window(
+    line: Any, tolerance: int, n_lines: int
+) -> tuple[int, int] | None:
+    """Resolve an int / ``start-end`` line to an inclusive (start, end)
+    expanded by ``tolerance`` on each side, clamped to [1, n_lines].
+    None when the value is not a resolvable coordinate."""
+    try:
+        if isinstance(line, bool):
+            return None
+        if isinstance(line, int):
+            start = end = line
+        elif isinstance(line, str):
+            text = line.strip()
+            if "-" in text:
+                a, _, b = text.partition("-")
+                start, end = int(a), int(b)
+            else:
+                start = end = int(text)
+        else:
+            return None
+    except (TypeError, ValueError):
+        return None
+    if start > end:
+        start, end = end, start
+    return max(1, start - tolerance), min(n_lines, end + tolerance)
+
+
+def _sink_ok(parsed: Any, workdir: Path, sink: SinkCheck) -> tuple[bool, str]:
+    """#128: does the reported coordinate window contain the expected sink?
+
+    Reads the reported file under workdir (file reads only). Any
+    structural problem (missing field, bad coordinate, missing file,
+    invalid pattern) is a miss with an explicit reason — except an
+    invalid keywords pattern, which skips the check entirely so a typo
+    in task metadata can never block a run.
+    """
+    try:
+        pattern = re.compile(sink.keywords, re.IGNORECASE)
+    except re.error:
+        return True, ""  # invalid pattern: skip (see docstring)
+    node = parsed.get(sink.field) if isinstance(parsed, dict) else None
+    if not isinstance(node, dict):
+        return False, f"report has no usable '{sink.field}' coordinate"
+    file_name = str(node.get("file") or "")
+    if not file_name:
+        return False, f"'{sink.field}' names no file"
+    p = Path(file_name)
+    if not p.is_absolute():
+        p = workdir / p
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False, f"reported file not found: {file_name}"
+    lines = text.splitlines()
+    window = _line_window(node.get("line"), sink.tolerance, len(lines))
+    if window is None:
+        return False, f"'{sink.field}' line is not a line or a start-end span"
+    start, end = window
+    segment = "\n".join(lines[start - 1:end])
+    if pattern.search(segment):
+        return True, ""
+    return (
+        False,
+        f"reported line {start}-{end} of {file_name} does not contain the "
+        f"expected sink (keywords: {sink.keywords}) — check whether you "
+        "traced the source side instead",
+    )
+
+
+def _check(
+    workdir: Path | str, s: ArtifactSpec, sink: SinkCheck | None = None
+) -> DeliverableCheck:
     workdir = Path(workdir)
     if not s.path:
         return DeliverableCheck(False, False, False, False, False, "no path in the spec")
@@ -158,6 +282,12 @@ def _check(workdir: Path | str, s: ArtifactSpec) -> DeliverableCheck:
     parse_ok, parsed, raw, err = _parse_content(p, s.format)
     if not parse_ok:
         return DeliverableCheck(True, True, False, False, False, f"parse: {err}")
+    if sink is not None:
+        sink_ok, serr = _sink_ok(parsed, workdir, sink)
+        if not sink_ok:
+            return DeliverableCheck(
+                True, True, True, False, False, f"sink: {serr}", sink_ok=False
+            )
     keys_ok, kerr = _keys_ok(parsed, s.keys, s.format)
     if not keys_ok:
         return DeliverableCheck(True, True, True, False, False, f"keys: {kerr}")
@@ -171,15 +301,19 @@ def check_deliverable(
     workdir: Path | str,
     spec: ArtifactSpec | dict[str, Any] | Any,
     *,
+    sink: SinkCheck | dict[str, Any] | str | None = None,
     log: bool = True,
 ) -> DeliverableCheck:
     """Mechanically check the deliverable at spec.path under workdir.
 
-    File reads only -- no LLM, no subprocess, no network. Logs one
+    File reads only -- no LLM, no subprocess, no network. ``sink`` is an
+    optional per-task sink-keyword spec (#128); when set, the reported
+    coordinate window must contain the expected sink. Logs one
     ``deliverable_check`` event (disable with ``log=False`` for pure use).
     """
     s = ArtifactSpec.from_any(spec) or ArtifactSpec()
-    result = _check(workdir, s)
+    sink = SinkCheck.from_any(sink)
+    result = _check(workdir, s, sink)
     if log:
         _log_event("deliverable_check", kind=s.kind, path=s.path, **result.to_dict())
     return result

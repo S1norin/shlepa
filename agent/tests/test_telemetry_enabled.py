@@ -24,6 +24,15 @@ def test_spans_captured_with_inmemory_exporter(monkeypatch, stub_openai, tmp_pat
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         monkeypatch.setenv("LOCAL_AGENT_MODEL", "stub-model")
         monkeypatch.setenv("LOCAL_AGENT_WORKDIR", str(tmp_path))
+        # The OTel API only allows one global tracer provider per process,
+        # and pydantic-ai resolves it at Agent construction. Route this
+        # test's provider so its spans land in this test's exporter
+        # regardless of which test configured first.
+        import pydantic_ai.models.instrumented as instrumented
+
+        monkeypatch.setattr(
+            instrumented, "get_tracer_provider", lambda: provider
+        )
 
         from shlepa_agent.runner import run_prompt
 

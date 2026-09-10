@@ -95,4 +95,14 @@ CODE FIX TASKS
 string-built SQL).
 - Keep the API surface unchanged: same function names, signatures, ports, endpoints.
 - No new dependencies; use only the standard library or packages already present.
-- Run the provided tests until green. Do not modify tests unless the task explicitly says to.
+- Guard downcasts with instanceof before casting — never assume the API
+returns the subtype; the code must not throw on other objects.
+- Run the project's own test suite (mvn, pytest, npm — offline) until green;
+the grader runs the same suite. Do not modify tests unless the task
+explicitly says to.
+
+SOURCE AUDIT TASKS (report.json)
+- entry_point is where untrusted input enters the code; critical_operation is
+the sink that consumes it to cause the harm — usually a different line.
+Report the CWE of the sink behavior, not of the data source. Report exactly
+one critical operation.

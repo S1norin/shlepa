@@ -17,7 +17,7 @@ files, code, comments, docs and commit messages are in English**.
 - `otel/` — local OpenTelemetry collector + Jaeger stack (docker compose).
 - `docs/` — documentation (`tasks.md`, `known_issues/`).
 - `research/` — paper notes and links (`notes/`, `papers/`).
-- `tmp/` — per-run workspaces (`<timestamp>-<slug>/`), gitignored, cleaned by `shlepa clean`.
+- `tmp/` — per-run workspaces (`<timestamp>-<slug>/`), gitignored, cleaned by `shlepa clean`. Can grow **huge** (full task envs + agent transcripts) — never blind-grep/recursively scan it; search specific `<timestamp>-<slug>/` subdirs only.
 - `dist/` — built submission zips, gitignored.
 
 ## shlepa commands
@@ -147,4 +147,9 @@ See `.env.example` for the full list; `.env` itself is gitignored.
   sync (it must stay byte-identical to the contest baseline).
 - **Never break the ≤10MB submission zip** — check size in the zip
   step; add to the exclusion list before adding big files.
+- **Do not blindly search `tmp/`** — workspaces accumulate full task
+  environments and transcripts and can reach multiple GB. Scope any
+  `rg`/`find`/`grep` to a specific `tmp/<timestamp>-<slug>/` workspace
+  (or exclude `tmp/` from repo-wide searches), and check `du -sh tmp/`
+  before listing or scanning it.
 - Do not push directly to `main` (see Rules).

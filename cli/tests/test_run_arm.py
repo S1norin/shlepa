@@ -125,6 +125,26 @@ def test_agent_env_without_arm_has_no_toolset_var(tmp_path):
     assert "AGENT_TOOLSET" not in env
 
 
+def test_agent_env_includes_sink_check(tmp_path):
+    """#128: task.toml [deliverable_check] -> SLEPA_SINK_CHECK (JSON)."""
+    import json
+
+    task = Task(
+        slug="bench-vulngym-airflow-xcom-shell-injection",
+        name="airflow",
+        path=tmp_path,
+        deliverable_check={"keywords": "bash|subprocess|xcom_pull"},
+    )
+    env = run_engine._agent_env(_settings(tmp_path), "m", task)
+    assert json.loads(env["SLEPA_SINK_CHECK"]) == {"keywords": "bash|subprocess|xcom_pull"}
+
+
+def test_agent_env_without_deliverable_check_has_no_sink_var(tmp_path):
+    task = Task(slug="contest-hello-file", name="Hello", path=tmp_path)
+    env = run_engine._agent_env(_settings(tmp_path), "m", task)
+    assert "SLEPA_SINK_CHECK" not in env
+
+
 # --- host mode (_call_agent) ------------------------------------------------
 
 

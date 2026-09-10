@@ -33,3 +33,8 @@ mcp_servers = []
 [verifier.env]
 [environment.env]
 [solution.env]
+
+# #128: sink-keyword check — the report's critical_operation window must
+# contain one of these; catches reports that trace the source side instead.
+[deliverable_check]
+keywords = "bash|subprocess|xcom_pull"
