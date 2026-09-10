@@ -1208,6 +1208,18 @@ async def run_prompt(
             reason="regime",
             detail=str(regime()),
         )
+        # Endpoint preflight: one minimal request against the (unknown,
+        # contest-provided) model endpoint. Verifies reachability/auth/model
+        # and discovers the endpoint's output budget (max_tokens cap) before
+        # the first phase burns its cap on 400s. Never breaks the run.
+        try:
+            await model.preflight()
+        except Exception as e:  # noqa: BLE001 - preflight must never break
+            _log_event(
+                "endpoint_preflight",
+                ok=False,
+                error=f"{type(e).__name__}: {str(e)[:300]}",
+            )
         save_state(state)
         factory = phase_factory or get_phase
         status, output = await _pipeline(

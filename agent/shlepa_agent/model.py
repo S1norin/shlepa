@@ -41,15 +41,64 @@ CONTEXT_ERROR_MARKERS = (
     "length limit",
 )
 
+#: Output-cap rejection markers: a 400 whose body matches one of these
+#: (and is not a context/prompt-length error) means the endpoint refused
+#: the requested max_tokens output budget. Lower bound for the adaptive
+#: cap: below 2048 tokens a deliverable is rarely writable in one request.
+MAX_TOKENS_ERROR_MARKERS = (
+    "max_tokens",
+    "max tokens",
+    "max_output",
+    "max output",
+    "output tokens",
+    "output length",
+    "completion tokens",
+    "maximum number of tokens",
+    "requested more",
+)
+
+
+#: Lowest max_tokens the adaptive logic will fall back to.
+MIN_MAX_TOKENS = 2048
+
+#: The exact user prompt of the preflight probe (see TrackedModel.preflight).
+PREFLIGHT_PROBE_TEXT = "Reply with the single word: ok"
+
 
 class BudgetExceeded(Exception):
     """Raised inside the model on a context-overflow error. The runner
     treats it as a normal hand-off (never retryable)."""
 
 
+class _MaxTokensRejected(Exception):
+    """Internal signal: the endpoint refused the requested max_tokens.
+
+    Carries the reduced cap the caller should try next."""
+
+    def __init__(self, reduced_to: int) -> None:
+        super().__init__(f"max_tokens rejected, retry with {reduced_to}")
+        self.reduced_to = reduced_to
+
+
 def _looks_like_context_error(text: str) -> bool:
     low = text.lower()
     return any(marker in low for marker in CONTEXT_ERROR_MARKERS)
+
+
+def _looks_like_max_tokens_error(status_code: int, text: str) -> bool:
+    """True for a 400 that rejects the requested output budget.
+
+    Must be checked BEFORE the context markers: cap messages often say
+    'exceeds the maximum', which the context markers would swallow.
+    Context/prompt/input framing disqualifies (that is a real context
+    overflow, not an output-cap rejection).
+    """
+    if status_code != 400:
+        return False
+    low = text.lower()
+    if any(word in low for word in ("context", "prompt", "input")):
+        return False
+    return any(marker in low for marker in MAX_TOKENS_ERROR_MARKERS)
 
 
 class _WallCappedStream:
@@ -151,6 +200,14 @@ class TrackedModel(OpenAIChatModel):
         #: Id of the phase currently running (set/rotated by the runner);
         #: usage events are tagged with it for per-phase token attribution.
         self.current_phase: str | None = None
+        #: Discovered output budget of the endpoint (set by preflight or by
+        #: the adaptive 400 handler). None = undiscovered (use cfg.max_tokens);
+        #: 0 = the endpoint rejected every explicit cap but accepts a request
+        #: with no max_tokens (its own default applies); >0 = send that value.
+        #: Contests expose an unknown OpenAI-compatible endpoint; a
+        #: max_tokens larger than its output cap rejects every request
+        #: with 400, which otherwise scores 0 on every task.
+        self.effective_max_tokens: int | None = None
 
     #: Terminal endpoint failure codes (w3-5): 402 (token/payment cap),
     #: 429 (rate limit) and any 5xx. 400/401/403/404 do not count.
@@ -194,13 +251,142 @@ class TrackedModel(OpenAIChatModel):
     def elapsed(self) -> float:
         return time.monotonic() - self.t0
 
+    # -- endpoint preflight -------------------------------------------------
+    async def preflight(self) -> bool:
+        """Probe the model endpoint with one minimal streaming request.
+
+        The contest exposes an unknown OpenAI-compatible endpoint. This probe
+        (a) verifies the endpoint/model/key work at all, and (b) discovers
+        the endpoint's output budget: on a max_tokens cap rejection it steps
+        the cap down (16384 -> 8192 -> 4096 -> 2048 -> no cap) and remembers
+        the first request shape that works. 0 means "send no max_tokens".
+        Never raises: on failure it logs the full status + body so the
+        organizer's log pinpoints the cause, and the run proceeds (the
+        failure may be transient).
+        """
+        caps: list[int] = []
+        for cap in (self.cfg.max_tokens, 8192, 4096, MIN_MAX_TOKENS, 0):
+            if cap not in caps:
+                caps.append(cap)
+        for cap in caps:
+            try:
+                await self._probe_stream({"max_tokens": cap} if cap else {})
+            except _MaxTokensRejected as exc:
+                self.effective_max_tokens = exc.reduced_to
+                continue  # next (lower) cap
+            except Exception as e:  # noqa: BLE001 - must never break the run
+                body = f"{e} {getattr(e, 'body', '')}"
+                status = getattr(e, "status_code", None)
+                _log_event(
+                    "endpoint_preflight",
+                    ok=False,
+                    status=status,
+                    max_tokens=cap,
+                    detail=str(e)[:500],
+                    body=body[:500],
+                )
+                return False
+            self.effective_max_tokens = cap
+            _log_event(
+                "endpoint_preflight",
+                ok=True,
+                max_tokens=cap,
+                default_cap=self.cfg.max_tokens,
+            )
+            return True
+        _log_event(
+            "endpoint_preflight",
+            ok=False,
+            detail=f"no max_tokens down to {MIN_MAX_TOKENS} and no-cap accepted",
+        )
+        return False
+
+    async def _probe_stream(self, model_settings: dict) -> None:
+        """One minimal streaming completion through the production path.
+
+        Raises _MaxTokensRejected when the endpoint refuses the requested
+        output budget (the handler has already recorded the reduced cap);
+        any other failure propagates to preflight's logging.
+        """
+        from pydantic_ai.messages import ModelRequest, UserPromptPart
+        from pydantic_ai.models import ModelRequestParameters
+
+        # request_stream wants ModelMessage objects (ModelRequest/ModelResponse),
+        # not raw prompt tuples -- raw tuples hit an assert_never in _map_messages.
+        request = ModelRequest(
+            parts=[UserPromptPart(content=PREFLIGHT_PROBE_TEXT)]
+        )
+        cm = super(TrackedModel, self).request_stream(
+            [request],
+            model_settings,
+            ModelRequestParameters(),  # no tools; prepare_request reads .native_tools
+            None,
+        )
+        try:
+            async with asyncio.timeout(self.request_timeout):
+                sr = await cm.__aenter__()
+                # The SDK sends the request lazily on the first chunk.
+                async for _ in sr:
+                    pass
+        except ModelHTTPError as e:
+            body = f"{e} {getattr(e, 'body', '')}"
+            if _looks_like_max_tokens_error(e.status_code, body):
+                raise _MaxTokensRejected(
+                    max(MIN_MAX_TOKENS, int(model_settings.get("max_tokens") or 0) // 2)
+                ) from e
+            raise
+        except APIStatusError as e:
+            body = f"{e} {getattr(e, 'body', '')}"
+            if _looks_like_max_tokens_error(e.status_code, body):
+                raise _MaxTokensRejected(
+                    max(MIN_MAX_TOKENS, int(model_settings.get("max_tokens") or 0) // 2)
+                ) from e
+            raise
+        finally:
+            try:
+                await cm.__aexit__(None, None, None)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     # -- helpers ----------------------------------------------------------
     def _capped_settings(self, model_settings: Any) -> dict:
-        """Copy of model_settings with a per-request max_tokens cap applied."""
+        """Copy of model_settings with a per-request max_tokens cap applied.
+
+        A discovered cap of 0 means "send no max_tokens at all": the
+        endpoint rejected every explicit cap and its own default output
+        budget applies."""
         ms = dict(model_settings or {})
-        if self.cfg.max_tokens and not ms.get("max_tokens"):
-            ms["max_tokens"] = self.cfg.max_tokens
+        if self.effective_max_tokens is None:
+            cap = self.cfg.max_tokens
+        else:
+            cap = self.effective_max_tokens
+        if cap and not ms.get("max_tokens"):
+            ms["max_tokens"] = cap
         return ms
+
+    def _try_reduce_max_tokens(
+        self, status_code: int, body: str, model_settings: dict
+    ) -> bool:
+        """On an output-cap 400, halve the cap and prepare a retry.
+
+        Returns True when the cap was reduced (the caller then treats the
+        failure as retryable instead of terminal); False otherwise."""
+        current = int(model_settings.get("max_tokens") or 0)
+        if (
+            current > MIN_MAX_TOKENS
+            and _looks_like_max_tokens_error(status_code, body)
+        ):
+            new = max(MIN_MAX_TOKENS, current // 2)
+            model_settings["max_tokens"] = new
+            self.effective_max_tokens = new
+            _log_event(
+                "endpoint_max_tokens",
+                previous=current,
+                reduced_to=new,
+                body=body[:300],
+            )
+            return True
+        return False
 
     def log_pending_usage(self) -> None:
         """Log the usage of the previous (now-finalized) streamed response."""
@@ -280,27 +466,33 @@ class TrackedModel(OpenAIChatModel):
                 # (w3-5) are counted and never retried, non-terminal 4xx
                 # keep the one-retry behavior.
                 body = f"{e} {getattr(e, 'body', '')}"
-                if _looks_like_context_error(body):
+                if self._try_reduce_max_tokens(e.status_code, body, model_settings):
+                    last_err = e  # retry with the reduced cap
+                elif _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if self._is_terminal_endpoint_status(e.status_code):
+                elif self._is_terminal_endpoint_status(e.status_code):
                     self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name,
                         f"model request failed ({e.status_code}): {str(e)[:300]}",
                     )
-                last_err = e
+                else:
+                    last_err = e
             except APIStatusError as e:
                 _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 body = f"{e} {getattr(e, 'body', '')}"
-                if _looks_like_context_error(body):
+                if self._try_reduce_max_tokens(e.status_code, body, model_settings):
+                    last_err = e  # retry with the reduced cap
+                elif _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if self._is_terminal_endpoint_status(e.status_code):
+                elif self._is_terminal_endpoint_status(e.status_code):
                     self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name, f"model request failed ({e.status_code}): {str(e)[:300]}"
                     )
-                last_err = e
-                last_status = e.status_code
+                else:
+                    last_err = e
+                    last_status = e.status_code
             except Exception as e:
                 _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):
@@ -389,27 +581,33 @@ class TrackedModel(OpenAIChatModel):
                 # pydantic-ai wraps provider HTTP errors; terminal codes
                 # (w3-5) are counted and never retried.
                 body = f"{e} {getattr(e, 'body', '')}"
-                if _looks_like_context_error(body):
+                if self._try_reduce_max_tokens(e.status_code, body, model_settings):
+                    last_err = e  # retry with the reduced cap
+                elif _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if self._is_terminal_endpoint_status(e.status_code):
+                elif self._is_terminal_endpoint_status(e.status_code):
                     self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name,
                         f"model request failed ({e.status_code}): {str(e)[:300]}",
                     )
-                last_err = e
+                else:
+                    last_err = e
             except APIStatusError as e:
                 _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 body = f"{e} {getattr(e, 'body', '')}"
-                if _looks_like_context_error(body):
+                if self._try_reduce_max_tokens(e.status_code, body, model_settings):
+                    last_err = e  # retry with the reduced cap
+                elif _looks_like_context_error(body):
                     raise BudgetExceeded(f"model context limit: {str(e)[:200]}")
-                if self._is_terminal_endpoint_status(e.status_code):
+                elif self._is_terminal_endpoint_status(e.status_code):
                     self.note_endpoint_failure(e.status_code)
                     raise ModelAPIError(
                         self.model_name, f"model request failed ({e.status_code}): {str(e)[:300]}"
                     )
-                last_err = e
-                last_status = e.status_code
+                else:
+                    last_err = e
+                    last_status = e.status_code
             except Exception as e:
                 _log_event("llm_error", error_type=type(e).__name__, phase=self.current_phase)
                 if _looks_like_context_error(str(e)):

@@ -435,3 +435,163 @@ def test_nonstream_retry_usage_is_counted_once(tmp_path, monkeypatch):
     usage = next(data for name, data in events if name == "usage")
     assert usage["cumulative_input"] == 10 and usage["cumulative_output"] == 7
     assert usage["reasoning_tokens"] == 0
+
+
+# -- endpoint preflight + adaptive max_tokens (checkpoint 0-score fix) --------
+#
+# Contest checkpoints expose an unknown OpenAI-compatible endpoint. A
+# max_tokens larger than its output cap rejects every request with 400,
+# which scored 0 on every task. The preflight probe discovers the working
+# cap before the first phase; a mid-run cap rejection retries with a halved
+# cap.
+
+
+def test_max_tokens_error_detection():
+    from shlepa_agent.model import _looks_like_max_tokens_error
+
+    # Output-cap rejections
+    assert _looks_like_max_tokens_error(400, "max_tokens 16384 exceeds the maximum of 8192")
+    assert _looks_like_max_tokens_error(400, "Invalid max_output_tokens: must be <= 4096")
+    assert _looks_like_max_tokens_error(400, "Requested 16384 output tokens; model supports 8192")
+    # Context/prompt/input framing is a context overflow, not an output cap
+    assert not _looks_like_max_tokens_error(400, "maximum context length of 32768 exceeded")
+    assert not _looks_like_max_tokens_error(400, "prompt is too long: 200000 tokens")
+    assert not _looks_like_max_tokens_error(400, "invalid input format")
+    # Non-400 is never an output-cap rejection
+    assert not _looks_like_max_tokens_error(429, "max_tokens exceeds maximum")
+    assert not _looks_like_max_tokens_error(500, "max_output_tokens invalid")
+
+
+def test_try_reduce_max_tokens_halves_and_floors(tmp_path):
+    model = _make_model(tmp_path)
+    ms = {"max_tokens": 16384}
+    assert model._try_reduce_max_tokens(400, "max_tokens exceeds maximum", ms) is True
+    assert ms["max_tokens"] == 8192
+    assert model.effective_max_tokens == 8192
+    # At the floor: no further reduction
+    assert (
+        model._try_reduce_max_tokens(400, "max_tokens exceeds maximum", {"max_tokens": 2048})
+        is False
+    )
+    # Non-cap bodies and non-400: untouched
+    assert model._try_reduce_max_tokens(400, "boom", {"max_tokens": 8192}) is False
+    assert (
+        model._try_reduce_max_tokens(
+            429, "max_tokens exceeds maximum", {"max_tokens": 8192}
+        )
+        is False
+    )
+    assert (
+        model._try_reduce_max_tokens(
+            400, "max_tokens exceeds maximum", {"max_tokens": 1000}
+        )
+        is False
+    )
+
+
+def test_capped_settings_uses_discovered_cap(tmp_path):
+    model = _make_model(tmp_path)
+    assert model._capped_settings({})["max_tokens"] == 1234  # cfg default
+    model.effective_max_tokens = 4096
+    assert model._capped_settings({})["max_tokens"] == 4096
+    # Discovered 0 = send no max_tokens at all (endpoint default applies)
+    model.effective_max_tokens = 0
+    assert "max_tokens" not in model._capped_settings({})
+    # An explicit caller cap always wins
+    model.effective_max_tokens = 4096
+    assert model._capped_settings({"max_tokens": 999})["max_tokens"] == 999
+
+
+def test_preflight_discovers_max_tokens_cap(tmp_path, monkeypatch):
+    from shlepa_agent.model import _MaxTokensRejected
+
+    model = _make_model(tmp_path)
+    calls: list[int] = []
+
+    async def fake_probe(ms):
+        cap = ms.get("max_tokens")
+        calls.append(cap)
+        if cap is not None and cap != 2048:
+            raise _MaxTokensRejected(max(2048, cap // 2))
+
+    monkeypatch.setattr(model, "_probe_stream", fake_probe)
+    assert asyncio.run(model.preflight()) is True
+    assert calls[0] == 1234  # first probe uses the configured cap
+    assert model.effective_max_tokens == 2048
+
+
+def test_preflight_probes_real_stream(stub_openai, tmp_path, events):
+    """AC: preflight issues a real streaming probe through the production
+    path and logs endpoint_preflight with ok=true (regression: a raw prompt
+    tuple instead of a ModelRequest hit an assert_never in pydantic-ai)."""
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    from shlepa_agent.config import load_config
+    from shlepa_agent.model import TrackedModel
+
+    _write_cfg(tmp_path)
+    model = TrackedModel(
+        "stub-model",
+        OpenAIProvider(base_url=stub_openai, api_key="k"),
+        load_config(tmp_path / "cfg.toml"),
+    )
+    assert asyncio.run(model.preflight()) is True
+    assert model.effective_max_tokens == model.cfg.max_tokens
+    pre = [e for e in events if e.get("event") == "endpoint_preflight"]
+    assert pre and pre[-1]["ok"] is True
+    assert pre[-1]["max_tokens"] == model.cfg.max_tokens
+
+
+def test_preflight_falls_back_to_no_cap(tmp_path, monkeypatch):
+    from shlepa_agent.model import _MaxTokensRejected
+
+    model = _make_model(tmp_path)
+    calls: list[int | None] = []
+
+    async def fake_probe(ms):
+        cap = ms.get("max_tokens")
+        calls.append(cap)
+        if cap is not None:
+            raise _MaxTokensRejected(cap // 2)
+        assert cap is None  # the final probe sends no max_tokens
+
+    monkeypatch.setattr(model, "_probe_stream", fake_probe)
+    assert asyncio.run(model.preflight()) is True
+    assert None in calls[-1:]
+    assert model.effective_max_tokens == 0
+
+
+def test_preflight_failure_logs_and_returns_false(tmp_path, monkeypatch):
+    model = _make_model(tmp_path)
+
+    async def fake_probe(ms):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(model, "_probe_stream", fake_probe)
+    assert asyncio.run(model.preflight()) is False
+    assert model.effective_max_tokens is None  # run proceeds with cfg default
+
+
+def test_request_retries_with_reduced_cap_on_400(tmp_path, monkeypatch):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    import shlepa_agent.model as model_mod
+
+    model = _make_model(tmp_path)
+    model.effective_max_tokens = 8192  # e.g. discovered by preflight
+    calls: list[int] = []
+
+    async def fake_super(self, messages, ms, params):
+        calls.append(int((ms or {}).get("max_tokens") or 0))
+        if (ms or {}).get("max_tokens", 0) > 4096:
+            raise ModelHTTPError(
+                400,
+                "stub-model",
+                {"error": {"message": "max_tokens 8192 exceeds maximum of 4096"}},
+            )
+        return "ok"
+
+    monkeypatch.setattr(model_mod.OpenAIChatModel, "request", fake_super)
+    assert asyncio.run(model.request([], {}, None)) == "ok"
+    assert calls == [8192, 4096]
+    assert model.effective_max_tokens == 4096

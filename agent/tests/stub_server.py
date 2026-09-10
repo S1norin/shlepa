@@ -9,6 +9,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from shlepa_agent.model import PREFLIGHT_PROBE_TEXT
+
 FINAL_ANSWER = "Created hello.txt with the exact content hello"
 
 # A full hard-cycle script (v6-rewrite) for end-to-end tests of the typed
@@ -82,12 +84,26 @@ PIPELINE_SCRIPT = [
 #     optional per step: "reasoning": model thinking text, returned as
 #     optional per step: "delay": seconds to sleep before responding
 #     (used to force phase time-caps in tests).
-stub_state: dict = {"last_path": None, "last_body": None, "bodies": [], "script": None}
+stub_state: dict = {
+    "last_path": None,
+    "last_body": None,
+    "bodies": [],
+    "script": None,
+    "preflight_probes": 0,
+}
 
 
 def reset_stub_state() -> None:
     stub_state.clear()
-    stub_state.update({"last_path": None, "last_body": None, "bodies": [], "script": None})
+    stub_state.update(
+        {
+            "last_path": None,
+            "last_body": None,
+            "bodies": [],
+            "script": None,
+            "preflight_probes": 0,
+        }
+    )
 
 
 class StubHandler(BaseHTTPRequestHandler):
@@ -101,16 +117,47 @@ class StubHandler(BaseHTTPRequestHandler):
         index = min(len(stub_state["bodies"]) - 1, len(script) - 1)
         return script[index]
 
+    @staticmethod
+    def _is_preflight_probe(body: dict) -> bool:
+        """True when the request is the endpoint preflight probe.
+
+        The probe is a single user message with the exact probe prompt; it
+        must be answered without consuming a script step, so run_prompt-based
+        tests stay aligned (the probe precedes every phase request).
+        """
+        messages = body.get("messages") or []
+        if not messages:
+            return False
+        content = messages[-1].get("content")
+        if isinstance(content, str):
+            return content == PREFLIGHT_PROBE_TEXT
+        if isinstance(content, list):
+            return any(
+                isinstance(part, dict) and part.get("text") == PREFLIGHT_PROBE_TEXT
+                for part in content
+            )
+        return False
+
     def _reasoning(self, step: dict) -> str | None:
         return step.get("reasoning")
 
     def do_POST(self):  # noqa: N802 (http.server API)
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
-        stub_state["bodies"].append(body)
-        stub_state["last_path"] = self.path
-        stub_state["last_body"] = body
-        step = self._step()
+        if self._is_preflight_probe(body):
+            # Answer the probe without advancing the script index: the probe
+            # does not correspond to a scripted response step.
+            stub_state["preflight_probes"] = (
+                stub_state.get("preflight_probes", 0) + 1
+            )
+            stub_state["last_path"] = self.path
+            stub_state["last_body"] = body
+            step = {"final": "ok"}
+        else:
+            stub_state["bodies"].append(body)
+            stub_state["last_path"] = self.path
+            stub_state["last_body"] = body
+            step = self._step()
         if step.get("error") is not None:
             status = int(step["error"])
             payload = {
