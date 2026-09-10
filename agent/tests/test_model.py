@@ -502,21 +502,63 @@ def test_capped_settings_uses_discovered_cap(tmp_path):
     assert model._capped_settings({"max_tokens": 999})["max_tokens"] == 999
 
 
+def test_preflight_probes_no_cap_first_and_prefers_accepted_cap(
+    tmp_path, monkeypatch
+):
+    """AC: the no-cap request is probed first (the only shape an earlier
+    checkpoint in this contest accepted); when the endpoint ALSO accepts a
+    capped probe, the cap wins (bounds output, predictable timing)."""
+    model = _make_model(tmp_path)
+    calls: list[int | None] = []
+
+    async def fake_probe(ms):
+        calls.append(ms.get("max_tokens"))  # endpoint accepts everything
+
+    monkeypatch.setattr(model, "_probe_stream", fake_probe)
+    assert asyncio.run(model.preflight()) is True
+    assert calls[0] is None  # no-cap probed first
+    assert model.effective_max_tokens == model.cfg.max_tokens
+
+
+def test_preflight_uses_no_cap_when_caps_rejected(tmp_path, monkeypatch):
+    """AC: when the endpoint rejects capped requests (any non-cap error),
+    the preflight falls back to the no-cap shape -- the only shape an
+    earlier checkpoint scored with."""
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    model = _make_model(tmp_path)
+    calls: list[int | None] = []
+
+    async def fake_probe(ms):
+        calls.append(ms.get("max_tokens"))
+        if "max_tokens" in ms:
+            raise ModelHTTPError(
+                400,
+                "stub-model",
+                {"error": {"message": "Unknown field: max_tokens"}},
+            )
+
+    monkeypatch.setattr(model, "_probe_stream", fake_probe)
+    assert asyncio.run(model.preflight()) is True
+    assert calls[0] is None  # no-cap probed first
+    assert model.effective_max_tokens == 0  # no max_tokens sent in-run
+
+
 def test_preflight_discovers_max_tokens_cap(tmp_path, monkeypatch):
     from shlepa_agent.model import _MaxTokensRejected
 
     model = _make_model(tmp_path)
-    calls: list[int] = []
+    calls: list[int | None] = []
 
     async def fake_probe(ms):
         cap = ms.get("max_tokens")
         calls.append(cap)
-        if cap is not None and cap != 2048:
-            raise _MaxTokensRejected(max(2048, cap // 2))
+        if cap is None or cap != 2048:
+            raise _MaxTokensRejected(max(2048, (cap or 0) // 2))
 
     monkeypatch.setattr(model, "_probe_stream", fake_probe)
     assert asyncio.run(model.preflight()) is True
-    assert calls[0] == 1234  # first probe uses the configured cap
+    assert calls[0] is None  # no-cap probed first, then the cap ladder
     assert model.effective_max_tokens == 2048
 
 
@@ -536,29 +578,28 @@ def test_preflight_probes_real_stream(stub_openai, tmp_path, events):
         load_config(tmp_path / "cfg.toml"),
     )
     assert asyncio.run(model.preflight()) is True
+    # The stub accepts both shapes; the accepted cap wins.
     assert model.effective_max_tokens == model.cfg.max_tokens
     pre = [e for e in events if e.get("event") == "endpoint_preflight"]
     assert pre and pre[-1]["ok"] is True
     assert pre[-1]["max_tokens"] == model.cfg.max_tokens
 
 
-def test_preflight_falls_back_to_no_cap(tmp_path, monkeypatch):
+def test_preflight_all_probes_rejected_fails(tmp_path, monkeypatch):
     from shlepa_agent.model import _MaxTokensRejected
 
     model = _make_model(tmp_path)
     calls: list[int | None] = []
 
     async def fake_probe(ms):
-        cap = ms.get("max_tokens")
-        calls.append(cap)
-        if cap is not None:
-            raise _MaxTokensRejected(cap // 2)
-        assert cap is None  # the final probe sends no max_tokens
+        calls.append(ms.get("max_tokens"))
+        raise _MaxTokensRejected(2048)
 
     monkeypatch.setattr(model, "_probe_stream", fake_probe)
-    assert asyncio.run(model.preflight()) is True
-    assert None in calls[-1:]
-    assert model.effective_max_tokens == 0
+    assert asyncio.run(model.preflight()) is False
+    assert calls[0] is None  # no-cap probed first
+    # The last reduced cap was itself rejected: not retained.
+    assert model.effective_max_tokens is None
 
 
 def test_preflight_failure_logs_and_returns_false(tmp_path, monkeypatch):

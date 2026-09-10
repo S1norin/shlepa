@@ -255,51 +255,88 @@ class TrackedModel(OpenAIChatModel):
     async def preflight(self) -> bool:
         """Probe the model endpoint with one minimal streaming request.
 
-        The contest exposes an unknown OpenAI-compatible endpoint. This probe
-        (a) verifies the endpoint/model/key work at all, and (b) discovers
-        the endpoint's output budget: on a max_tokens cap rejection it steps
-        the cap down (16384 -> 8192 -> 4096 -> 2048 -> no cap) and remembers
-        the first request shape that works. 0 means "send no max_tokens".
-        Never raises: on failure it logs the full status + body so the
-        organizer's log pinpoints the cause, and the run proceeds (the
-        failure may be transient).
+        The contest exposes an unknown OpenAI-compatible endpoint. This
+        preflight (a) verifies the endpoint/model/key work at all, and
+        (b) picks a request shape the endpoint accepts. Two shapes are
+        probed with minimal streaming requests:
+
+        1. No-cap (no max_tokens field). Earlier checkpoints in this
+           contest scored only when max_tokens was absent, so a plain
+           request is probed first.
+        2. Cap ladder (configured cap, halving down to MIN_MAX_TOKENS on
+           cap rejections). A capped request bounds the model's output
+           (fast, predictable timing), so an ACCEPTED cap wins over no-cap.
+
+        A connection-level failure on the first probe aborts (the endpoint
+        is unreachable); an HTTP error means the endpoint is up and simply
+        rejects that shape, so probing continues. 0 means "send no
+        max_tokens". Never raises: on failure it logs the full status +
+        body and the run proceeds with the configured default (the failure
+        may be transient).
         """
-        caps: list[int] = []
-        for cap in (self.cfg.max_tokens, 8192, 4096, MIN_MAX_TOKENS, 0):
-            if cap not in caps:
-                caps.append(cap)
-        for cap in caps:
-            try:
-                await self._probe_stream({"max_tokens": cap} if cap else {})
-            except _MaxTokensRejected as exc:
-                self.effective_max_tokens = exc.reduced_to
-                continue  # next (lower) cap
-            except Exception as e:  # noqa: BLE001 - must never break the run
+        no_cap_ok = False
+        try:
+            await self._probe_stream({})
+            no_cap_ok = True
+        except _MaxTokensRejected:
+            pass  # endpoint wants an explicit cap; the ladder finds it
+        except Exception as e:  # noqa: BLE001 - must never break the run
+            if getattr(e, "status_code", None) is None:
                 body = f"{e} {getattr(e, 'body', '')}"
-                status = getattr(e, "status_code", None)
                 _log_event(
                     "endpoint_preflight",
                     ok=False,
-                    status=status,
-                    max_tokens=cap,
+                    max_tokens=0,
                     detail=str(e)[:500],
                     body=body[:500],
                 )
-                return False
-            self.effective_max_tokens = cap
+                return False  # connection-level: endpoint is down
+            # HTTP error: endpoint is up but rejects the no-cap shape;
+            # the cap ladder below may still find an accepted shape.
+
+        cap_ok: int | None = None
+        for cap in self._cap_ladder():
+            try:
+                await self._probe_stream({"max_tokens": cap})
+                cap_ok = cap
+                break
+            except _MaxTokensRejected:
+                continue  # next lower cap
+            except Exception:  # noqa: BLE001 - endpoint rejects max_tokens
+                break
+
+        if cap_ok is not None:
+            self.effective_max_tokens = cap_ok
             _log_event(
                 "endpoint_preflight",
                 ok=True,
-                max_tokens=cap,
+                max_tokens=cap_ok,
+                default_cap=self.cfg.max_tokens,
+            )
+            return True
+        if no_cap_ok:
+            self.effective_max_tokens = 0
+            _log_event(
+                "endpoint_preflight",
+                ok=True,
+                max_tokens=0,
                 default_cap=self.cfg.max_tokens,
             )
             return True
         _log_event(
             "endpoint_preflight",
             ok=False,
-            detail=f"no max_tokens down to {MIN_MAX_TOKENS} and no-cap accepted",
+            detail=f"no-cap and caps down to {MIN_MAX_TOKENS} all rejected",
         )
         return False
+
+    def _cap_ladder(self) -> list[int]:
+        """max_tokens probes, highest accepted budget first."""
+        caps: list[int] = []
+        for cap in (self.cfg.max_tokens, 8192, 4096, MIN_MAX_TOKENS):
+            if cap and cap not in caps:
+                caps.append(cap)
+        return caps
 
     async def _probe_stream(self, model_settings: dict) -> None:
         """One minimal streaming completion through the production path.
