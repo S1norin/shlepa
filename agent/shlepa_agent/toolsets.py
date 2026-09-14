@@ -24,10 +24,6 @@ research tool families live on as dev arms below.
 - ``+forensics``: baseline + the log_triage tool (deterministic read-only
   triage of log/evidence files; research/notes/readonly-tools.md option
   A).
-- ``+mitre-kb``: baseline + the mitre_kb tool (pinned MITRE ATT&CK v19.2
-  knowledge base; research/notes/mitre-rag-decision.md). The full
-  technique index + alias map also render into the system prompt as a
-  stable prefix (arm-gated in ``runner._system_prompt``).
 - ``+recon``: baseline + the recon tool (deterministic read-only
   attack-surface recon; the prompt's recon block switches from the script
   to the tool variant, arm-gated in ``runner._system_prompt``; see
@@ -55,7 +51,6 @@ ARM_BASELINE = "baseline"
 ARM_SMART_GREP = "+smart-grep"
 ARM_SIFS = "+sifs"
 ARM_FORENSICS = "+forensics"
-ARM_MITRE_KB = "+mitre-kb"
 ARM_RECON = "+recon"
 ARM_READONLY = "read-only"
 
@@ -65,7 +60,6 @@ KNOWN_ARMS: tuple[str, ...] = (
     ARM_SMART_GREP,
     ARM_SIFS,
     ARM_FORENSICS,
-    ARM_MITRE_KB,
     ARM_RECON,
     ARM_READONLY,
 )
@@ -106,7 +100,6 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
     from shlepa_agent.config import (
         _apply_read_only_arm,
         _enable_forensics_tools,
-        _enable_mitre_kb_tools,
         _enable_recon_tools,
         _enable_search_tools,
     )
@@ -117,8 +110,6 @@ def apply_arm(cfg: AgentConfig, arm: str) -> None:
         _enable_search_tools(cfg, engine)
     elif arm == ARM_FORENSICS:
         _enable_forensics_tools(cfg)
-    elif arm == ARM_MITRE_KB:
-        _enable_mitre_kb_tools(cfg)
     elif arm == ARM_RECON:
         _enable_recon_tools(cfg)
     elif arm == ARM_READONLY:

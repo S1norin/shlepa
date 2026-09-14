@@ -22,8 +22,6 @@ def test_registry_has_all_tools():
     assert set(ALL_TOOLS) == {
         "read", "write", "edit", "bash", "recon", "search",
         "code_search", "file_outline", "log_triage",
-        # MITRE KB tool: off by default (+mitre-kb arm), see test_mitre_kb.py
-        "mitre_kb",
     }
 
 

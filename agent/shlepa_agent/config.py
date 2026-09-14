@@ -101,11 +101,6 @@ class ToolsConfig(BaseModel):
     file_outline: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
     #: Deterministic read-only triage of log/evidence files.
     log_triage: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_output=8192)
-    #: Pinned MITRE ATT&CK KB lookup (709 techniques). OFF in the model
-    #: default and in the v6 baseline [tool_policy]; the +mitre-kb dev arm
-    #: enables it (see toolsets.py). ``timeout`` is a per-call wall safety
-    #: net; the result is capped at ``max_output`` chars.
-    mitre_kb: ToolConfig = ToolConfig(enabled=False, timeout=30.0, max_output=8000)
 
     def get(self, name: str) -> ToolConfig:
         try:
@@ -257,7 +252,6 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_LOG_TRIAGE": ("tools.log_triage.enabled", _env_bool),
     "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
     "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
-    "SHLEPA_MITRE_KB_MAX_OUTPUT": ("tools.mitre_kb.max_output", int),
     "SHLEPA_RECON_TIMEOUT": ("tools.recon.timeout", float),
     "SHLEPA_RECON_MAX_OUTPUT": ("tools.recon.max_output", int),
     "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
@@ -350,20 +344,6 @@ def _enable_forensics_tools(cfg: AgentConfig) -> None:
     """
     cfg.tools.log_triage.enabled = True
     _append_to_phases(cfg, ("log_triage",))
-
-
-def _enable_mitre_kb_tools(cfg: AgentConfig) -> None:
-    """Enable the MITRE KB tool (the +mitre-kb arm mutation).
-
-    Mirrors :func:`_enable_forensics_tools`: tool enabled and its name
-    appended to every phase's legacy tool list (its note then renders into
-    the system prompt automatically; the arm-gated KB prefix is appended in
-    ``runner._system_prompt``). Deduped, so it is safe if a phase list ever
-    names it explicitly; toolless phases (empty tool list) are never
-    augmented.
-    """
-    cfg.tools.mitre_kb.enabled = True
-    _append_to_phases(cfg, ("mitre_kb",))
 
 
 def _enable_recon_tools(cfg: AgentConfig) -> None:

@@ -14,7 +14,6 @@ from shlepa_agent.tools.bash import BASH_TOOL
 from shlepa_agent.tools.code_search import CODE_SEARCH_TOOL, FILE_OUTLINE_TOOL
 from shlepa_agent.tools.edit import EDIT_TOOL
 from shlepa_agent.tools.log_triage import LOG_TRIAGE_TOOL
-from shlepa_agent.tools.mitre_kb import MITRE_KB_TOOL
 from shlepa_agent.tools.read import READ_TOOL
 from shlepa_agent.tools.recon_tool import RECON_TOOL
 from shlepa_agent.tools.search_tool import SEARCH_TOOL
@@ -32,9 +31,6 @@ ALL_TOOLS: dict[str, Tool] = {
         CODE_SEARCH_TOOL,
         FILE_OUTLINE_TOOL,
         LOG_TRIAGE_TOOL,
-        # Off by default (the v6 baseline [tool_policy] does not route it;
-        # the +mitre-kb dev arm enables it — see toolsets.py).
-        MITRE_KB_TOOL,
     )
 }
 

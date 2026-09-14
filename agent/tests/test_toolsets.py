@@ -5,7 +5,7 @@ the ONLY custom tool (plan read+recon, work standard set + recon), toolless
 review relay, disabled phases (commit/repair/salvage/emergency) never
 routed. The research tool families live on as dev arms: +smart-grep /
 +sifs re-add code_search+file_outline (rg | sifs engine), +forensics adds
-log_triage, +mitre-kb adds mitre_kb, +recon is a no-op (recon is
+log_triage, +recon is a no-op (recon is
 baseline), read-only (read/write/edit + recon, no bash). AGENT_TOOLSET is
 the sole driver of the arm mutation when set (it wins over the legacy
 AGENT_CODE_SEARCH switch); an invalid value is ignored, never a crash.
@@ -24,7 +24,6 @@ from shlepa_agent.tools import get_tools
 from shlepa_agent.toolsets import (
     ARM_BASELINE,
     ARM_FORENSICS,
-    ARM_MITRE_KB,
     ARM_READONLY,
     ARM_RECON,
     ARM_SIFS,
@@ -44,7 +43,7 @@ TASK = "TASK"
 #: The effective baseline matrix (config.toml [tool_policy], 2026-09-07
 #: slim-down: recon is the only custom tool). Arm mutations are diffs
 #: against this: the search arms re-add code_search+file_outline (appended),
-#: +forensics/+mitre-kb append their tool to every active TOOLED phase,
+#: +forensics appends its tool to every active TOOLED phase,
 #: and the toolless review stays toolless under every arm.
 BASE_PLAN = ["read", "recon"]
 BASE_WORK = ["read", "write", "edit", "bash", "recon"]
@@ -194,64 +193,6 @@ def test_env_arm_forensics_enables_tool_and_prompt(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# the +mitre-kb arm (mitre_kb)
-# ---------------------------------------------------------------------------
-
-
-def test_apply_arm_mitre_kb_enables_tool():
-    cfg = load_config()
-    disabled_before = _disabled_snapshot(cfg)
-    apply_arm(cfg, ARM_MITRE_KB)
-    assert cfg.arm == ARM_MITRE_KB
-    # the search family stays off (different family)
-    assert cfg.code_search.engine == "sifs"
-    assert cfg.tools.code_search.enabled is False
-    assert cfg.tools.file_outline.enabled is False
-    assert cfg.tools.mitre_kb.enabled is True
-    # mitre_kb lands in every active TOOLED phase; the toolless review and
-    # the disabled phases are never augmented
-    assert _eff(cfg, "plan") == BASE_PLAN + ["mitre_kb"]
-    assert _eff(cfg, "work") == BASE_WORK + ["mitre_kb"]
-    assert _eff(cfg, "review") == []
-    assert _eff(cfg, "emergency") == BASE_EMERGENCY
-    assert _disabled_snapshot(cfg) == disabled_before
-
-
-def test_env_arm_mitre_kb_enables_tool_and_prompt(monkeypatch):
-    _clear(monkeypatch)
-    monkeypatch.setenv("AGENT_TOOLSET", ARM_MITRE_KB)
-    cfg = load_config()
-    assert cfg.arm == ARM_MITRE_KB
-    for phase_id in PHASES:
-        phase = get_phase(phase_id)
-        names = [t.name for t in get_tools(cfg, _eff(cfg, phase_id))]
-        if phase_id == "review":
-            # the toolless relay: no tool, no note, no arm-gated KB prefix
-            assert names == []
-            assert "mitre_kb: search the pinned MITRE ATT&CK" not in names
-            prompt = _system_prompt(cfg, phase, TASK)
-            assert "mitre_kb" not in prompt
-            assert "MITRE ATT&CK knowledge base" not in prompt
-            continue
-        if phase_id in ("plan", "work"):
-            base = BASE_PLAN if phase_id == "plan" else BASE_WORK
-            assert names == base + ["mitre_kb"]
-            prompt = _system_prompt(cfg, phase, TASK)
-            assert "mitre_kb: search the pinned MITRE ATT&CK" in prompt
-            # the arm-gated stable prefix: index + alias map
-            assert "MITRE ATT&CK knowledge base" in prompt
-            assert "T1003.003 NTDS" in prompt
-            assert "T1562.001 -> T1685" in prompt
-        else:
-            # the disabled emergency keeps its baseline list (arms never
-            # augment disabled phases) and gets no KB prefix
-            assert names == BASE_EMERGENCY
-            assert "MITRE ATT&CK knowledge base" not in _system_prompt(
-                cfg, phase, TASK
-            )
-
-
-# ---------------------------------------------------------------------------
 # env wiring (AGENT_TOOLSET)
 # ---------------------------------------------------------------------------
 
@@ -268,7 +209,6 @@ def test_env_arm_baseline_is_the_packaged_config(monkeypatch):
     assert cfg.tools.code_search.enabled is False
     assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.log_triage.enabled is False
-    assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id]
 
@@ -284,7 +224,6 @@ def test_env_arm_invalid_is_ignored_never_crashes(monkeypatch):
         assert cfg.tools.code_search.enabled is False, value
         assert cfg.tools.file_outline.enabled is False, value
         assert cfg.tools.log_triage.enabled is False, value
-        assert cfg.tools.mitre_kb.enabled is False, value
         assert cfg.tools.recon.enabled is True, value
         for phase_id in PHASES:
             assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id], value
@@ -301,7 +240,6 @@ def test_env_unset_defaults_to_baseline(monkeypatch):
     assert cfg.tools.code_search.enabled is False
     assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.log_triage.enabled is False
-    assert cfg.tools.mitre_kb.enabled is False
     for phase_id in PHASES:
         assert _eff(cfg, phase_id) == BASE_MATRIX[phase_id]
 
@@ -333,12 +271,11 @@ def test_apply_arm_recon_is_a_noop():
     disabled_before = _disabled_snapshot(cfg)
     apply_arm(cfg, ARM_RECON)
     assert cfg.arm == ARM_RECON
-    # the research families stay off, the KB stays off
+    # the research families stay off
     assert cfg.code_search.engine == "sifs"
     assert cfg.tools.code_search.enabled is False
     assert cfg.tools.file_outline.enabled is False
     assert cfg.tools.log_triage.enabled is False
-    assert cfg.tools.mitre_kb.enabled is False
     assert cfg.tools.recon.enabled is True
     # recon is already wired in plan/work (deduped); the toolless review
     # stays toolless; disabled phases are never touched

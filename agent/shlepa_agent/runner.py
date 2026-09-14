@@ -248,17 +248,9 @@ def _system_prompt(agent_cfg: AgentConfig, phase: Phase, task: str) -> str:
     has no recon but does have other tools, and NOTHING at all for a
     toolless phase (the baseline review judges from the transcript and
     has no recon to talk about).
-
-    The +mitre-kb arm additionally appends the KB prefix (the full
-    technique index + old->new alias map, ~10K tokens of static, stable
-    content) to the tools block (the decision record, Option 3).
     """
     tools = get_tools(agent_cfg, phase.tools(agent_cfg))
     tools_block = "\n".join(f"- {tool.note}" for tool in tools)
-    if any(tool.name == "mitre_kb" for tool in tools):
-        from shlepa_agent.mitre_kb import kb_prefix
-
-        tools_block += "\n\n" + kb_prefix()
     if tools:
         variant = "recon_tool.md" if any(t.name == "recon" for t in tools) else "recon_script.md"
         recon_block = load_prompt(variant)
