@@ -19,20 +19,14 @@ def _ctx(tmp_path, cfg=None, clock=None):
 
 
 def test_registry_has_all_tools():
-    assert set(ALL_TOOLS) == {
-        "read", "write", "edit", "bash", "recon", "search",
-        "code_search", "file_outline", "log_triage",
-    }
+    assert set(ALL_TOOLS) == {"read", "write", "edit", "bash", "recon"}
 
 
-def test_registry_slim_baseline_has_no_code_search_tools(monkeypatch):
-    # 2026-09-07 slim-down: the packaged baseline no longer ships the
-    # code_search/file_outline pair (batch 388fde: never adopted; context
-    # bloat) — recon is the only custom tool. The legacy AGENT_CODE_SEARCH
-    # switch re-adds the pair on the given engine (test_code_search_tools).
+def test_registry_routes_only_baseline_tools(monkeypatch):
+    # recon is the only custom tool in the baseline (2026-09-07 slim-down,
+    # batch 388fde; the dev-arm tool families were cut on 2026-09-14).
     from shlepa_agent.phases import get_phase
 
-    monkeypatch.delenv("AGENT_CODE_SEARCH", raising=False)
     monkeypatch.delenv("AGENT_TOOLSET", raising=False)
     cfg = _cfg()
     assert [t.name for t in get_tools(cfg, get_phase("plan").tools(cfg))] == [
@@ -41,10 +35,6 @@ def test_registry_slim_baseline_has_no_code_search_tools(monkeypatch):
     assert [t.name for t in get_tools(cfg, get_phase("work").tools(cfg))] == [
         "read", "write", "edit", "bash", "recon"
     ]
-    for phase_id in ("plan", "work", "commit", "emergency"):
-        names = [t.name for t in get_tools(cfg, get_phase(phase_id).tools(cfg))]
-        assert "code_search" not in names
-        assert "file_outline" not in names
 
 
 def test_registry_returns_configured_subset():

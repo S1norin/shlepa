@@ -4,8 +4,8 @@ Single source of tuning values: ``shlepa_agent/config.toml`` (shipped inside
 the package, carried by the submission zip). Environment variables override
 individual keys (``SHLEPA_*`` names; the legacy ``AGENT_*`` names were
 dropped with the v2 architecture — see ``docs/agent-config.md`` for the
-mapping; ``AGENT_CODE_SEARCH`` / ``AGENT_TOOLSET`` are the deliberate
-exceptions, wired in ``_apply_toolset_env``). Invalid env values are
+mapping; ``AGENT_TOOLSET`` is the deliberate
+exception, wired in ``_apply_toolset_env``). Invalid env values are
 ignored, matching the old ``_env_*`` helpers.
 """
 
@@ -93,38 +93,12 @@ class ToolsConfig(BaseModel):
     edit: ToolConfig = ToolConfig()
     #: Deterministic surface map wrapping tools/recon.py (read-only).
     recon: ToolConfig = ToolConfig(enabled=True, max_output=8192)
-    #: Stdlib-only read-only grep/glob/ls over the task dir.
-    search: ToolConfig = ToolConfig(enabled=True, max_output=8192)
-    #: SIFS BM25-offline retrieval over the code tree (tools/bin/sifs).
-    code_search: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
-    #: Symbol outline of one file (same SIFS/regex engine as code_search).
-    file_outline: ToolConfig = ToolConfig(enabled=True, timeout=30.0)
-    #: Deterministic read-only triage of log/evidence files.
-    log_triage: ToolConfig = ToolConfig(enabled=True, timeout=30.0, max_output=8192)
 
     def get(self, name: str) -> ToolConfig:
         try:
             return getattr(self, name)
         except AttributeError:
             raise KeyError(f"unknown tool: {name}") from None
-
-
-class CodeSearchConfig(BaseModel):
-    """Engine selection for the code_search/file_outline tools.
-
-    The slim baseline does not ship the pair; this configures the
-    +smart-grep/+sifs dev arms and the legacy AGENT_CODE_SEARCH switch.
-    SIFS BM25-offline is the default engine (the local search-bench:
-    ``research/code_search/analysis/search_bench_20260831-1600.md`` — bm25
-    hit@1 0.5-1.0 on natural-language queries vs 0.00 for the ripgrep
-    fixed-string scan; keyword 0.67-1.0 vs 0.25-1.0). A missing or broken
-    SIFS binary degrades to the rg/regex engine inside the engine module
-    (never crash).
-    """
-
-    #: Engine: "sifs" (default, bundled binary) or "rg" (preinstalled
-    #: ripgrep fixed-string scan).
-    engine: str = "sifs"
 
 
 class BlockWrapper(BaseModel):
@@ -209,7 +183,6 @@ class AgentConfig(BaseModel):
     agent: AgentSection = Field(default_factory=AgentSection)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    code_search: CodeSearchConfig = Field(default_factory=CodeSearchConfig)
     tool_policy: ToolPolicy = Field(default_factory=ToolPolicy)
     # Resolved toolset arm (see toolsets.py): "baseline" when AGENT_TOOLSET
     # is unset or invalid. Data only — never rendered into the prompt.
@@ -245,13 +218,6 @@ ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SHLEPA_COMMIT_TIME": ("phases.commit.time", float),
     "SHLEPA_COMMIT_REASONING_EFFORT": ("phases.commit.reasoning_effort", str),
     "SHLEPA_PLAN_TIME": ("phases.plan.time", float),
-    "SHLEPA_SEARCH": ("tools.search.enabled", _env_bool),
-    "SHLEPA_CODE_SEARCH": ("tools.code_search.enabled", _env_bool),
-    "SHLEPA_CODE_SEARCH_ENGINE": ("code_search.engine", str),
-    "SHLEPA_CODE_SEARCH_TIMEOUT": ("tools.code_search.timeout", float),
-    "SHLEPA_LOG_TRIAGE": ("tools.log_triage.enabled", _env_bool),
-    "SHLEPA_LOG_TRIAGE_TIMEOUT": ("tools.log_triage.timeout", float),
-    "SHLEPA_LOG_TRIAGE_MAX_OUTPUT": ("tools.log_triage.max_output", int),
     "SHLEPA_RECON_TIMEOUT": ("tools.recon.timeout", float),
     "SHLEPA_RECON_MAX_OUTPUT": ("tools.recon.max_output", int),
     "SHLEPA_MAX_CYCLES": ("agent.max_cycles", int),
@@ -282,12 +248,8 @@ def _apply_env_overrides(cfg: AgentConfig) -> None:
             setattr(node, last, value)
 
 
-#: The two deliberate AGENT_* env vars (the legacy set was dropped in v2):
-#: AGENT_CODE_SEARCH is the legacy dev switch for the code-search tools;
-#: AGENT_TOOLSET is the named-arm selector (see toolsets.py) and wins over
-#: it when set.
-CODE_SEARCH_ENV = "AGENT_CODE_SEARCH"
-CODE_SEARCH_ENGINES = ("rg", "sifs")
+#: The one deliberate AGENT_* env var (the legacy set was dropped in v2):
+#: AGENT_TOOLSET, the named-arm selector (see toolsets.py).
 TOOLSET_ENV = "AGENT_TOOLSET"
 
 
@@ -318,32 +280,6 @@ def _append_to_phases(cfg: AgentConfig, names: tuple[str, ...]) -> None:
             for name in names:
                 if name not in phase.tools:
                     phase.tools.append(name)
-
-
-def _enable_search_tools(cfg: AgentConfig, engine: str) -> None:
-    """Enable code_search/file_outline on the given engine.
-
-    Shared mutation for the legacy AGENT_CODE_SEARCH switch and the named
-    toolset arms (``toolsets.apply_arm``): both tools enabled, engine
-    stored, and the tool names appended to every phase's legacy tool list
-    (their notes then render into the system prompt automatically).
-    """
-    cfg.code_search.engine = engine
-    cfg.tools.code_search.enabled = True
-    cfg.tools.file_outline.enabled = True
-    _append_to_phases(cfg, ("code_search", "file_outline"))
-
-
-def _enable_forensics_tools(cfg: AgentConfig) -> None:
-    """Enable the forensics tool family (the +forensics arm mutation).
-
-    Mirrors :func:`_enable_search_tools`: tool enabled and its name
-    appended to every phase's legacy tool list. Deduped, so it is safe if
-    a phase list ever names it explicitly; toolless phases (empty tool
-    list) are never augmented.
-    """
-    cfg.tools.log_triage.enabled = True
-    _append_to_phases(cfg, ("log_triage",))
 
 
 def _enable_recon_tools(cfg: AgentConfig) -> None:
@@ -382,40 +318,18 @@ def _apply_read_only_arm(cfg: AgentConfig) -> None:
             phase.tools = ["read", "write", "edit", "recon"]
 
 
-def _apply_code_search_env(cfg: AgentConfig) -> None:
-    """Re-add the code_search tools from AGENT_CODE_SEARCH (rg | sifs).
-
-    The slim baseline (2026-09-07) no longer ships the
-    code_search/file_outline pair, so a valid value enables both tools
-    with the given engine and appends them to the active phases (the
-    legacy switch keeps the pre-slim-dev behavior of "just set the
-    engine"). Unset or an invalid value leaves the config untouched.
-    Superseded by AGENT_TOOLSET when that is set (see
-    :func:`_apply_toolset_env`).
-    """
-    raw = os.environ.get(CODE_SEARCH_ENV)
-    if raw is None or not raw.strip():
-        return
-    engine = raw.strip().lower()
-    if engine not in CODE_SEARCH_ENGINES:
-        return  # invalid value: ignore, tools stay as configured
-    _enable_search_tools(cfg, engine)
-
-
 def _apply_toolset_env(cfg: AgentConfig) -> None:
     """Arm selection: the AGENT_TOOLSET env var (named toolset arms).
 
-    When set (and non-empty) it is the SOLE driver of the arm mutation —
-    the legacy AGENT_CODE_SEARCH switch is skipped even if it is also set
+    When set (and non-empty) it is the SOLE driver of the arm mutation
     (arm ``baseline`` is a no-op: the packaged config already carries the
     baseline tool policy, so nothing to force). A valid arm applies its
     config mutation and is recorded in ``cfg.arm``; an invalid value is
     ignored (the config stays at the baseline) so arm selection can never
-    crash the run.
+    crash the run. Unset = plain baseline.
     """
     raw = os.environ.get(TOOLSET_ENV)
     if raw is None or not raw.strip():
-        _apply_code_search_env(cfg)
         return
     from shlepa_agent.toolsets import apply_arm, resolve_arm
 

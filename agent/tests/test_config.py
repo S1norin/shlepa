@@ -82,7 +82,7 @@ def test_phase_values_pipeline():
 
     commit = cfg.phases["commit"]
     # v6 (w2-4): VERIFY is read-only (repair is a separate phase, w2-5).
-    assert set(commit.tools) == {"read", "search"}
+    assert set(commit.tools) == {"read"}
     assert commit.requests == 20
     assert commit.time == 15.0  # VERIFY subcap (w2-6)
     assert commit.soft_time == 10.0  # advisory, under the 15s subcap
@@ -127,7 +127,7 @@ def test_repair_phase_config():
     # never retried.
     cfg = load_config()
     repair = cfg.phases["repair"]
-    assert set(repair.tools) == {"read", "search", "edit"}
+    assert set(repair.tools) == {"read", "edit"}
     assert repair.requests == 3
     assert repair.time == 20.0
     assert repair.max_retries == 0
@@ -189,17 +189,6 @@ def test_plan_cap_env_override(monkeypatch):
     assert load_config().phases["plan"].time is None  # invalid: ignored
 
 
-def test_search_tool_env_toggle(monkeypatch):
-    # OFF in the slim baseline (2026-09-07); the env toggle still works
-    assert load_config().tools.search.enabled is False
-    monkeypatch.setenv("SHLEPA_SEARCH", "0")
-    assert load_config().tools.search.enabled is False
-    monkeypatch.setenv("SHLEPA_SEARCH", "1")
-    assert load_config().tools.search.enabled is True
-    monkeypatch.setenv("SHLEPA_SEARCH", "garbage")
-    assert load_config().tools.search.enabled is False  # invalid: file value
-
-
 def test_v6_rewrite_knobs(monkeypatch):
     # v6-rewrite knobs: SHLEPA_MAX_CYCLES (hard cycle count) and
     # SHLEPA_REVIEW_TIME (relay cap override) — each appears in
@@ -210,7 +199,6 @@ def test_v6_rewrite_knobs(monkeypatch):
     assert ENV_OVERRIDES["SHLEPA_MAX_CYCLES"] == ("agent.max_cycles", int)
     assert ENV_OVERRIDES["SHLEPA_REVIEW_TIME"] == ("phases.review.time", float)
     assert ENV_OVERRIDES["SHLEPA_PLAN_TIME"] == ("phases.plan.time", float)
-    assert ENV_OVERRIDES["SHLEPA_SEARCH"] == ("tools.search.enabled", _env_bool)
     # the v6 A/B knobs are gone
     assert "SHLEPA_ROUTE_PLAN_TIMEOUT" not in ENV_OVERRIDES
     assert "SHLEPA_HANDOFF" not in ENV_OVERRIDES

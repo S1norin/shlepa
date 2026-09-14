@@ -205,7 +205,7 @@ def test_phase_toolsets_from_config():
     assert WorkPhase().tools(cfg) == [
         "read", "write", "edit", "bash", "recon",
     ]
-    assert set(CommitPhase().tools(cfg)) == {"read", "search"}
+    assert set(CommitPhase().tools(cfg)) == {"read"}
     assert EmergencyPhase().tools(cfg) == ["read", "write", "edit", "bash"]
 
 

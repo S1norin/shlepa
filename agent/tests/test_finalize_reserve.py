@@ -1,7 +1,7 @@
 """w3-2: finalization reserve — last R s of a phase cap, deliverable
 writes only.
 
-Inside the reserve the exploratory tools (bash/search/recon) return a
+Inside the reserve the exploratory tools (bash/recon) return a
 synthetic FINALIZING result WITHOUT executing; write/edit/read keep
 working. Default R = 10 s, override SHLEPA_FINALIZE_RESERVE (0 = off).
 """
@@ -13,7 +13,6 @@ from shlepa_agent.config import load_config
 from shlepa_agent.tools.base import AgentDeps, PhaseWindow
 from shlepa_agent.tools.bash import bash
 from shlepa_agent.tools.recon_tool import recon
-from shlepa_agent.tools.search_tool import search
 from shlepa_agent.tools.write import write
 
 
@@ -47,15 +46,12 @@ def test_bash_blocked_in_reserve_not_executed(tmp_path):
     assert not (tmp_path / "marker").exists()
 
 
-def test_search_and_recon_blocked_in_reserve(tmp_path):
+def test_recon_blocked_in_reserve(tmp_path):
     deps = _deps(tmp_path, _window_in_reserve())
     ctx = type("C", (), {"deps": deps})()
-    for out in (
-        asyncio.run(search(ctx, mode="ls", path=".")),
-        asyncio.run(recon(ctx, mode="code", target=".")),
-    ):
-        assert "FINALIZING" in out
-        assert "not executed" in out
+    out = asyncio.run(recon(ctx, mode="code", target="."))
+    assert "FINALIZING" in out
+    assert "not executed" in out
 
 
 def test_write_allowed_in_reserve(tmp_path):

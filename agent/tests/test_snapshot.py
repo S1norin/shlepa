@@ -77,13 +77,11 @@ enabled = true
 enabled = true
 [tools.edit]
 enabled = true
-[tools.search]
-enabled = true
 [tools.recon]
 enabled = true
 
 [phases.plan]
-tools = ["read", "recon", "search"]
+tools = ["read", "recon"]
 requests = 25
 time = 60.0
 soft_time = 45.0
@@ -104,14 +102,14 @@ reasoning_effort = "low"
 max_retries = 0
 
 [phases.commit]
-tools = ["read", "search"]
+tools = ["read"]
 requests = 20
 time = 45.0
 reasoning_effort = "low"
 max_retries = 0
 
 [phases.repair]
-tools = ["read", "search", "edit"]
+tools = ["read", "edit"]
 requests = 3
 time = 20.0
 max_retries = 0

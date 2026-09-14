@@ -105,7 +105,7 @@ reasoning_effort = "low"
 max_retries = 0
 
 [phases.repair]
-tools = ["read", "search", "edit"]
+tools = ["read", "edit"]
 requests = 3
 time = 20.0
 max_retries = 0
@@ -266,7 +266,7 @@ def test_repair_phase_stays_registered_and_disabled():
     phase = get_phase("repair")
     assert phase.id == "repair"
     assert phase.terminal is False
-    assert phase.tools(cfg) == ["read", "search", "edit"]
+    assert phase.tools(cfg) == ["read", "edit"]
     assert phase.limits(cfg).time == 20.0
     # disabled in the shipped tool policy (never routed)
     assert cfg.tool_policy.is_disabled("repair")

@@ -69,18 +69,18 @@ def test_run_dry_run_arm_flag(tmp_path, monkeypatch):
     _make_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("AGENT_TOOLSET", raising=False)
-    result = runner.invoke(app, ["run", "--dry-run", "--arm", "+sifs"])
+    result = runner.invoke(app, ["run", "--dry-run", "--arm", "read-only"])
     assert result.exit_code == 0, result.output
-    assert "arm: +sifs" in result.output
+    assert "arm: read-only" in result.output
 
 
 def test_run_dry_run_arm_env_fallback(tmp_path, monkeypatch):
     _make_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("AGENT_TOOLSET", "+smart-grep")
+    monkeypatch.setenv("AGENT_TOOLSET", "read-only")
     result = runner.invoke(app, ["run", "--dry-run"])
     assert result.exit_code == 0, result.output
-    assert "arm: +smart-grep" in result.output
+    assert "arm: read-only" in result.output
 
 
 def test_run_dry_run_flag_beats_env(tmp_path, monkeypatch):
@@ -115,8 +115,8 @@ def test_run_invalid_arm_env_errors(tmp_path, monkeypatch):
 
 def test_agent_env_includes_arm(tmp_path):
     task = Task(slug="contest-hello-file", name="Hello", path=tmp_path)
-    env = run_engine._agent_env(_settings(tmp_path), "m", task, arm="+sifs")
-    assert env["AGENT_TOOLSET"] == "+sifs"
+    env = run_engine._agent_env(_settings(tmp_path), "m", task, arm="read-only")
+    assert env["AGENT_TOOLSET"] == "read-only"
 
 
 def test_agent_env_without_arm_has_no_toolset_var(tmp_path):
@@ -158,9 +158,9 @@ def test_call_agent_host_mode_passes_and_cleans_arm_env(tmp_path, monkeypatch):
 
     task = Task(slug="contest-hello-file", name="Hello", path=tmp_path)
     run_engine._call_agent(
-        fake_runner, task, "hi", tmp_path, None, _settings(tmp_path), arm="+sifs"
+        fake_runner, task, "hi", tmp_path, None, _settings(tmp_path), arm="read-only"
     )
-    assert seen["arm"] == "+sifs"
+    assert seen["arm"] == "read-only"
     # restored afterwards
     assert os.environ.get("AGENT_TOOLSET") is None
 
@@ -191,9 +191,9 @@ def test_log_task_arm_tag(tmp_path):
     settings = _settings(tmp_path)
 
     run_id = run_engine.log_task_to_mlflow(
-        client, settings, "all", "m", _result(tmp_path), arm="+sifs"
+        client, settings, "all", "m", _result(tmp_path), arm="read-only"
     )
-    assert client.get_run(run_id).data.tags["toolset"] == "+sifs"
+    assert client.get_run(run_id).data.tags["toolset"] == "read-only"
 
     run_id = run_engine.log_task_to_mlflow(
         client, settings, "all", "m", _result(tmp_path)

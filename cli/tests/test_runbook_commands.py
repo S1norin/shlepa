@@ -24,7 +24,6 @@ KNOWN_COMMANDS = {
     "doctor",
     "zip",
     "trace-export",
-    "search-bench",
     "submit-test",
     "clean",
     "compliance",
